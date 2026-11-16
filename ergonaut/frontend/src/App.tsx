@@ -1,6 +1,15 @@
 import { Component, useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { BrowserRouter, Link, Navigate, Route, Routes, useLocation, useParams } from 'react-router-dom'
+import {
+  createBrowserRouter,
+  Link,
+  Navigate,
+  Route,
+  RouterProvider,
+  Routes,
+  useLocation,
+  useParams,
+} from 'react-router-dom'
 import type { Bot, Session, SidebarPin, User, Worker } from './api'
 import { ApiError, api } from './api'
 import { Sidebar } from './components/Sidebar'
@@ -106,7 +115,7 @@ function App() {
   if (user === null) return <Login onLogin={setUser} />
 
   return (
-    <BrowserRouter>
+    <>
       <DirectoryContext.Provider value={{ bots, sessions }}>
         <VoiceCallProvider>
           <MarkdownReaderOwner>
@@ -134,7 +143,7 @@ function App() {
           </MarkdownReaderOwner>
         </VoiceCallProvider>
       </DirectoryContext.Provider>
-    </BrowserRouter>
+    </>
   )
 }
 
@@ -313,7 +322,11 @@ function Shell({
   )
 }
 
-export default App
+const router = createBrowserRouter([{ path: '*', element: <App /> }])
+
+export default function Root() {
+  return <RouterProvider router={router} />
+}
 
 // A fresh Chat per session, so per-chat state (queued turn, attachments, draft) never carries over.
 function ChatRoute({ onChange }: { onChange: () => void }) {

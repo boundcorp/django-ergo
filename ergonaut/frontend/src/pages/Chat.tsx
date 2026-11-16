@@ -191,7 +191,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
     onChange()
   }
   const composer = useRef<HTMLTextAreaElement>(null)
-  const { setText, submit, voiceActive, voice } = useComposerVoice({
+  const { setText, submit, voiceActive, voice, navigationWarning } = useComposerVoice({
     draftKey: id,
     text,
     setText: saveText,
@@ -474,7 +474,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
     if (lastStatus !== 'in_progress') setStopping(false)
   }, [lastCallId, lastStatus])
 
-  async function run(action: () => Promise<Turn>, sent = '') {
+  async function run(action: () => Promise<Turn>, sent = '', accepted?: () => void) {
     setBusy(true)
     setError('')
     const calls = detail?.calls ?? []
@@ -485,8 +485,11 @@ export function Chat({ onChange }: { onChange: () => void }) {
       line: messages.length ? messages[messages.length - 1].line : -1,
       approvals: JSON.stringify(lastTurn(calls)?.pending_approvals ?? []),
     }
+    let acknowledged = false
     try {
       const turn = await action()
+      acknowledged = true
+      accepted?.()
       if (turn.queued) {
         setPending(before)
       } else {
@@ -495,7 +498,12 @@ export function Chat({ onChange }: { onChange: () => void }) {
         onChange()
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      const message = e instanceof Error ? e.message : String(e)
+      setError(
+        accepted && !acknowledged
+          ? `${message} Send may have succeeded; check the conversation before retrying.`
+          : message,
+      )
     } finally {
       setBusy(false)
     }
@@ -505,16 +513,18 @@ export function Chat({ onChange }: { onChange: () => void }) {
   function send(message: string, mode: 'send' | 'interrupt' = 'send', source: ChatSendSource = 'composer') {
     const plan = prepareChatSend(source, message, text, outgoing)
     if ((!plan.message.trim() && !plan.attachmentIds.length) || busy || uploading) return
-    if (plan.composer === 'clear') {
-      setText(plan.draft)
-      setSentFiles(plan.sentFiles)
-      setOutgoing(plan.outgoing)
-    }
     if (mode === 'interrupt') setStopping(true)
     toBottom()
     return run(
       () => api.send(id, plan.message, plan.attachmentIds, mode),
       plan.message || plan.sentFiles.map(f => f.filename).join(', '),
+      plan.composer === 'clear'
+        ? () => {
+            setText(current => (current === message ? '' : current))
+            setSentFiles(plan.sentFiles)
+            setOutgoing(current => current.filter(file => !plan.attachmentIds.includes(file.id)))
+          }
+        : undefined,
     )
   }
 
@@ -1105,6 +1115,12 @@ export function Chat({ onChange }: { onChange: () => void }) {
             }}
           />
         </div>
+        {navigationWarning && (
+          <p role="alert" className="mx-4 mb-2 text-sm text-danger">
+            A message or voice recording is still in progress. Stay here until it finishes, or cancel or retry the
+            recording.
+          </p>
+        )}
         <form
           className="chat-composer mx-4 mb-2 rounded-panel border border-stroke bg-surface px-2 pt-1.5 pb-1 focus-within:border-accent/60"
           onSubmit={e => {

@@ -23,7 +23,7 @@ export function NewThread({ onChange, userId }: { onChange: () => void; userId: 
   const composer = useRef<HTMLTextAreaElement>(null)
   const picker = useRef<HTMLInputElement>(null)
   const appliedLocation = useRef<string | null>(null)
-  const { setText, submit, voiceActive, voice } = useComposerVoice({
+  const { setText, submit, voiceActive, voice, navigationWarning, releaseVoiceNavigation } = useComposerVoice({
     draftKey,
     text,
     setText: saveText,
@@ -95,6 +95,7 @@ export function NewThread({ onChange, userId }: { onChange: () => void; userId: 
       await api.send(thread.id, message, ids)
       clearDraft(draftKey)
       onChange()
+      releaseVoiceNavigation()
       navigate(`/s/${thread.id}`)
       // The generated title lands a moment later; refresh the sidebar for it.
       setTimeout(onChange, 4000)
@@ -130,6 +131,12 @@ export function NewThread({ onChange, userId }: { onChange: () => void; userId: 
             </span>
           ))}
         </div>
+      )}
+      {navigationWarning && (
+        <p role="alert" className="mt-3 text-sm text-danger">
+          A message or voice recording is still in progress. Stay here until it finishes, or cancel or retry the
+          recording.
+        </p>
       )}
       <p className="eyebrow mt-8">Your first message</p>
       <form

@@ -101,11 +101,21 @@ error details are available in the icon's tooltip and accessible label.
 On narrow screens the empty composer placeholder truncates to one line; typed
 drafts still wrap and grow as usual.
 
+While recording, transcribing, or sending a message, in-app navigation is blocked
+and the composer explains why. Wait for the send to finish, or cancel
+the recording; a transcription error keeps the audio available for retry or
+download. Retry transcribes into the draft and requires a new Send. The browser
+may warn on reload or tab close, but recordings are held only in memory and can
+be lost on close, crash, sign-out, or forced page replacement. Chat keeps the
+transcribed draft until the message request is acknowledged; if the request
+fails, check the conversation before retrying because its outcome may be
+unknown. There is no automatic retry or server-side send deduplication.
+
 Audio is sent to the Ergonaut server and then to OpenAI, including from private
 pool chats; do not record material that must remain in a private inference pool.
 Ergonaut does not create a chat attachment or message for the recording.
 Django may use a temporary upload file, which is closed after the request.
-Retries keep the audio in browser memory until dismissed or the chat is left.
+Retries keep the audio in browser memory until dismissed or the page is forcibly left.
 Successful dictations appear in Costs as `voice_transcription`, attributed to
 the signed-in user and chat. New-thread dictations are attributed to the bot's
 main chat, since the new thread does not exist until it is sent.

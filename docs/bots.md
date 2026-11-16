@@ -1179,7 +1179,11 @@ editable draft without sending or deleting selected text; Send stops recording,
 awaits final transcription and uses the normal handler exactly once. Duplicate
 clicks/Enter share finalization. Concurrent edits survive; failed transcription
 keeps draft/recoverable audio and offers Retry/Download without a partial send.
-Cancel, navigation and unmount invalidate late callbacks and pending sends.
+In-app navigation is blocked while dictation or a composer send is active; retry or
+download failed audio before leaving. Chat retains text until send acknowledgement;
+an ambiguous failure requires checking the conversation before retrying. Recordings
+remain in browser memory, not durable storage; close, crash, sign-out or forced
+unmount can still discard them. Cancel invalidates late callbacks and pending sends.
 
 
 ### Message identity

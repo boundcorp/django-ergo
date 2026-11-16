@@ -355,12 +355,17 @@ for (const kind of ['chat', 'new-thread'] as const) {
         sent.push(text)
         return queuedTurn
       }
-      const { input } = await mountConsumer(kind)
+      const { input, router } = await mountConsumer(kind)
       await click('Record voice message')
       await submitForm(input)
       expect(input.value).toBe('existing ')
       expect(sent).toEqual([])
       expect(button('Download recording')).toBeTruthy()
+      await act(async () => {
+        await router.navigate('/away')
+      })
+      expect(composerInput()).toBe(input)
+      expect(container.textContent).toContain('A message or voice recording is still in progress')
       await submitForm(input)
       expect(sent).toEqual([])
       expect(uploads).toBe(1)
@@ -396,16 +401,12 @@ for (const kind of ['chat', 'new-thread'] as const) {
       expect(sent).toEqual(['existing '])
     })
 
-    test('navigation invalidates finalization, even if the transport resolves after abort', async () => {
+    test('navigation waits for transcription and sends once to the originating conversation', async () => {
       const pending = Promise.withResolvers<{ text: string }>()
-      let signal: AbortSignal | undefined
-      api.transcribeVoice = (_id, _blob, controller) => {
-        signal = controller
-        return pending.promise
-      }
-      const sent: string[] = []
-      api.send = async (_id, text) => {
-        sent.push(text)
+      api.transcribeVoice = () => pending.promise
+      const sent: { id: string; text: string }[] = []
+      api.send = async (id, text) => {
+        sent.push({ id, text })
         return queuedTurn
       }
       const { router, input } = await mountConsumer(kind)
@@ -414,38 +415,91 @@ for (const kind of ['chat', 'new-thread'] as const) {
       await act(async () => {
         await router.navigate('/away')
       })
+      expect(composerInput()).toBe(input)
+      expect(container.querySelector('[role="alert"]')).toBeTruthy()
+      expect(sent).toEqual([])
       await act(async () => {
         pending.resolve({ text: 'late speech' })
         await Promise.resolve()
+        await Promise.resolve()
       })
-      expect(signal?.aborted).toBe(true)
-      expect(container.textContent).toBe('Away')
-      expect(sent).toEqual([])
+      expect(sent).toEqual([{ id: 'thread', text: 'existing late speech' }])
     })
 
-    test('changing route parameters invalidates speech without contaminating the next draft', async () => {
+    test('navigation to another conversation is blocked until speech is sent', async () => {
       const pending = Promise.withResolvers<{ text: string }>()
       api.transcribeVoice = () => pending.promise
-      const sent: string[] = []
-      api.send = async (_id, text) => {
-        sent.push(text)
+      const sent: { id: string; text: string }[] = []
+      api.send = async (id, text) => {
+        sent.push({ id, text })
         return queuedTurn
       }
       const { router, input } = await mountConsumer(kind)
+      const other = kind === 'chat' ? '/s/other' : '/bots/other/new-thread'
       win.localStorage.setItem(`ergonaut.draft.${kind === 'chat' ? 'other' : 'new-thread.other'}`, 'other draft')
       await click('Record voice message')
       await submitForm(input)
       await act(async () => {
-        await router.navigate(kind === 'chat' ? '/s/other' : '/bots/other/new-thread')
-        await Promise.resolve()
+        await router.navigate(other)
       })
+      expect(composerInput()).toBe(input)
+      expect(sent).toEqual([])
       await act(async () => {
         pending.resolve({ text: 'old route speech' })
         await Promise.resolve()
+        await Promise.resolve()
+      })
+      expect(sent).toEqual([{ id: 'thread', text: 'existing old route speech' }])
+      await act(async () => {
+        await router.navigate(other)
       })
       expect(composerInput().value).toBe('other draft')
-      expect(sent).toEqual([])
     })
+    test('navigation stays blocked until the message request is acknowledged', async () => {
+      const response = Promise.withResolvers<typeof queuedTurn>()
+      const calls: string[] = []
+      api.send = async (id, text) => {
+        calls.push(`${id}:${text}`)
+        return response.promise
+      }
+      const { router, input } = await mountConsumer(kind)
+      await click('Record voice message')
+      await submitForm(input)
+      expect(calls).toEqual(['thread:existing spoken words'])
+      await act(async () => {
+        await router.navigate('/away')
+      })
+      expect(composerInput()).toBe(input)
+      await submitForm(input)
+      expect(calls).toHaveLength(1)
+      await act(async () => {
+        response.resolve(queuedTurn)
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+      expect(calls).toHaveLength(1)
+    })
+
+    if (kind === 'chat')
+      test('a failed message request retains the transcript and warns of an ambiguous send', async () => {
+        const attempts: string[] = []
+        api.send = async (_id, text) => {
+          attempts.push(text)
+          if (attempts.length === 1) throw new Error('Offline')
+          return queuedTurn
+        }
+        const { input } = await mountConsumer(kind)
+        await click('Record voice message')
+        await submitForm(input)
+        expect(input.value).toBe('existing spoken words')
+        expect(win.localStorage.getItem('ergonaut.draft.thread')).toBe('existing spoken words')
+        expect(container.textContent).toContain('Send may have succeeded; check the conversation before retrying.')
+        expect(attempts).toEqual(['existing spoken words'])
+        await submitForm(input)
+        expect(attempts).toEqual(['existing spoken words', 'existing spoken words'])
+        expect(input.value).toBe('')
+        expect(win.localStorage.getItem('ergonaut.draft.thread')).toBe(null)
+      })
 
     test('ordinary text Send remains on the normal consumer handler', async () => {
       const sent: string[] = []

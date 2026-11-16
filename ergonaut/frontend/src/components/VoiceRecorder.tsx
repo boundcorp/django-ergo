@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { RefObject } from 'react'
+import { useBlocker } from 'react-router-dom'
 import { api } from '../api'
 
 type Config = { enabled: boolean; max_duration: number }
@@ -53,6 +54,36 @@ export function useComposerVoice({
   if (scope.current.key !== draftKey) scope.current = { key: draftKey, active: true }
   const sending = useRef<object | null>(null)
   const [voiceActive, setVoiceActive] = useState(false)
+  const voiceActiveRef = useRef(false)
+  const voiceSend = useRef(false)
+  const [navigationWarning, setNavigationWarning] = useState(false)
+  const blocker = useBlocker(
+    ({ currentLocation, nextLocation }) =>
+      (voiceActiveRef.current || voiceSend.current) &&
+      (currentLocation.pathname !== nextLocation.pathname ||
+        currentLocation.search !== nextLocation.search ||
+        currentLocation.hash !== nextLocation.hash),
+  )
+  useEffect(() => {
+    if (blocker.state === 'blocked') {
+      setNavigationWarning(true)
+      blocker.reset()
+    }
+  }, [blocker])
+  useEffect(() => {
+    const warn = (event: BeforeUnloadEvent) => {
+      if (!voiceActiveRef.current && !voiceSend.current) return
+      event.preventDefault()
+      event.returnValue = ''
+    }
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [])
+
+  function releaseVoiceNavigation() {
+    voiceSend.current = false
+    setNavigationWarning(false)
+  }
   useLayoutEffect(() => {
     const current = scope.current
     current.active = true
@@ -73,6 +104,7 @@ export function useComposerVoice({
     if (sending.current) return
     const request = {}
     sending.current = request
+    voiceSend.current = true
     const current = scope.current
     try {
       const ready = await (finalizer.current?.finalize() ?? Promise.resolve(true))
@@ -80,6 +112,7 @@ export function useComposerVoice({
       await latest.current.onSend(latest.current.text, mode)
     } finally {
       if (sending.current === request) sending.current = null
+      releaseVoiceNavigation()
     }
   }
 
@@ -87,9 +120,15 @@ export function useComposerVoice({
     setText,
     submit,
     voiceActive,
+    navigationWarning,
+    releaseVoiceNavigation,
     voice: {
       finalizer,
-      onActive: setVoiceActive,
+      onActive: (active: boolean) => {
+        voiceActiveRef.current = active
+        setVoiceActive(active)
+        if (!active && !voiceSend.current) setNavigationWarning(false)
+      },
       onText: (transcript: string) => {
         const input = composer.current
         if (!input) return
