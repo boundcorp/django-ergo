@@ -12,7 +12,7 @@ def count_existing_invocations(apps, schema_editor):
         .iterator()
     ):
         wake_model.objects.using(db).filter(pk=wake.pk).update(
-            invocations=min(3, wake.occurrences)
+            invocations=min(12, wake.occurrences)
         )
 
 

@@ -79,9 +79,9 @@ def test_recurring_unchanged_is_quiet_but_changes_and_questions_remain_visible(
 @pytest.mark.parametrize(
     ("outcome", "expected_calls", "reason"),
     [
-        ("unchanged", 3, "invocation_limit"),
-        (None, 3, "invocation_limit"),
-        ("progress", 3, "invocation_limit"),
+        ("unchanged", 12, "invocation_limit"),
+        (None, 12, "invocation_limit"),
+        ("progress", 12, "invocation_limit"),
         ("wait_ended", 1, "wait_ended"),
     ],
 )
@@ -94,7 +94,7 @@ def test_recurring_breaker_limits_actual_model_invocations(
     _, engine, session = chat(
         tmp_path,
         "breaker",
-        *(claude_tool("send_reply", response.copy()) for _ in range(4)),
+        *(claude_tool("send_reply", response.copy()) for _ in range(13)),
     )
     clock = [timezone.now().replace(microsecond=0)]
     monkeypatch.setattr(timezone, "now", lambda: clock[0])
@@ -102,7 +102,7 @@ def test_recurring_breaker_limits_actual_model_invocations(
         session,
         "Check deployment",
         interval_minutes=1,
-        max_occurrences=4,
+        max_occurrences=13,
         now=clock[0],
     )
     for index in range(1, expected_calls + 1):

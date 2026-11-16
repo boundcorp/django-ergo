@@ -173,9 +173,9 @@ def test_max_count_completes_after_final_answer(session, now):
     assert schedule.scheduled_occurrences.count() == 2
 
 
-def test_schedule_stops_after_three_claimed_invocations(session, now):
-    schedule = create(session, now, max_occurrences=8)
-    for index in range(1, 4):
+def test_schedule_stops_after_twelve_claimed_invocations(session, now):
+    schedule = create(session, now, max_occurrences=13)
+    for index in range(1, 13):
         moment = now + timedelta(minutes=index)
         assert recurring_wakes.fire_due(moment) == [str(schedule.pk)]
         occurrence = schedule.scheduled_occurrences.order_by("-scheduled_for").first()
@@ -187,12 +187,12 @@ def test_schedule_stops_after_three_claimed_invocations(session, now):
         assert schedule.invocations == index
     assert schedule.status == "cancelled"
     assert schedule.blocked_reason == "invocation_limit"
-    assert recurring_wakes.fire_due(now + timedelta(minutes=4)) == []
-    assert schedule.scheduled_occurrences.count() == 3
+    assert recurring_wakes.fire_due(now + timedelta(minutes=13)) == []
+    assert schedule.scheduled_occurrences.count() == 12
 
 
 def test_progress_claim_and_unrelated_message_do_not_reset_limit(session, now):
-    schedule = create(session, now, max_occurrences=8)
+    schedule = create(session, now, max_occurrences=13)
     sender = ConversationSession.objects.create(
         user=session.user,
         engine_type="claude",
@@ -200,7 +200,7 @@ def test_progress_claim_and_unrelated_message_do_not_reset_limit(session, now):
         status="active",
         bot_name="other-bot",
     )
-    for index in range(1, 4):
+    for index in range(1, 13):
         moment = now + timedelta(minutes=index)
         evidence = ThreadMessage.objects.create(
             sender_session=sender,
@@ -228,8 +228,8 @@ def test_progress_claim_and_unrelated_message_do_not_reset_limit(session, now):
         assert schedule.invocations == index
     assert schedule.status == "cancelled"
     assert schedule.blocked_reason == "invocation_limit"
-    assert recurring_wakes.fire_due(now + timedelta(minutes=4)) == []
-    assert schedule.scheduled_occurrences.count() == 3
+    assert recurring_wakes.fire_due(now + timedelta(minutes=13)) == []
+    assert schedule.scheduled_occurrences.count() == 12
 
 
 def test_wait_ended_cancels_immediately(session, now):

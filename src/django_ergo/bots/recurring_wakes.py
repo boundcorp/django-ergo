@@ -50,7 +50,7 @@ FIRE_BATCH = 100
 # A claim may commit before bot.ask persists its StructuredCall.
 CLAIM_START_GRACE_SECONDS = 60
 MAX_NOTE_CHARS = 2000
-INVOCATION_LIMIT = 3
+INVOCATION_LIMIT = 12
 MAX_INTEGER = 2_147_483_647
 POLICY_KEYS = (
     "voice_session_id",
@@ -316,7 +316,7 @@ def _stop_for_outcome(schedule: RecurringWake, reason: str, now: datetime) -> bo
     text = (
         "Recurring wake stopped: the wait has ended."
         if reason == "wait_ended"
-        else "Recurring wake stopped after three automated checks."
+        else "Recurring wake stopped after 12 automated checks."
     )
     row = SessionMessage.objects.create(
         session=schedule.session,

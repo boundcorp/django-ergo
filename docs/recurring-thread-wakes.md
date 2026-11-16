@@ -41,8 +41,8 @@ updates even without a change. Quiet suppresses routine notifications, **not**
 model costs; every delivered check is an ordinary turn under existing policy.
 No financial cap is inferred from finite scheduling limits.
 
-Every recurring turn reports a structured wake outcome. The platform stops a
-schedule after at most three model wakes, before a fourth; an explicit
+Every recurring turn reports a structured wake outcome. The platform allows up
+to 12 claimed model wakes per schedule and prevents a 13th; an explicit
 `wait_ended` outcome stops it immediately. Missing outcomes and model claims of
 progress do not extend this cap. The cap applies even to `periodic_checkins` and
 to explicitly requested monitoring. A finite expiry or count may stop it sooner.

@@ -50,7 +50,7 @@ def apply_notification_policy(spec, metadata: dict):
             "the wait continues without meaningful progress, wait_ended if the "
             "condition being waited for has ended, or progress only for a "
             "concrete advance toward the goal. A progress claim does not reset "
-            "the platform's three-check safety cap."
+            "the platform's 12-check safety cap."
         )
         if not metadata.get("periodic_checkins"):
             spec.response_model = QuietRecurringReply
