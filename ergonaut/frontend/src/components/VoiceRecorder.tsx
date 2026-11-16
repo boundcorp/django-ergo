@@ -1,7 +1,9 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import type { RefObject } from 'react'
-import { useBlocker } from 'react-router-dom'
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import type { ReactNode, RefObject } from 'react'
+import { createPortal } from 'react-dom'
+import { Link, useLocation } from 'react-router-dom'
 import { api } from '../api'
+import { writeDraft } from '../draft'
 
 type Config = { enabled: boolean; max_duration: number }
 type Phase = 'idle' | 'permission' | 'recording' | 'processing' | 'error'
@@ -32,6 +34,234 @@ function acceptedType(type: string) {
 
 type VoiceFinalizer = { finalize: () => Promise<boolean> }
 type SetText = (text: string | ((current: string) => string)) => void
+type Send = (text: string, mode: 'send' | 'interrupt') => void | Promise<void>
+type Entry = {
+  key: string
+  accountId: string | null
+  origin: string
+  text: string
+  selection: number
+  mounted: boolean
+  saveText: SetText
+  onSend: Send
+  composer: RefObject<HTMLTextAreaElement | null>
+  finalizer: RefObject<VoiceFinalizer | null>
+  container: HTMLDivElement
+  sessionId: string
+  disabled: boolean
+  active: boolean
+  pending: { mode: 'send' | 'interrupt'; send: Send; delivering: boolean; sending?: boolean; message?: string } | null
+  error: string
+  uncertainThread: string
+  listeners: Set<() => void>
+  prune: () => void
+  refresh: () => void
+}
+type Owner = {
+  entries: Map<string, Entry>
+  scoped: Map<string, { value: unknown; listeners: Set<() => void> }>
+  accountId: string | null
+  accountListeners: Set<() => void>
+  refresh: () => void
+  dock: RefObject<HTMLDivElement | null>
+}
+const VoiceOwner = createContext<Owner | null>(null)
+
+function notify(entry: Entry) {
+  entry.listeners.forEach(listener => listener())
+  entry.prune()
+  entry.refresh()
+}
+
+function updateText(entry: Entry, value: string | ((current: string) => string)) {
+  entry.text = typeof value === 'function' ? value(entry.text) : value
+  writeDraft(entry.key, entry.text)
+  if (entry.mounted) entry.saveText(entry.text)
+  notify(entry)
+}
+
+async function deliver(entry: Entry) {
+  const pending = entry.pending
+  if (!pending || pending.delivering) return
+  pending.delivering = true
+  const message = pending.message ?? entry.text
+  pending.message = message
+  if (entry.accountId) {
+    notify(entry)
+    try {
+      const account = await api.me()
+      if (account.id !== entry.accountId) throw new Error('The signed-in account changed.')
+    } catch (error) {
+      if (entry.pending !== pending) return
+      const reason = error instanceof Error ? error.message : String(error)
+      entry.error = `${reason} The message was not sent. Restore the original account and retry, or cancel the send.`
+      pending.delivering = false
+      notify(entry)
+      return
+    }
+  }
+  if (entry.pending !== pending) return
+  pending.sending = true
+  notify(entry)
+  try {
+    await pending.send(message, pending.mode)
+    entry.pending = null
+  } catch (error) {
+    entry.error = error instanceof Error ? error.message : String(error)
+    entry.uncertainThread =
+      error && typeof error === 'object' && 'threadId' in error && typeof error.threadId === 'string'
+        ? error.threadId
+        : ''
+    entry.pending = null
+  }
+  notify(entry)
+}
+
+/** Keeps microphone, captured audio and explicit sends alive across route changes. */
+export function ComposerVoiceProvider({ children }: { children: ReactNode }) {
+  const [, render] = useState(0)
+  const dock = useRef<HTMLDivElement>(null)
+  const owner = useRef<Owner | null>(null)
+  if (!owner.current) {
+    const accountListeners = new Set<() => void>()
+    owner.current = {
+      entries: new Map(),
+      scoped: new Map(),
+      accountId: null,
+      accountListeners,
+      dock,
+      refresh: () => {
+        render(n => n + 1)
+        accountListeners.forEach(listener => listener())
+      },
+    }
+  }
+  const store = owner.current
+  useEffect(() => {
+    const warn = (event: BeforeUnloadEvent) => {
+      if (![...store.entries.values()].some(entry => entry.active || entry.pending)) return
+      event.preventDefault()
+      event.returnValue = ''
+    }
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [store])
+  return (
+    <VoiceOwner.Provider value={store}>
+      {children}
+      <div ref={dock} className="fixed bottom-4 right-4 z-50 rounded-card bg-surface shadow-lg" />
+      {[...store.entries.values()].map(entry =>
+        createPortal(
+          <div className={!entry.mounted && !entry.active && !entry.pending && !entry.error ? 'hidden' : ''}>
+            {!entry.mounted && (entry.active || entry.pending || entry.error) && (
+              <div className="p-2 text-sm" role="status">
+                Voice message for {entry.key}
+                {entry.error && <p role="alert">{entry.error}</p>}
+                {entry.uncertainThread && <Link to={`/s/${entry.uncertainThread}`}>Check conversation</Link>}
+                {!entry.uncertainThread && <Link to={entry.origin}>Return to composer</Link>}
+              </div>
+            )}
+            {!entry.mounted && <PendingSendRecovery entry={entry} />}
+            {entry.sessionId && (
+              <VoiceRecorder
+                sessionId={entry.sessionId}
+                accountId={entry.accountId}
+                disabled={entry.disabled}
+                background={!entry.mounted}
+                finalizer={entry.finalizer}
+                onActive={active => {
+                  entry.active = active
+                  notify(entry)
+                }}
+                onCancel={() => {
+                  if (entry.pending?.sending) return
+                  entry.pending = null
+                  entry.error = ''
+                  notify(entry)
+                }}
+                onText={transcript => {
+                  const input = entry.mounted ? entry.composer.current : null
+                  const start = input?.selectionStart ?? entry.selection
+                  updateText(entry, current => current.slice(0, start) + transcript + current.slice(start))
+                  entry.selection = start + transcript.length
+                  if (input)
+                    requestAnimationFrame(() => {
+                      if (entry.mounted && entry.composer.current === input) {
+                        input.focus()
+                        input.setSelectionRange(entry.selection, entry.selection)
+                      }
+                    })
+                  if (entry.pending) void deliver(entry)
+                }}
+              />
+            )}
+          </div>,
+          entry.container,
+          entry.key,
+        ),
+      )}
+    </VoiceOwner.Provider>
+  )
+}
+
+/** Prevents account changes while microphone data or a send is still owned by this page. */
+export function useComposerAccount(accountId: string | null | undefined) {
+  const owner = useContext(VoiceOwner)
+  if (!owner) throw new Error('ComposerVoiceProvider is required')
+  const [, render] = useState(0)
+  useLayoutEffect(() => {
+    const listener = () => render(n => n + 1)
+    owner.accountListeners.add(listener)
+    return () => {
+      owner.accountListeners.delete(listener)
+    }
+  }, [owner])
+  if (accountId) owner.accountId = accountId
+  const active = [...owner.entries.values()].some(entry => entry.active || entry.pending)
+  const clear = useCallback(() => {
+    if ([...owner.entries.values()].some(entry => entry.active || entry.pending)) return false
+    owner.entries.clear()
+    owner.scoped.clear()
+    owner.accountId = null
+    owner.refresh()
+    return true
+  }, [owner])
+  return { active, clear }
+}
+
+/** Route-independent, per-composer state for unsent attachments. */
+export function useComposerAttachments<T>(key: string): [T[], (value: T[] | ((current: T[]) => T[])) => void] {
+  const owner = useContext(VoiceOwner)
+  if (!owner) throw new Error('ComposerVoiceProvider is required')
+  let state = owner.scoped.get(key)
+  if (!state) {
+    state = { value: [], listeners: new Set() }
+    owner.scoped.set(key, state)
+  }
+  const current = state
+  const [, render] = useState(0)
+  useLayoutEffect(() => {
+    owner.scoped.set(key, current)
+    const listener = () => render(n => n + 1)
+    current.listeners.add(listener)
+    return () => {
+      current.listeners.delete(listener)
+      if (
+        !current.listeners.size &&
+        Array.isArray(current.value) &&
+        !current.value.length &&
+        owner.scoped.get(key) === current
+      )
+        owner.scoped.delete(key)
+    }
+  }, [current, key, owner])
+  function setValue(value: T[] | ((current: T[]) => T[])) {
+    const previous = current.value as T[]
+    current.value = typeof value === 'function' ? value(previous) : value
+    current.listeners.forEach(listener => listener())
+  }
+  return [current.value as T[], setValue]
+}
 
 /** One submission gate for typed text and the recorder's final transcription. */
 export function useComposerVoice({
@@ -40,113 +270,155 @@ export function useComposerVoice({
   setText: saveText,
   composer,
   onSend,
+  canSubmit = true,
 }: {
   draftKey: string
   text: string
   setText: SetText
   composer: RefObject<HTMLTextAreaElement | null>
-  onSend: (text: string, mode: 'send' | 'interrupt') => void | Promise<void>
+  onSend: Send
+  canSubmit?: boolean
 }) {
-  const finalizer = useRef<VoiceFinalizer | null>(null)
-  const latest = useRef({ text, saveText, onSend })
-  latest.current = { text, saveText, onSend }
-  const scope = useRef({ key: draftKey, active: true })
-  if (scope.current.key !== draftKey) scope.current = { key: draftKey, active: true }
-  const sending = useRef<object | null>(null)
-  const [voiceActive, setVoiceActive] = useState(false)
-  const voiceActiveRef = useRef(false)
-  const voiceSend = useRef(false)
-  const [navigationWarning, setNavigationWarning] = useState(false)
-  const blocker = useBlocker(
-    ({ currentLocation, nextLocation }) =>
-      (voiceActiveRef.current || voiceSend.current) &&
-      (currentLocation.pathname !== nextLocation.pathname ||
-        currentLocation.search !== nextLocation.search ||
-        currentLocation.hash !== nextLocation.hash),
-  )
-  useEffect(() => {
-    if (blocker.state === 'blocked') {
-      setNavigationWarning(true)
-      blocker.reset()
+  const owner = useContext(VoiceOwner)
+  if (!owner) throw new Error('ComposerVoiceProvider is required')
+  const location = useLocation()
+  let entry = owner.entries.get(draftKey)
+  if (!entry) {
+    entry = {
+      key: draftKey,
+      origin: location.pathname + location.search,
+      text,
+      selection: text.length,
+      mounted: false,
+      saveText,
+      onSend,
+      composer,
+      accountId: owner.accountId,
+      finalizer: { current: null },
+      container: document.createElement('div'),
+      sessionId: '',
+      disabled: false,
+      active: false,
+      pending: null,
+      error: '',
+      uncertainThread: '',
+      listeners: new Set(),
+      refresh: owner.refresh,
+      prune: () => {
+        const item = owner.entries.get(draftKey)
+        if (item && !item.mounted && !item.active && !item.pending && !item.error) {
+          owner.entries.delete(draftKey)
+          item.container.remove()
+        }
+      },
     }
-  }, [blocker])
-  useEffect(() => {
-    const warn = (event: BeforeUnloadEvent) => {
-      if (!voiceActiveRef.current && !voiceSend.current) return
-      event.preventDefault()
-      event.returnValue = ''
-    }
-    window.addEventListener('beforeunload', warn)
-    return () => window.removeEventListener('beforeunload', warn)
-  }, [])
-
-  function releaseVoiceNavigation() {
-    voiceSend.current = false
-    setNavigationWarning(false)
+    owner.entries.set(draftKey, entry)
   }
+  const current = entry
+  current.saveText = saveText
+  current.onSend = onSend
+  current.composer = composer
+  const [, render] = useState(0)
   useLayoutEffect(() => {
-    const current = scope.current
-    current.active = true
-    setVoiceActive(false)
+    owner.entries.set(draftKey, current)
+    current.mounted = true
+    current.saveText(current.text)
+    const listener = () => render(n => n + 1)
+    current.listeners.add(listener)
+    owner.refresh()
     return () => {
-      current.active = false
-      sending.current = null
+      current.selection = current.composer.current?.selectionStart ?? current.selection
+      current.mounted = false
+      current.listeners.delete(listener)
+      current.prune()
+      if (owner.entries.get(draftKey) === current) owner.dock.current?.appendChild(current.container)
+      owner.refresh()
     }
-  }, [draftKey])
+  }, [current, draftKey, owner])
 
   function setText(value: string | ((current: string) => string)) {
-    const next = typeof value === 'function' ? value(latest.current.text) : value
-    latest.current.text = next
-    latest.current.saveText(next)
+    updateText(current, value)
   }
-
   async function submit(mode: 'send' | 'interrupt' = 'send') {
-    if (sending.current) return
-    const request = {}
-    sending.current = request
-    voiceSend.current = true
-    const current = scope.current
-    try {
-      const ready = await (finalizer.current?.finalize() ?? Promise.resolve(true))
-      if (!ready || !current.active || scope.current !== current) return
-      await latest.current.onSend(latest.current.text, mode)
-    } finally {
-      if (sending.current === request) sending.current = null
-      releaseVoiceNavigation()
+    if (current.pending) return
+    if (!canSubmit) {
+      current.error = 'Wait for the current request or attachment upload to finish before sending.'
+      notify(current)
+      return
     }
+    current.error = ''
+    current.uncertainThread = ''
+    current.selection = composer.current?.selectionStart ?? current.selection
+    current.pending = { mode, send: current.onSend, delivering: false }
+    notify(current)
+    const ready = await (current.finalizer.current?.finalize() ?? Promise.resolve(true))
+    if (ready) await deliver(current)
+    // A failed transcription keeps the explicit send intent until retry or dismissal.
   }
-
   return {
     setText,
     submit,
-    voiceActive,
-    navigationWarning,
-    releaseVoiceNavigation,
-    voice: {
-      finalizer,
-      onActive: (active: boolean) => {
-        voiceActiveRef.current = active
-        setVoiceActive(active)
-        if (!active && !voiceSend.current) setNavigationWarning(false)
-      },
-      onText: (transcript: string) => {
-        const input = composer.current
-        if (!input) return
-        const start = input.selectionStart
-        setText(current => current.slice(0, start) + transcript + current.slice(start))
-        const current = scope.current
-        requestAnimationFrame(() => {
-          if (!current.active || scope.current !== current || composer.current !== input) return
-          input.focus()
-          input.setSelectionRange(start + transcript.length, start + transcript.length)
-        })
-      },
-    },
+    voiceActive: current.active,
+    voice: { entry: current },
   }
 }
 
-export function ComposerVoice(props: Parameters<typeof VoiceRecorder>[0]) {
-  return <VoiceRecorder key={props.sessionId} {...props} />
+export function ComposerVoice({ sessionId, disabled, entry }: { sessionId: string; disabled: boolean; entry: Entry }) {
+  const owner = useContext(VoiceOwner)!
+  const slot = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    entry.sessionId = sessionId
+    entry.disabled = disabled
+    if (slot.current) slot.current.appendChild(entry.container)
+    owner.refresh()
+    return () => {
+      if (owner.entries.get(entry.key) === entry) owner.dock.current?.appendChild(entry.container)
+      else entry.container.remove()
+    }
+  }, [entry, sessionId, disabled, owner])
+  return (
+    <div>
+      <div ref={slot} />
+      {entry.error && (
+        <p role="alert" className="text-sm text-danger">
+          {entry.error}
+        </p>
+      )}
+      <PendingSendRecovery entry={entry} />
+      {entry.uncertainThread && <Link to={`/s/${entry.uncertainThread}`}>Check conversation</Link>}
+    </div>
+  )
+}
+
+function PendingSendRecovery({ entry }: { entry: Entry }) {
+  if (!entry.pending || entry.pending.sending || (!entry.error && !entry.pending.delivering)) return null
+  return (
+    <div className="flex gap-3 text-sm">
+      {entry.error && !entry.pending.delivering && (
+        <button
+          type="button"
+          onClick={() => {
+            entry.error = ''
+            void deliver(entry)
+            notify(entry)
+          }}
+        >
+          Retry send
+        </button>
+      )}
+      <button
+        type="button"
+        onClick={() => {
+          if (entry.pending?.sending) return
+          entry.pending = null
+          entry.error = ''
+          notify(entry)
+        }}
+      >
+        Cancel send
+      </button>
+    </div>
+  )
 }
 
 export function VoiceRecorder({
@@ -155,12 +427,18 @@ export function VoiceRecorder({
   onText,
   finalizer,
   onActive,
+  onCancel,
+  accountId = null,
+  background = false,
 }: {
   sessionId: string
   disabled: boolean
   onText: (text: string) => void
   finalizer?: RefObject<VoiceFinalizer | null>
+  accountId?: string | null
   onActive?: (active: boolean) => void
+  onCancel?: () => void
+  background?: boolean
 }) {
   const [config, setConfig] = useState<Config | null>(null)
   const [phase, setPhase] = useState<Phase>('idle')
@@ -278,6 +556,7 @@ export function VoiceRecorder({
   }
 
   function cancel() {
+    onCancel?.()
     generation.current++
     finish(false)
     upload.current?.abort()
@@ -323,15 +602,16 @@ export function VoiceRecorder({
   )
 
   useEffect(() => {
+    if (background) return
     if (phase !== 'idle') action.current?.focus()
     else if (restoreFocus.current) {
       restoreFocus.current = false
       trigger.current?.focus()
     }
-  }, [phase])
+  }, [phase, background])
 
   useEffect(() => {
-    if (phase === 'idle') return
+    if (phase === 'idle' || background) return
     const handleKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.preventDefault()
@@ -340,7 +620,7 @@ export function VoiceRecorder({
     }
     window.addEventListener('keydown', handleKey)
     return () => window.removeEventListener('keydown', handleKey)
-  }, [phase])
+  }, [phase, background])
 
   useEffect(() => {
     const onVisibilityChange = () => {
@@ -358,6 +638,12 @@ export function VoiceRecorder({
     upload.current = controller
     changePhase('processing')
     try {
+      if (accountId) {
+        const account = await api.me()
+        if (generation.current !== token) return
+        if (account.id !== accountId)
+          throw new Error('The signed-in account changed. Restore it before retrying transcription.')
+      }
       const result = await api.transcribeVoice(sessionId, blob, controller.signal)
       if (generation.current !== token) return
       if (!result.text.trim()) throw new Error('No speech was detected. Retry or dismiss this recording.')
@@ -481,6 +767,12 @@ export function VoiceRecorder({
       <span className="sr-only" aria-live="polite" aria-atomic="true">
         {announcement}
       </span>
+      {phase === 'error' && (
+        <span role="alert" className="max-w-xs text-danger">
+          {error}
+        </span>
+      )}
+      {background && phase !== 'idle' && phase !== 'error' && <span role="status">{announcement}</span>}
       {phase === 'idle' ? (
         <button
           ref={trigger}

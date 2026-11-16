@@ -3,6 +3,7 @@ import { act, createElement, useState } from 'react'
 import type { createRoot as CreateRoot, Root } from 'react-dom/client'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { Window } from 'happy-dom'
+import { ComposerVoiceProvider } from './VoiceRecorder'
 import {
   DisconnectReason,
   LocalAudioTrack,
@@ -102,12 +103,14 @@ function VoiceHarness({ initial = '/s/chat-1/voice', realChat = false }: { initi
           path: '*',
           element: (
             <VoiceCallProvider>
-              <Navigation />
-              <ActiveVoiceCall />
-              <Routes>
-                <Route path="/s/:id/voice" element={<VoicePage />} />
-                <Route path="/s/:id" element={realChat ? <Chat onChange={() => {}} /> : <p>Thread view</p>} />
-              </Routes>
+              <ComposerVoiceProvider>
+                <Navigation />
+                <ActiveVoiceCall />
+                <Routes>
+                  <Route path="/s/:id/voice" element={<VoicePage />} />
+                  <Route path="/s/:id" element={realChat ? <Chat onChange={() => {}} /> : <p>Thread view</p>} />
+                </Routes>
+              </ComposerVoiceProvider>
             </VoiceCallProvider>
           ),
         },

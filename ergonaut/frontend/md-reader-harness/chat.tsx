@@ -8,6 +8,7 @@ import '../src/index.css'
 import { api, type Message, type SessionDetail } from '../src/api'
 import { Chat } from '../src/pages/Chat'
 import { MarkdownReaderOwner } from '../src/components/MarkdownReaderOwner'
+import { ComposerVoiceProvider } from '../src/components/VoiceRecorder'
 import './visual.css'
 
 const messages: Message[] = Array.from({ length: 30 }, (_, i) => ({
@@ -41,7 +42,7 @@ class FixtureEventSource {
 window.EventSource = FixtureEventSource as unknown as typeof EventSource
 
 const router = createMemoryRouter(
-  [{ path: '/s/:id', element: <MarkdownReaderOwner><Chat onChange={() => undefined} /></MarkdownReaderOwner> }],
+  [{ path: '/s/:id', element: <ComposerVoiceProvider><MarkdownReaderOwner><Chat onChange={() => undefined} /></MarkdownReaderOwner></ComposerVoiceProvider> }],
   { initialEntries: ['/s/fixture'] },
 )
 createRoot(document.getElementById('root')!).render(<RouterProvider router={router} />)

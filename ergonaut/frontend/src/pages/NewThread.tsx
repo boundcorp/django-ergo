@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import { useLocation, useNavigate, useParams } from 'react-router-dom'
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { api } from '../api'
-import { clearDraft, useDraft } from '../draft'
+import { useDraft } from '../draft'
 import ModelPicker, { useBotModels } from '../components/ModelPicker'
-import { ComposerVoice, useComposerVoice } from '../components/VoiceRecorder'
+import { ComposerVoice, useComposerAttachments, useComposerVoice } from '../components/VoiceRecorder'
 
 // Start a thread by writing its first message (with files). The thread gets a title from the
 // message right away, and a generated one (new_thread_metadata) a moment later.
@@ -14,21 +14,32 @@ export function NewThread({ onChange, userId }: { onChange: () => void; userId: 
   // Devbox drafts can contain private chat links; do not reuse them across accounts.
   const draftKey = name === 'devbox' ? `new-thread.${name}.user.${userId}` : `new-thread.${name}`
   const [text, saveText] = useDraft(draftKey)
-  const [files, setFiles] = useState<File[]>([])
+  const [files, setFiles] = useComposerAttachments<File>(draftKey)
   const [busy, setBusy] = useState(false)
   const [model, setModel] = useState('')
   const [error, setError] = useState('')
+  const [uncertainThread, setUncertainThread] = useState('')
   const models = useBotModels(name)
   const [voiceSession, setVoiceSession] = useState<{ bot: string; id: string } | null>(null)
   const composer = useRef<HTMLTextAreaElement>(null)
   const picker = useRef<HTMLInputElement>(null)
   const appliedLocation = useRef<string | null>(null)
-  const { setText, submit, voiceActive, voice, navigationWarning, releaseVoiceNavigation } = useComposerVoice({
+  const mounted = useRef(false)
+  const activeDraft = useRef(draftKey)
+  activeDraft.current = draftKey
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
+  }, [draftKey])
+  const { setText, submit, voiceActive, voice } = useComposerVoice({
     draftKey,
     text,
     setText: saveText,
     composer,
     onSend: start,
+    canSubmit: !busy,
   })
 
   // Drafts do not have a session yet; use the bot's main chat for voice usage accounting.
@@ -87,21 +98,33 @@ export function NewThread({ onChange, userId }: { onChange: () => void; userId: 
     if ((!message.trim() && !files.length) || busy) return
     setBusy(true)
     setError('')
+    setUncertainThread('')
+    let createdThread = ''
+    let sendingThread = false
     try {
       const title = message.trim() || `(${files.map(f => f.name).join(', ')})`
       const thread = await api.newThread(name, '', title, model)
+      createdThread = thread.id
       const ids = []
       for (const file of files) ids.push((await api.uploadAttachment(thread.id, file)).id)
+      sendingThread = true
       await api.send(thread.id, message, ids)
-      clearDraft(draftKey)
+      sendingThread = false
+      setText(current => (current === message ? '' : current))
+      setFiles(current => current.filter(file => !files.includes(file)))
       onChange()
-      releaseVoiceNavigation()
-      navigate(`/s/${thread.id}`)
+      if (mounted.current && activeDraft.current === draftKey) navigate(`/s/${thread.id}`)
       // The generated title lands a moment later; refresh the sidebar for it.
       setTimeout(onChange, 4000)
     } catch (e) {
-      setError(String((e as Error).message ?? e))
+      const message = String((e as Error).message ?? e)
+      const explanation = sendingThread
+        ? `${message} Send may have succeeded; check the new conversation before retrying.`
+        : message
+      setError(explanation)
+      setUncertainThread(createdThread)
       setBusy(false)
+      throw Object.assign(new Error(explanation), { threadId: createdThread })
     }
   }
 
@@ -131,12 +154,6 @@ export function NewThread({ onChange, userId }: { onChange: () => void; userId: 
             </span>
           ))}
         </div>
-      )}
-      {navigationWarning && (
-        <p role="alert" className="mt-3 text-sm text-danger">
-          A message or voice recording is still in progress. Stay here until it finishes, or cancel or retry the
-          recording.
-        </p>
       )}
       <p className="eyebrow mt-8">Your first message</p>
       <form
@@ -224,7 +241,12 @@ export function NewThread({ onChange, userId }: { onChange: () => void; userId: 
           <button type="button" className="font-semibold text-accent hover:underline" onClick={() => void submit()}>
             Retry
           </button>
-          <span className="min-w-0 flex-1 truncate text-muted">{error}</span>
+          <span className="min-w-0 flex-1 text-muted">{error}</span>
+          {uncertainThread && (
+            <Link className="text-accent underline" to={`/s/${uncertainThread}`}>
+              Check conversation
+            </Link>
+          )}
         </div>
       )}
     </div>

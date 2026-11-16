@@ -4,6 +4,7 @@ import type { Root } from 'react-dom/client'
 import { Window } from 'happy-dom'
 import { createMemoryRouter, RouterProvider } from 'react-router-dom'
 import { api, type Call, type Message, type SessionDetail } from '../api'
+import { ComposerVoiceProvider } from '../components/VoiceRecorder'
 import { Chat } from './Chat'
 
 let window: Window
@@ -90,9 +91,21 @@ async function mount(initial: SessionDetail) {
   await act(async () => {
     root.render(
       <RouterProvider
-        router={createMemoryRouter([{ path: '/s/:id', element: <Chat onChange={() => undefined} /> }], {
-          initialEntries: ['/s/thread'],
-        })}
+        router={createMemoryRouter(
+          [
+            {
+              path: '/s/:id',
+              element: (
+                <ComposerVoiceProvider>
+                  <Chat onChange={() => undefined} />
+                </ComposerVoiceProvider>
+              ),
+            },
+          ],
+          {
+            initialEntries: ['/s/thread'],
+          },
+        )}
       />,
     )
     await Promise.resolve()
