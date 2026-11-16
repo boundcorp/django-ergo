@@ -392,17 +392,23 @@ unscoped devbox drafts are not migrated because their owner is unknown.
   calls (turns, compaction, titles) under the tokens its workers' coding
   agents used, with totals for each underneath; hover a bar for its counts.
   It refreshes on new messages and every minute, and sits in the phone sheet
-  on narrow screens. It reads `GET /api/sessions/{id}/usage?hours=6`. Agent
-  tokens come from per-request events when the worker's transcript was
-  captured, otherwise from the worker's running totals spread evenly over the
-  time it was active. Select the sparkline for six-hour detail, seven UTC
-  calendar days (including today), and all-time totals and model/token-part
-  breakdowns for that thread. Daily agent totals from worker aggregates are
-  estimates spread across their active time; captured request events use their
-  recorded times. Undated events and worker totals appear only in all-time
-  totals. The history includes only recorded usage, not costs, and
-  reads `GET /api/sessions/{id}/usage/history` with the same session visibility
-  rules. When the chat has a todo list (see
+  on narrow screens. It reads `GET /api/sessions/{id}/usage?hours=6`. Select
+  the sparkline for six-hour detail, seven UTC calendar days (including today),
+  and all-time token-part and model breakdowns for that thread.
+  Direct thread calls use recorded request times. **Agent history is incomplete:**
+  only local-shell aggregates collected from explicitly owned run transcripts
+  (`source=local_shell_run_v1`) are included. Their thread FK survives worker
+  deletion; hourly and daily placement is estimated across the worker's active
+  span. Native-session events, Orca scans, and legacy local-shell aggregates are
+  excluded, never added to these estimates. Matching worktrees, session links,
+  and legacy `run_session` IDs cannot prove event ownership; missing historical
+  attribution is not reconstructed. Zero agent tokens does not mean no agent
+  usage. Both usage APIs return `agent_usage_complete: false`; the sparkline
+  and dialog label the partial coverage. Undated attributable totals appear
+  only in all-time results. These are recorded tokens, not costs or a claim of
+  complete all-token usage. History reads
+  `GET /api/sessions/{id}/usage/history` with the same session visibility rules.
+  When the chat has a todo list (see
   [Bots](bots.md#todo-lists)), a floating "Todo X/Y" button (done/total) sits
   beside Illustrate above the composer; it shows or hides the list, with each
   item and its status, at the bottom of the chat, and the browser remembers

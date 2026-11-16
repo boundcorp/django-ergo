@@ -34,7 +34,6 @@ from django_ergo.bots.registry import may_use
 from django_ergo.conversation.chat_reply import CHAT_REPLY_KIND
 from django_ergo.conversation.models import (
     AgentUsage,
-    AgentUsageEvent,
     ConversationSession,
     InferenceOutcome,
     InferenceRequest,
@@ -211,6 +210,7 @@ class SessionUsageOut(Schema):
     hours: list[UsageHour]
     thread_tokens: int
     agent_tokens: int
+    agent_usage_complete: bool = False
 
 
 class UsageTokenParts(Schema):
@@ -243,6 +243,7 @@ class SessionUsageHistoryOut(Schema):
     days: list[UsageDay]
     all_time: UsageHistoryTotals
     models: list[UsageModel]
+    agent_usage_complete: bool = False
 
 
 class CostsOut(Schema):
@@ -752,9 +753,11 @@ def _spread(bins: list[int], since, hour: timedelta, first, last, tokens: int) -
 
 @router.get("/sessions/{session_id}/usage", response=SessionUsageOut)
 def session_usage(request, session_id: str, hours: int = 6):
-    """Tokens per hour for one chat over the last ``hours``, split into its own calls and its
-    workers' coding agents. Agents report per-request events when their transcript was
-    captured; otherwise a worker's running totals are spread evenly over its active span."""
+    """Direct chat calls and provenance-marked worker-run totals over rolling hours.
+
+    Agent history is incomplete; native-session events and legacy aggregates have
+    no reliable thread ownership and are deliberately excluded.
+    """
     session = visible_sessions(request.auth).filter(id=uuid_or_404(session_id)).first()
     if session is None:
         raise HttpError(404, "No such session")
@@ -773,18 +776,7 @@ def session_usage(request, session_id: str, hours: int = 6):
     for row in own.filter(created_at__gte=since, created_at__lte=until).values_list("created_at", *fields):
         thread[slot(row[0])] += sum(n or 0 for n in row[1:])
 
-    events = AgentUsageEvent.objects.filter(
-        session__thread_links__conversation=session, occurred_at__gte=since, occurred_at__lte=until
-    ).distinct()
-    for row in events.values_list("occurred_at", *AGENT_FIELDS):
-        agents[slot(row[0])] += sum(n or 0 for n in row[1:])
-    # Workers whose agent transcript was captured are counted by event above.
-    captured = set(
-        AgentUsageEvent.objects.filter(
-            session__thread_links__conversation=session, session__thread_links__worker__isnull=False
-        ).values_list("session__thread_links__worker", flat=True)
-    )
-    totals = AgentUsage.objects.filter(session=session, last_at__gte=since).exclude(worker__in=captured)
+    totals = AgentUsage.objects.filter(session=session, source="local_shell_run_v1", last_at__gte=since)
     for usage in totals:
         tokens = sum(getattr(usage, field) for field in AGENT_FIELDS)
         _spread(agents, since, hour, usage.first_at, min(usage.last_at, until), tokens)
@@ -802,11 +794,11 @@ def session_usage(request, session_id: str, hours: int = 6):
 
 @router.get("/sessions/{session_id}/usage/history", response=SessionUsageHistoryOut)
 def session_usage_history(request, session_id: str):
-    """Seven UTC calendar days and all-time totals for a chat.
+    """Seven UTC calendar days and all-time recorded totals for a chat.
 
-    Captured agent requests are counted once per event. For workers without
-    captured events, aggregate tokens are estimated evenly across their active
-    span; undated aggregates and events only appear in all-time totals.
+    Only explicitly owned local-shell run aggregates contribute agent tokens.
+    Native events and legacy aggregates are excluded, never combined with these
+    estimates. Agent history remains incomplete, including for deleted workers.
     """
     session = visible_sessions(request.auth).filter(id=uuid_or_404(session_id)).first()
     if session is None:
@@ -821,13 +813,10 @@ def session_usage_history(request, session_id: str):
     models = defaultdict(lambda: {"thread_tokens": 0, "agent_tokens": 0})
     all_time = {scope: {field: 0 for field in AGENT_FIELDS} for scope in ("thread", "agents")}
     own = _of_chats(_for_chat(StructuredCall.objects.all()), ConversationSession.objects.filter(pk=session.pk))
-    # A subquery avoids multiplying events when a native session has several links to this thread.
-    linked = AgentUsageEvent.objects.filter(session__thread_links__conversation=session).values("pk")
-    events = AgentUsageEvent.objects.filter(pk__in=linked)
-    captured = AgentUsageEvent.objects.filter(
-        session__thread_links__conversation=session, session__thread_links__worker__isnull=False
-    ).values("session__thread_links__worker")
-    totals = AgentUsage.objects.filter(session=session).exclude(worker__in=captured)
+    # The versioned source marks totals collected only from explicitly owned run
+    # transcripts. The session FK survives worker deletion. Never infer event
+    # ownership from thread links, cwd, or the mutable legacy run_session field.
+    totals = AgentUsage.objects.filter(session=session, source="local_shell_run_v1")
     call_fields = [field for _, field, _ in PARTS]
 
     def grouped(query, model_field, fields, scope):
@@ -839,7 +828,6 @@ def session_usage_history(request, session_id: str):
             models[row[model_field] or ""][f"{scope if scope == 'thread' else 'agent'}_tokens"] += sum(counts)
 
     grouped(own, "model_name", call_fields, "thread")
-    grouped(events, "model", AGENT_FIELDS, "agents")
     grouped(totals, "model", AGENT_FIELDS, "agents")
 
     def daily(query, date_field, fields, key):
@@ -855,7 +843,6 @@ def session_usage_history(request, session_id: str):
             days[index][key] += sum(row[f"sum_{i}"] or 0 for i in range(len(fields)))
 
     daily(own, "created_at", call_fields, "thread_tokens")
-    daily(events, "occurred_at", AGENT_FIELDS, "agent_tokens")
     bins = [0] * 7
     active = totals.filter(last_at__gte=since).filter(Q(first_at__lte=until) | Q(first_at__isnull=True))
     for usage in active:

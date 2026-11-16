@@ -432,7 +432,7 @@ def test_session_usage_by_hour_splits_the_chat_from_its_agents(client, lee):
     call(chat, timedelta(hours=7), 1000)  # before the window
     call(other, timedelta(minutes=5), 999)  # another chat
 
-    # A worker whose transcript was captured: counted per event, not by its running totals.
+    # Legacy native events and aggregates do not establish thread ownership.
     captured = Worker.objects.create(session=chat, bot_name="devbox", title="fix", function="orca:watch")
     native = AgentSession.objects.create(cli="omp", host_namespace="local", native_session_id="n1")
     AgentSessionThreadLink.objects.create(session=native, conversation=chat, worker=captured)
@@ -449,13 +449,14 @@ def test_session_usage_by_hour_splits_the_chat_from_its_agents(client, lee):
         first_at=now - timedelta(hours=1),
         last_at=now,
     )
-    # One without: its 600 tokens over the last 3 hours spread 200 an hour.
+    # Explicitly owned run transcripts: 600 tokens spread over three hours.
     plain = Worker.objects.create(session=chat, bot_name="devbox", title="docs", function="orca:watch")
     AgentUsage.objects.create(
         worker=plain,
         session=chat,
         bot_name="devbox",
         agent="claude",
+        source="local_shell_run_v1",
         model="m",
         output_tokens=600,
         first_at=now - timedelta(hours=3),
@@ -466,10 +467,11 @@ def test_session_usage_by_hour_splits_the_chat_from_its_agents(client, lee):
     assert [h["thread_tokens"] for h in data["hours"]] == [0, 0, 0, 100, 0, 200]
     agents = [h["agent_tokens"] for h in data["hours"]]
     assert agents[:3] == [0, 0, 0]
-    assert sum(agents[3:]) == pytest.approx(640, abs=2)
-    assert agents[5] == pytest.approx(240, abs=2)
+    assert sum(agents[3:]) == pytest.approx(600, abs=2)
+    assert agents[5] == pytest.approx(200, abs=2)
     assert data["thread_tokens"] == 300
     assert data["agent_tokens"] == sum(agents)
+    assert data["agent_usage_complete"] is False
 
 
 @pytest.mark.django_db
@@ -486,7 +488,7 @@ def test_session_usage_is_only_for_visible_chats(client):
 
 
 @pytest.mark.django_db
-def test_session_usage_history_utc_days_all_time_and_agent_fallback(client, lee, settings, monkeypatch):
+def test_session_usage_history_utc_days_and_attributable_run_totals(client, lee, settings, monkeypatch):
     from datetime import UTC, datetime
     from datetime import timezone as dt_timezone
 
@@ -548,6 +550,7 @@ def test_session_usage_history_utc_days_all_time_and_agent_fallback(client, lee,
         bot_name="devbox",
         agent="omp",
         model="agent-model",
+        source="local_shell_run_v1",
         output_tokens=48,
         first_at=start,
         last_at=start + timedelta(days=2),
@@ -574,16 +577,89 @@ def test_session_usage_history_utc_days_all_time_and_agent_fallback(client, lee,
         "2026-11-14",
     ]
     assert [row["thread_tokens"] for row in data["days"]] == [12, 0, 0, 0, 0, 0, 3]
-    assert [row["agent_tokens"] for row in data["days"]] == [49, 24, 0, 0, 0, 0, 0]
+    assert [row["agent_tokens"] for row in data["days"]] == [24, 24, 0, 0, 0, 0, 0]
     assert data["all_time"] == {
         "thread": {"input_tokens": 10, "output_tokens": 7, "cache_write_tokens": 2, "cache_read_tokens": 3},
-        "agents": {"input_tokens": 29, "output_tokens": 53, "cache_write_tokens": 0, "cache_read_tokens": 4},
+        "agents": {"input_tokens": 0, "output_tokens": 48, "cache_write_tokens": 0, "cache_read_tokens": 0},
     }
     assert data["models"] == [
-        {"model": "agent-model", "thread_tokens": 0, "agent_tokens": 77},
+        {"model": "agent-model", "thread_tokens": 0, "agent_tokens": 48},
         {"model": "chat-model", "thread_tokens": 22, "agent_tokens": 0},
-        {"model": "undated", "thread_tokens": 0, "agent_tokens": 9},
     ]
+
+    assert data["agent_usage_complete"] is False
+
+
+@pytest.mark.django_db
+def test_thread_usage_rejects_shared_native_events_despite_run_reassignment_and_worker_deletion(client, lee):
+    from django_ergo.conversation.models import AgentRunSession, AgentSession, AgentSessionThreadLink, AgentUsageEvent
+
+    chat = ConversationSession.objects.create(user=lee, bot_name="devbox")
+    other = ConversationSession.objects.create(user=lee, bot_name="devbox")
+    workers = [
+        Worker.objects.create(session=session, bot_name="devbox", function="orca:watch") for session in (chat, other)
+    ]
+    native = AgentSession.objects.create(cli="omp", host_namespace="local", native_session_id="shared")
+    runs = []
+    now = timezone.now()
+    for worker in workers:
+        AgentSessionThreadLink.objects.create(session=native, conversation=worker.session, worker=worker)
+        runs.append(
+            AgentRunSession.objects.create(
+                session=native, worker=worker, launch_key=str(worker.id), segment_key="native"
+            )
+        )
+        AgentUsage.objects.create(
+            worker=worker,
+            session=worker.session,
+            bot_name="devbox",
+            agent="omp",
+            model="private-native-model",
+            input_tokens=999,
+            first_at=now - timedelta(hours=1),
+            last_at=now,
+        )
+    event = AgentUsageEvent.objects.create(
+        session=native,
+        run_session=runs[0],
+        source_event_key="shared",
+        occurred_at=now,
+        model="private-native-model",
+        input_tokens=999,
+    )
+    # Trusted aggregate ownership is its durable thread FK, not its deletable worker.
+    trusted = Worker.objects.create(session=chat, bot_name="devbox", function="agent:local_shell")
+    AgentUsage.objects.create(
+        worker=trusted,
+        session=chat,
+        bot_name="devbox",
+        source="local_shell_run_v1",
+        agent="codex",
+        model="known-agent",
+        output_tokens=120,
+        first_at=now - timedelta(hours=1),
+        last_at=now,
+    )
+    StructuredCall.objects.create(kind="chat_reply", session=chat, user=lee, input_tokens=17)
+
+    def check_boundaries():
+        for session, expected_agents in ((chat, 120), (other, 0)):
+            hourly = client.get(f"/api/sessions/{session.id}/usage").json()
+            history = client.get(f"/api/sessions/{session.id}/usage/history").json()
+            assert hourly["agent_tokens"] == pytest.approx(expected_agents, abs=1)
+            assert sum(row["agent_tokens"] for row in history["days"]) == pytest.approx(expected_agents, abs=1)
+            assert history["all_time"]["agents"]["output_tokens"] == expected_agents
+            assert history["all_time"]["agents"]["input_tokens"] == 0
+            assert all(row["model"] != "private-native-model" for row in history["models"])
+            assert history["all_time"]["thread"]["input_tokens"] == (17 if session == chat else 0)
+
+    check_boundaries()
+    event.run_session = runs[1]  # Legacy rescans could overwrite this; never trust it.
+    event.save(update_fields=["run_session"])
+    check_boundaries()
+    for worker in [*workers, trusted]:
+        worker.delete()
+    check_boundaries()
 
 
 @pytest.mark.django_db

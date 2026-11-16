@@ -66,7 +66,6 @@ import sys
 import time
 from datetime import UTC
 from datetime import datetime
-from datetime import timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -711,22 +710,26 @@ class LocalShellPlugin(BotPlugin):
         return ""
 
     def usage(self, worker, handle: dict) -> tuple[str, dict[str, dict], datetime]:
-        """The agent's token totals per model for ``worker``'s own runs, read now.
+        """Totals from explicitly owned run transcripts, never cwd-matched sessions.
 
-        The agent's own session files under ``~/.claude`` or ``~/.codex`` come
-        first: they hold every request (sub-agents too) with its model and time,
-        and grow while the run is going. When they can't be read (an agent
-        running as another user), the run transcripts are summed instead.
-        Returns the agent, the totals and the end of the worker's span.
+        Handles without a recorded starting run cannot establish ownership and
+        contribute no usage. Native session scans may include another worker or
+        resumed session; they are not a fallback for thread accounting.
         """
         from django.utils import timezone
 
         from django_ergo.conversation.history import as_aware
         from django_ergo.conversation.history import db_timestamp
-        from django_ergo.conversation.history import parse_timestamp
-        from django_ergo.plugins import agent_usage_scan
 
         folder = Path(handle["dir"])
+        if not isinstance(handle.get("run"), int) or handle["run"] not in self.runs(
+            folder
+        ):
+            return (
+                str(handle.get("agent") or "claude"),
+                {},
+                db_timestamp(as_aware(timezone.now())),
+            )
         runs, newer = self.own_runs(folder, handle)
         specs = [self.run_state(folder, number)["spec"] for number in runs]
         agent = str(
@@ -739,25 +742,9 @@ class LocalShellPlugin(BotPlugin):
             started = self.run_state(folder, newer)["spec"].get("started_at")
             if started:
                 until = min(until, datetime.fromtimestamp(float(started), UTC))
-        since = as_aware(worker.created_at) - timedelta(minutes=1)
-        scan = {
-            "claude": agent_usage_scan.claude_usage,
-            "codex": agent_usage_scan.codex_usage,
-        }
-        models: dict[str, dict] = {}
-        if agent in scan:
-            cwd = str(folder.resolve())
-            try:
-                models = scan[agent](Path.home(), cwd, since, until)
-            except OSError:
-                log.warning("Couldn't read %s session files for %s", agent, cwd)
-        for totals in models.values():
-            for key in ("first_at", "last_at"):
-                totals[key] = db_timestamp(parse_timestamp(totals.get(key)))
-        if not models:
-            models = transcript_usage(
-                agent, [self.transcript(folder, n) for n in runs], specs
-            )
+        models = transcript_usage(
+            agent, [self.transcript(folder, n) for n in runs], specs
+        )
         return agent, models, db_timestamp(until)
 
     def record_usage(self, ctx, handle: dict, number: int, *, settled: bool) -> None:
@@ -790,7 +777,7 @@ class LocalShellPlugin(BotPlugin):
             record_agent_usage(
                 worker,
                 session=worker.session,
-                source="local_shell",
+                source="local_shell_run_v1",
                 agent=agent,
                 models=models,
                 first_at=worker.created_at,

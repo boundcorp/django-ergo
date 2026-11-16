@@ -16,10 +16,12 @@ const usage: SessionUsage = {
   hours: [{ start: '2026-10-29T15:00:00Z', thread_tokens: 123, agent_tokens: 45 }],
   thread_tokens: 123,
   agent_tokens: 45,
+  agent_usage_complete: false,
 }
 const history: SessionUsageHistory = {
   until: '2026-10-29T16:00:00Z',
   timezone: 'UTC',
+  agent_usage_complete: false,
   days: [{ date: '2026-10-29', thread_tokens: 800, agent_tokens: 200 }],
   all_time: {
     thread: { input_tokens: 101, output_tokens: 102, cache_write_tokens: 103, cache_read_tokens: 104 },

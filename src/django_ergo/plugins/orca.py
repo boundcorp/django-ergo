@@ -999,7 +999,6 @@ class OrcaPlugin(BotPlugin):
                 ingest_omp_content(
                     content,
                     source_name=str(item.get("name") or "omp.jsonl"),
-                    worker=ctx.worker,
                     host_namespace=self.files_host or "local",
                 )
             return
@@ -1009,9 +1008,7 @@ class OrcaPlugin(BotPlugin):
         for path in root.glob("**/*.jsonl"):
             header, _ = omp_session_rows(path.read_bytes())
             if header.get("cwd") == worktree:
-                ingest_omp_content(
-                    path.read_bytes(), source_name=path.name, worker=ctx.worker
-                )
+                ingest_omp_content(path.read_bytes(), source_name=path.name)
 
     def run_scanner(self, args: list[str]) -> subprocess.CompletedProcess:
         """Run agent_usage_scan.py with ``args`` where the worktrees are (over ssh

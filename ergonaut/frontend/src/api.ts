@@ -296,7 +296,13 @@ export type CostBucket = {
 
 // GET /api/sessions/{id}/usage: one chat's tokens per hour, its own calls and its workers' agents.
 export type UsageHour = { start: string; thread_tokens: number; agent_tokens: number }
-export type SessionUsage = { until: string; hours: UsageHour[]; thread_tokens: number; agent_tokens: number }
+export type SessionUsage = {
+  until: string
+  hours: UsageHour[]
+  thread_tokens: number
+  agent_tokens: number
+  agent_usage_complete: boolean
+}
 
 export type UsageTokenParts = {
   input_tokens: number
@@ -307,6 +313,7 @@ export type UsageTokenParts = {
 export type SessionUsageHistory = {
   until: string
   timezone: 'UTC'
+  agent_usage_complete: boolean
   days: { date: string; thread_tokens: number; agent_tokens: number }[]
   all_time: { thread: UsageTokenParts; agents: UsageTokenParts }
   models: { model: string; thread_tokens: number; agent_tokens: number }[]

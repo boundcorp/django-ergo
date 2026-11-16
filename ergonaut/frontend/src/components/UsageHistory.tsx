@@ -23,7 +23,7 @@ function BreakdownTable({ rows }: { rows: { label: string; thread: number; agent
             Thread
           </th>
           <th scope="col" className="py-2 text-right font-medium">
-            Agents
+            Agents (partial)
           </th>
         </tr>
       </thead>
@@ -82,7 +82,7 @@ export function UsageHistory({ sessionId, usage }: { sessionId: string; usage: S
         ref={opener}
         type="button"
         aria-haspopup="dialog"
-        aria-label="Open thread usage history"
+        aria-label={`Open thread usage history: ${usage.thread_tokens.toLocaleString()} thread tokens and ${usage.agent_tokens.toLocaleString()} known agent tokens in the last ${usage.hours.length} hours; agent history incomplete`}
         onClick={() => {
           dialog.current?.showModal()
           setOpen(true)
@@ -105,14 +105,14 @@ export function UsageHistory({ sessionId, usage }: { sessionId: string; usage: S
             setOpen(false)
             opener.current?.focus()
           }}
-          className="m-auto max-h-[90dvh] w-[min(94vw,42rem)] overflow-hidden rounded-card border border-stroke bg-surface p-0 text-ink shadow-xl backdrop:bg-black/40"
+          className="m-auto max-h-[90dvh] w-[min(94vw,42rem)] overflow-y-auto rounded-card border border-stroke bg-surface p-0 text-ink shadow-xl backdrop:bg-black/40"
         >
           <div className="flex items-start gap-4 border-b border-stroke p-4">
             <div>
               <h2 id={titleId} className="font-display text-xl font-bold">
                 Thread usage history
               </h2>
-              <p className="mt-1 text-sm text-muted">Recorded token usage for this thread and its coding agents.</p>
+              <p className="mt-1 text-sm text-muted">Recorded thread usage and attributable coding-agent usage.</p>
             </div>
             <button
               type="button"
@@ -124,7 +124,12 @@ export function UsageHistory({ sessionId, usage }: { sessionId: string; usage: S
               ×
             </button>
           </div>
-          <div className="max-h-[70dvh] space-y-5 overflow-y-auto p-4">
+          <div className="space-y-5 p-4">
+            <p className="rounded-control border border-stroke p-3 text-sm">
+              Agent history is incomplete. Only explicitly owned local-shell run transcripts are included.
+              Native-session events and legacy estimates are excluded because thread ownership cannot be proven. Zero
+              does not mean no agent usage.
+            </p>
             <section aria-label="Recent six hours">
               <h3 className="font-semibold">Recent {usage.hours.length} hours</h3>
               <p className="text-xs text-muted">
@@ -210,9 +215,9 @@ export function UsageHistory({ sessionId, usage }: { sessionId: string; usage: S
               </>
             )}
             <p className="text-xs text-muted">
-              Agent usage uses recorded per-request events when available. Otherwise, agent totals are estimated across
-              the worker’s active time; time-period totals may be approximate. Missing token values are not measured.
-              Undated usage is included only in all-time totals.
+              Agent totals are estimated across each owned run’s active time; hourly and daily timing is approximate.
+              Direct thread calls use recorded request times. Missing token values are not measured. Undated
+              attributable usage is included only in all-time totals.
             </p>
           </div>
         </dialog>,

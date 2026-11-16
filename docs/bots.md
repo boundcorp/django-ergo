@@ -686,6 +686,12 @@ locally. It is best effort: an unreadable session file preserves the last
 recorded counts and does not fail the worker. Counts are attributed by
 worktree and the worker time window, so overlapping workers in one worktree
 can each include the same agent requests.
+These ambiguous scans remain legacy estimates on Costs, not exact per-thread
+accounting: the thread sparkline and history exclude them entirely. OMP native
+collection now stores immutable unattributed events without creating thread
+links or assigning/reassigning event `run_session` from the scanning worker.
+Existing ambiguous links and run IDs are not ownership evidence and are not
+automatically repaired or backfilled.
 
 ## Todo lists
 
@@ -1795,14 +1801,18 @@ files the run made or changed, with sizes and SHA-256 hashes.
 
 Each job's token counts go to Costs and the chat's usage chart, for Claude
 Code and Codex alike: every 5 minutes while a run is going and again when it
-ends. They come from the agent's own session files (`~/.claude/projects`,
-`~/.codex/sessions`) for the job folder and the worker's time span, so every
-request is counted under its own model, sub-agents included. When those can't
-be read (an agent running as another user), the run transcripts are summed
-instead: Claude Code's `result` events (`modelUsage` per model) and Codex's
-`turn.completed` usage. Only the worker's own runs count, not a later fresh
-run in the same folder. `ergonaut manage agent_usage [--dry-run] [--session
-<id>]` reads usage again for workers whose counts were missed.
+ends. They now come only from explicitly owned run transcripts: Claude Code's
+`result` events (`modelUsage` per model) or assistant messages while running,
+and Codex's `turn.completed` usage. Native session files matched by job folder
+are not used, because another worker or resumed session may share that cwd.
+A handle must name its starting run; legacy handles without one record no new
+usage. A later fresh run in the same folder is excluded. The versioned
+`AgentUsage.source=local_shell_run_v1` marks this collection boundary, with a
+durable thread FK even after worker deletion. The thread history never adds
+native events or legacy aggregates to these totals, and labels agent history
+incomplete; hourly/daily placement is approximate. Existing older rows are not
+automatically converted. `ergonaut manage agent_usage [--dry-run] [--session <id>]`
+can explicitly reread surviving owned-run transcripts for missed workers.
 
 Local Codex jobs default to the `workspace-write` sandbox with network
 access enabled globally, without changing the CLI's home configuration.

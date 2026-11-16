@@ -2,6 +2,13 @@
 
 Repo: boundcorp/django-ergo (public; keep deployment details out). Branch from `main`; open a PR.
 
+Current per-thread accounting deliberately does **not** use the worktree/time
+attribution described below: it cannot establish event ownership across shared
+or resumed native sessions. The thread usage APIs exclude native events and
+legacy worker aggregates, include only explicitly owned local-shell run totals,
+and report incomplete agent history. See [Running Ergonaut](../ergonaut.md) for
+the current boundary. This original spec still describes legacy Costs estimates.
+
 ## Goal
 Coding agents that Orca workers run (Claude Code, Codex, omp) spend tokens that Ergonaut never sees,
 because the agent runs outside Ergo's structured calls. Capture that usage per worker and show it on

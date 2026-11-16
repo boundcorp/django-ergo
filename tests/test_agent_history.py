@@ -11,6 +11,7 @@ from django_ergo.conversation.agent_history import canonical_remote
 from django_ergo.conversation.agent_history import derive_project_identity
 from django_ergo.conversation.agent_history import estimate_cost
 from django_ergo.conversation.agent_history import ingest_omp_file
+from django_ergo.conversation.models import AgentRunSession
 from django_ergo.conversation.models import AgentSessionThreadLink
 from django_ergo.conversation.models import AgentTranscriptArtifact
 from django_ergo.conversation.models import AgentUsageEvent
@@ -81,7 +82,7 @@ def test_estimate_is_api_equivalent_not_reported_charge():
 
 
 @pytest.mark.django_db
-def test_omp_ingestion_is_idempotent_stores_private_redacted_transcript_and_links(
+def test_omp_ingestion_preserves_events_without_inventing_thread_ownership(
     tmp_path, settings
 ):
     settings.MEDIA_ROOT = str(tmp_path / "media")
@@ -111,8 +112,8 @@ def test_omp_ingestion_is_idempotent_stores_private_redacted_transcript_and_link
         function="agent:orca",
     )
 
-    session = ingest_omp_file(native, worker=worker)
-    again = ingest_omp_file(native, worker=worker)
+    session = ingest_omp_file(native)
+    again = ingest_omp_file(native)
 
     assert session.pk == again.pk
     [event] = AgentUsageEvent.objects.all()
@@ -121,9 +122,21 @@ def test_omp_ingestion_is_idempotent_stores_private_redacted_transcript_and_link
     assert event.estimated_usd == Decimal("0.00002000")
     assert event.cost_status == "estimated"
     assert AgentUsageEvent.objects.count() == 1
-    assert (
-        AgentSessionThreadLink.objects.get(session=session).conversation == conversation
+    assert not AgentSessionThreadLink.objects.filter(session=session).exists()
+    assert event.run_session_id is None
+    assert event.source_semantics == "native_session_unattributed_v1"
+    # Preserve legacy run IDs as evidence, not ownership: a rescan must not
+    # overwrite either the observed run or the event's original token counts.
+    legacy_run = AgentRunSession.objects.create(
+        worker=worker, session=session, launch_key=str(worker.id), segment_key="native"
     )
+    event.run_session = legacy_run
+    event.save(update_fields=["run_session"])
+    native.write_text(native.read_text().replace('"input":100', '"input":999'))
+    ingest_omp_file(native)
+    event.refresh_from_db()
+    assert event.run_session_id == legacy_run.pk
+    assert event.input_tokens == 100
     artifacts = AgentTranscriptArtifact.objects.filter(session=session).order_by(
         "classification"
     )

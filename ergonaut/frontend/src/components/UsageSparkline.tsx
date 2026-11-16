@@ -27,7 +27,8 @@ export function UsageBars({ usage }: { usage: SessionUsage }) {
   const total = usage.thread_tokens + usage.agent_tokens
   const summary =
     `${tokens(total)} tokens in the last ${usage.hours.length}h` +
-    (usage.agent_tokens ? ` (${tokens(usage.thread_tokens)} thread, ${tokens(usage.agent_tokens)} agents)` : '')
+    (usage.agent_tokens ? ` (${tokens(usage.thread_tokens)} thread, ${tokens(usage.agent_tokens)} agents)` : '') +
+    (usage.agent_usage_complete ? '' : '; agent history incomplete')
   return (
     <div className="usage-sparkline flex items-end gap-2" title={summary}>
       <div role="img" aria-label={summary} className="flex items-end gap-[3px]" style={{ height: BAR_HEIGHT }}>
@@ -57,6 +58,7 @@ export function UsageBars({ usage }: { usage: SessionUsage }) {
       <div className="text-[11px] leading-tight text-muted tabular-nums">
         <div>
           <span className="font-semibold text-ink">{tokens(total)}</span> tokens · {usage.hours.length}h
+          {!usage.agent_usage_complete && ' · partial'}
         </div>
         <div className="flex items-center gap-2">
           <span className="flex items-center gap-1">
