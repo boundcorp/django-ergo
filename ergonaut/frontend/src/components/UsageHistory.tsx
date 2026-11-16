@@ -11,34 +11,83 @@ const parts: [keyof UsageTokenParts, string][] = [
   ['cache_read_tokens', 'Cache read'],
 ]
 
-function BreakdownTable({ rows }: { rows: { label: string; thread: number; agents: number }[] }) {
+type UsageRow = { label: string; thread: number; agents: number }
+
+function UsageChart({ rows }: { rows: UsageRow[] }) {
+  const [selected, setSelected] = useState<number | null>(null)
+  const peak = Math.max(0, ...rows.map(row => row.thread + row.agents))
+  const current = selected === null ? null : rows[selected]
   return (
-    <table className="w-full text-left text-sm tabular-nums">
-      <thead className="text-xs text-muted">
-        <tr>
-          <th scope="col" className="py-2 font-medium">
-            Period / model
-          </th>
-          <th scope="col" className="py-2 text-right font-medium">
-            Thread
-          </th>
-          <th scope="col" className="py-2 text-right font-medium">
-            Agents (partial)
-          </th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map(row => (
-          <tr key={row.label} className="border-t border-stroke">
-            <th scope="row" className="break-all py-2 pr-2 font-normal">
-              {row.label}
-            </th>
-            <td className="py-2 text-right">{row.thread.toLocaleString()}</td>
-            <td className="py-2 text-right">{row.agents.toLocaleString()}</td>
-          </tr>
+    <div className="mt-4">
+      <div className="flex justify-between text-xs text-muted">
+        <span>{peak.toLocaleString()} tokens</span>
+        <span>
+          <span className="text-accent">●</span> Thread　<span className="text-mint">●</span> Known agents
+        </span>
+      </div>
+      <div className="mt-2 flex h-36 items-end gap-1 border-b border-stroke sm:gap-3">
+        {rows.map((row, index) => (
+          <button
+            key={`${row.label}-${index}`}
+            type="button"
+            aria-label={`${row.label}: ${row.thread.toLocaleString()} thread tokens, ${row.agents.toLocaleString()} known agent tokens`}
+            onFocus={() => setSelected(index)}
+            onClick={() => setSelected(index)}
+            onMouseEnter={() => setSelected(index)}
+            className="group flex h-full min-w-0 flex-1 flex-col justify-end rounded-control focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+          >
+            <span
+              className="mx-auto flex w-full max-w-10 flex-col-reverse overflow-hidden rounded-t"
+              style={{ height: `${((row.thread + row.agents) / (peak || 1)) * 100}%` }}
+            >
+              <span
+                className="bg-accent"
+                style={{ height: `${(row.thread / (row.thread + row.agents || 1)) * 100}%` }}
+              />
+              <span className="bg-mint" style={{ height: `${(row.agents / (row.thread + row.agents || 1)) * 100}%` }} />
+            </span>
+          </button>
         ))}
-      </tbody>
-    </table>
+      </div>
+      <div className="mt-2 flex gap-1 text-center text-[10px] leading-tight text-muted sm:gap-3">
+        {rows.map((row, index) => (
+          <span key={`${row.label}-${index}`} className="min-w-0 flex-1 break-words">
+            {row.label}
+          </span>
+        ))}
+      </div>
+      <p aria-live="polite" className="mt-3 min-h-5 text-xs text-muted">
+        {current
+          ? `${current.label}: ${current.thread.toLocaleString()} thread · ${current.agents.toLocaleString()} known agents`
+          : 'Select a bar for exact values.'}
+      </p>
+    </div>
+  )
+}
+
+function Composition({ rows }: { rows: UsageRow[] }) {
+  const peak = Math.max(1, ...rows.map(row => row.thread + row.agents))
+  return (
+    <div className="mt-4 space-y-3">
+      {rows.map((row, index) => (
+        <div key={`${row.label}-${index}`}>
+          <div className="flex flex-wrap justify-between gap-x-3 text-sm">
+            <span className="min-w-0 break-all">{row.label}</span>
+            <span className="text-muted tabular-nums">
+              {row.thread.toLocaleString()} thread · {row.agents.toLocaleString()} agents
+            </span>
+          </div>
+          <div
+            className="mt-1 flex h-2 overflow-hidden rounded-full bg-raised"
+            role="img"
+            aria-label={`${row.label}: ${row.thread.toLocaleString()} thread tokens, ${row.agents.toLocaleString()} known agent tokens`}
+          >
+            <span className="bg-accent" style={{ width: `${(row.thread / peak) * 100}%` }} />
+            <span className="bg-mint" style={{ width: `${(row.agents / peak) * 100}%` }} />
+          </div>
+        </div>
+      ))}
+    </div>
   )
 }
 
@@ -135,8 +184,18 @@ export function UsageHistory({ sessionId, usage }: { sessionId: string; usage: S
               <p className="text-xs text-muted">
                 Rolling hours, through {new Date(usage.until).toLocaleString()} (local time).
               </p>
+              <div className="mt-4 grid grid-cols-2 gap-2">
+                <div className="rounded-card border border-stroke bg-raised p-3">
+                  <p className="text-xs text-muted">Thread tokens</p>
+                  <p className="font-display text-xl font-bold tabular-nums">{usage.thread_tokens.toLocaleString()}</p>
+                </div>
+                <div className="rounded-card border border-stroke bg-raised p-3">
+                  <p className="text-xs text-muted">Known agent tokens · partial</p>
+                  <p className="font-display text-xl font-bold tabular-nums">{usage.agent_tokens.toLocaleString()}</p>
+                </div>
+              </div>
               {usage.hours.length ? (
-                <BreakdownTable
+                <UsageChart
                   rows={usage.hours.map((hour, index) => ({
                     label: hourLabel(index, usage.hours.length),
                     thread: hour.thread_tokens,
@@ -170,7 +229,7 @@ export function UsageHistory({ sessionId, usage }: { sessionId: string; usage: S
                 <section aria-label="Daily usage">
                   <h3 className="font-semibold">Last seven UTC days</h3>
                   {history.days.length ? (
-                    <BreakdownTable
+                    <UsageChart
                       rows={history.days.map(day => ({
                         label: day.date,
                         thread: day.thread_tokens,
@@ -183,25 +242,22 @@ export function UsageHistory({ sessionId, usage }: { sessionId: string; usage: S
                 </section>
                 <section aria-label="All-time token breakdown">
                   <h3 className="font-semibold">All-time token breakdown</h3>
-                  <BreakdownTable
-                    rows={[
-                      {
-                        label: 'Total',
-                        thread: parts.reduce((sum, [key]) => sum + history.all_time.thread[key], 0),
-                        agents: parts.reduce((sum, [key]) => sum + history.all_time.agents[key], 0),
-                      },
-                      ...parts.map(([key, label]) => ({
-                        label,
-                        thread: history.all_time.thread[key],
-                        agents: history.all_time.agents[key],
-                      })),
-                    ]}
+                  <p className="mt-1 text-sm text-muted">
+                    Thread: {parts.reduce((sum, [key]) => sum + history.all_time.thread[key], 0).toLocaleString()} ·
+                    Known agents: {parts.reduce((sum, [key]) => sum + history.all_time.agents[key], 0).toLocaleString()}
+                  </p>
+                  <Composition
+                    rows={parts.map(([key, label]) => ({
+                      label,
+                      thread: history.all_time.thread[key],
+                      agents: history.all_time.agents[key],
+                    }))}
                   />
                 </section>
                 <section aria-label="Usage by model">
                   <h3 className="font-semibold">All-time usage by model</h3>
                   {history.models.length ? (
-                    <BreakdownTable
+                    <Composition
                       rows={history.models.map(model => ({
                         label: model.model || '(unknown model)',
                         thread: model.thread_tokens,

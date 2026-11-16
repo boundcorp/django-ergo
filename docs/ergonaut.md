@@ -403,8 +403,9 @@ unscoped devbox drafts are not migrated because their owner is unknown.
   agents used, with totals for each underneath; hover a bar for its counts.
   It refreshes on new messages and every minute, and sits in the phone sheet
   on narrow screens. It reads `GET /api/sessions/{id}/usage?hours=6`. Select
-  the sparkline for six-hour detail, seven UTC calendar days (including today),
-  and all-time token-part and model breakdowns for that thread.
+  the sparkline for six-hour and seven-day bar charts and all-time token-part
+  and model breakdowns for that thread. Focus, hover, or select a chart bar
+  for its exact thread and known-agent counts; daily dates are UTC.
   Direct thread calls use recorded request times. **Agent history is incomplete:**
   only local-shell aggregates collected from explicitly owned run transcripts
   (`source=local_shell_run_v1`) are included. Their thread FK survives worker
