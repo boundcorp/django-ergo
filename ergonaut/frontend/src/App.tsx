@@ -1,11 +1,21 @@
 import { Component, useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { BrowserRouter, Link, Navigate, Route, Routes, useLocation, useParams } from 'react-router-dom'
+import {
+  createBrowserRouter,
+  Link,
+  Navigate,
+  Route,
+  RouterProvider,
+  Routes,
+  useLocation,
+  useParams,
+} from 'react-router-dom'
 import type { Bot, Session, SidebarPin, User, Worker } from './api'
 import { ApiError, api } from './api'
 import { Sidebar } from './components/Sidebar'
 import { Chat } from './pages/Chat'
 import { ActiveVoiceCall, VoiceCallProvider, VoicePage } from './components/RealtimeVoice'
+import { ComposerVoiceProvider, useComposerAccount } from './components/VoiceRecorder'
 import { MarkdownReaderOwner } from './components/MarkdownReaderOwner'
 import { Login } from './pages/Login'
 import { Sessions } from './pages/Sessions'
@@ -28,6 +38,8 @@ import { DirectoryContext } from './components/BotIcon'
 
 function App() {
   const [user, setUser] = useState<User | null | undefined>(undefined)
+  const voiceAccount = useComposerAccount(user?.id)
+  const [signOutBlocked, setSignOutBlocked] = useState(false)
   const [bots, setBots] = useState<Bot[]>([])
   const [sessions, setSessions] = useState<Session[]>([])
   const [pins, setPins] = useState<Record<string, SidebarPin[]>>({})
@@ -97,16 +109,38 @@ function App() {
     return () => clearInterval(timer)
   }, [user, refresh, anyBusy])
 
+  useEffect(() => {
+    if (user === null && !voiceAccount.active) voiceAccount.clear()
+  }, [user, voiceAccount.active, voiceAccount.clear])
+
+  useEffect(() => {
+    if (!voiceAccount.active) setSignOutBlocked(false)
+  }, [voiceAccount.active])
+
   if (user === undefined)
     return authUnreachable ? (
       <p role="status" className="mx-auto mt-24 w-80 text-sm text-muted">
         Can't reach Ergonaut. Retrying…
       </p>
     ) : null
-  if (user === null) return <Login onLogin={setUser} />
+  if (user === null) {
+    if (voiceAccount.active)
+      return (
+        <p role="alert" className="mx-auto mt-24 max-w-lg text-sm text-danger">
+          Finish or cancel the voice recording or message before signing in to another account. You can download a
+          failed recording from its controls.
+        </p>
+      )
+    return <Login onLogin={setUser} />
+  }
 
   return (
-    <BrowserRouter>
+    <>
+      {signOutBlocked && (
+        <p role="alert" className="fixed top-4 right-4 z-50 rounded-card bg-surface p-4 text-danger">
+          Finish or cancel the voice recording or message before signing out. Download any failed recording first.
+        </p>
+      )}
       <DirectoryContext.Provider value={{ bots, sessions }}>
         <VoiceCallProvider>
           <MarkdownReaderOwner>
@@ -126,7 +160,15 @@ function App() {
                     workerState={workerState}
                     refresh={refresh}
                     directoryState={directoryState}
-                    onSignOut={() => api.logout().finally(() => setUser(null))}
+                    onSignOut={() => {
+                      if (!voiceAccount.clear()) {
+                        setSignOutBlocked(true)
+                        return
+                      }
+                      setSignOutBlocked(false)
+                      setUser(undefined)
+                      api.logout().finally(() => setUser(null))
+                    }}
                   />
                 }
               />
@@ -134,7 +176,7 @@ function App() {
           </MarkdownReaderOwner>
         </VoiceCallProvider>
       </DirectoryContext.Provider>
-    </BrowserRouter>
+    </>
   )
 }
 
@@ -313,7 +355,20 @@ function Shell({
   )
 }
 
-export default App
+const router = createBrowserRouter([
+  {
+    path: '*',
+    element: (
+      <ComposerVoiceProvider>
+        <App />
+      </ComposerVoiceProvider>
+    ),
+  },
+])
+
+export default function Root() {
+  return <RouterProvider router={router} />
+}
 
 // A fresh Chat per session, so per-chat state (queued turn, attachments, draft) never carries over.
 function ChatRoute({ onChange }: { onChange: () => void }) {

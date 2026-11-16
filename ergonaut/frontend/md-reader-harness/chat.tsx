@@ -1,5 +1,5 @@
 import { createRoot } from 'react-dom/client'
-import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { createMemoryRouter, RouterProvider } from 'react-router-dom'
 import '@fontsource/inter/400.css'
 import '@fontsource/inter/600.css'
 import '@fontsource/inter/700.css'
@@ -8,6 +8,7 @@ import '../src/index.css'
 import { api, type Message, type SessionDetail } from '../src/api'
 import { Chat } from '../src/pages/Chat'
 import { MarkdownReaderOwner } from '../src/components/MarkdownReaderOwner'
+import { ComposerVoiceProvider } from '../src/components/VoiceRecorder'
 import './visual.css'
 
 const messages: Message[] = Array.from({ length: 30 }, (_, i) => ({
@@ -40,8 +41,8 @@ class FixtureEventSource {
 }
 window.EventSource = FixtureEventSource as unknown as typeof EventSource
 
-createRoot(document.getElementById('root')!).render(
-  <MemoryRouter initialEntries={['/s/fixture']}>
-    <MarkdownReaderOwner><Routes><Route path="/s/:id" element={<Chat onChange={() => undefined} />} /></Routes></MarkdownReaderOwner>
-  </MemoryRouter>,
+const router = createMemoryRouter(
+  [{ path: '/s/:id', element: <ComposerVoiceProvider><MarkdownReaderOwner><Chat onChange={() => undefined} /></MarkdownReaderOwner></ComposerVoiceProvider> }],
+  { initialEntries: ['/s/fixture'] },
 )
+createRoot(document.getElementById('root')!).render(<RouterProvider router={router} />)

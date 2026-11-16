@@ -25,7 +25,7 @@ import { ActivityStrip } from '../components/ActivityStrip'
 import Files from '../components/Files'
 import { DebugShortcut } from '../components/DebugShortcut'
 import { IllustrateDialog } from '../components/IllustrateDialog'
-import { ComposerVoice, useComposerVoice } from '../components/VoiceRecorder'
+import { ComposerVoice, useComposerAttachments, useComposerVoice } from '../components/VoiceRecorder'
 import Markdown from '../components/Markdown'
 import ModelPicker, { EffortSlider, modelLabel, useBotModels } from '../components/ModelPicker'
 import { PageViewer, Pins } from '../components/Pins'
@@ -141,7 +141,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
   const [error, setError] = useState('')
   // Files picked or pasted for the next message, already uploaded to the session.
   type Outgoing = { id: string; filename: string; image: boolean; audio: boolean }
-  const [outgoing, setOutgoing] = useState<Outgoing[]>([])
+  const [outgoing, setOutgoing] = useComposerAttachments<Outgoing>(id)
   // Files sent with the queued message, shown with it until the worker stores it.
   const [sentFiles, setSentFiles] = useState<Outgoing[]>([])
   // The chat's files, so the transcript can show the ones a bot made where it made them.
@@ -197,6 +197,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
     setText: saveText,
     composer,
     onSend: send,
+    canSubmit: !busy && !uploading,
   })
   const latest = useRef<SessionDetail | null>(null)
   latest.current = detail
@@ -474,7 +475,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
     if (lastStatus !== 'in_progress') setStopping(false)
   }, [lastCallId, lastStatus])
 
-  async function run(action: () => Promise<Turn>, sent = '') {
+  async function run(action: () => Promise<Turn>, sent = '', accepted?: () => void) {
     setBusy(true)
     setError('')
     const calls = detail?.calls ?? []
@@ -485,8 +486,11 @@ export function Chat({ onChange }: { onChange: () => void }) {
       line: messages.length ? messages[messages.length - 1].line : -1,
       approvals: JSON.stringify(lastTurn(calls)?.pending_approvals ?? []),
     }
+    let acknowledged = false
     try {
       const turn = await action()
+      acknowledged = true
+      accepted?.()
       if (turn.queued) {
         setPending(before)
       } else {
@@ -495,7 +499,14 @@ export function Chat({ onChange }: { onChange: () => void }) {
         onChange()
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      const message = e instanceof Error ? e.message : String(e)
+      setError(
+        accepted && !acknowledged
+          ? `${message} Send may have succeeded; check the conversation before retrying.`
+          : message,
+      )
+      if (accepted && !acknowledged)
+        throw new Error(`${message} Send may have succeeded; check the conversation before retrying.`)
     } finally {
       setBusy(false)
     }
@@ -505,16 +516,18 @@ export function Chat({ onChange }: { onChange: () => void }) {
   function send(message: string, mode: 'send' | 'interrupt' = 'send', source: ChatSendSource = 'composer') {
     const plan = prepareChatSend(source, message, text, outgoing)
     if ((!plan.message.trim() && !plan.attachmentIds.length) || busy || uploading) return
-    if (plan.composer === 'clear') {
-      setText(plan.draft)
-      setSentFiles(plan.sentFiles)
-      setOutgoing(plan.outgoing)
-    }
     if (mode === 'interrupt') setStopping(true)
     toBottom()
     return run(
       () => api.send(id, plan.message, plan.attachmentIds, mode),
       plan.message || plan.sentFiles.map(f => f.filename).join(', '),
+      plan.composer === 'clear'
+        ? () => {
+            setText(current => (current === message ? '' : current))
+            setSentFiles(plan.sentFiles)
+            setOutgoing(current => current.filter(file => !plan.attachmentIds.includes(file.id)))
+          }
+        : undefined,
     )
   }
 

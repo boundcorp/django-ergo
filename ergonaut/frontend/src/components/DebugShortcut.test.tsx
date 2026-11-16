@@ -5,6 +5,7 @@ import { Window } from 'happy-dom'
 import { createMemoryRouter, RouterProvider } from 'react-router-dom'
 import { api } from '../api'
 import { NewThread } from '../pages/NewThread'
+import { ComposerVoiceProvider } from './VoiceRecorder'
 import { DebugShortcut } from './DebugShortcut'
 
 const id = '12345678-1234-1234-1234-123456789abc'
@@ -27,7 +28,14 @@ function router(
   return createMemoryRouter(
     [
       { path: '/s/:id', element: <DebugShortcut sessionId={id} /> },
-      { path: '/bots/:name/new-thread', element: <NewThread onChange={() => undefined} userId={userId} /> },
+      {
+        path: '/bots/:name/new-thread',
+        element: (
+          <ComposerVoiceProvider>
+            <NewThread onChange={() => undefined} userId={userId} />
+          </ComposerVoiceProvider>
+        ),
+      },
     ],
     initialEntries,
   )

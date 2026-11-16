@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, expect, spyOn, test } from 'bun:test'
-import { act, createElement } from 'react'
+import { act, createElement, useState } from 'react'
 import type { createRoot as CreateRoot, Root } from 'react-dom/client'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { Window } from 'happy-dom'
+import { ComposerVoiceProvider } from './VoiceRecorder'
 import {
   DisconnectReason,
   LocalAudioTrack,
@@ -14,7 +15,7 @@ import {
   TrackEvent,
   type LocalTrackPublication,
 } from 'livekit-client'
-import { Link, MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom'
+import { createMemoryRouter, Link, Route, RouterProvider, Routes, useNavigate } from 'react-router-dom'
 import {
   api,
   type ClientAudioReport,
@@ -95,18 +96,29 @@ function Navigation() {
   )
 }
 function VoiceHarness({ initial = '/s/chat-1/voice', realChat = false }: { initial?: string; realChat?: boolean }) {
-  return (
-    <MemoryRouter initialEntries={[initial]}>
-      <VoiceCallProvider>
-        <Navigation />
-        <ActiveVoiceCall />
-        <Routes>
-          <Route path="/s/:id/voice" element={<VoicePage />} />
-          <Route path="/s/:id" element={realChat ? <Chat onChange={() => {}} /> : <p>Thread view</p>} />
-        </Routes>
-      </VoiceCallProvider>
-    </MemoryRouter>
+  const [router] = useState(() =>
+    createMemoryRouter(
+      [
+        {
+          path: '*',
+          element: (
+            <VoiceCallProvider>
+              <ComposerVoiceProvider>
+                <Navigation />
+                <ActiveVoiceCall />
+                <Routes>
+                  <Route path="/s/:id/voice" element={<VoicePage />} />
+                  <Route path="/s/:id" element={realChat ? <Chat onChange={() => {}} /> : <p>Thread view</p>} />
+                </Routes>
+              </ComposerVoiceProvider>
+            </VoiceCallProvider>
+          ),
+        },
+      ],
+      { initialEntries: [initial] },
+    ),
   )
+  return <RouterProvider router={router} />
 }
 async function mountVoice() {
   await act(async () => {

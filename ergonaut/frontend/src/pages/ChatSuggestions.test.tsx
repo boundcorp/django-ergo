@@ -2,8 +2,9 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { act } from 'react'
 import type { Root } from 'react-dom/client'
 import { Window } from 'happy-dom'
-import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { createMemoryRouter, RouterProvider } from 'react-router-dom'
 import { api, type Call, type Message, type SessionDetail } from '../api'
+import { ComposerVoiceProvider } from '../components/VoiceRecorder'
 import { Chat } from './Chat'
 
 let window: Window
@@ -89,11 +90,23 @@ async function mount(initial: SessionDetail) {
   api.session = async () => initial
   await act(async () => {
     root.render(
-      <MemoryRouter initialEntries={['/s/thread']}>
-        <Routes>
-          <Route path="/s/:id" element={<Chat onChange={() => undefined} />} />
-        </Routes>
-      </MemoryRouter>,
+      <RouterProvider
+        router={createMemoryRouter(
+          [
+            {
+              path: '/s/:id',
+              element: (
+                <ComposerVoiceProvider>
+                  <Chat onChange={() => undefined} />
+                </ComposerVoiceProvider>
+              ),
+            },
+          ],
+          {
+            initialEntries: ['/s/thread'],
+          },
+        )}
+      />,
     )
     await Promise.resolve()
   })
