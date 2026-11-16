@@ -23,8 +23,11 @@ from django.db.models import Q
 from django.utils import timezone
 
 from django_ergo.conversation.budget import forbid
+from django_ergo.conversation.identity import system_identity
 from django_ergo.conversation.lifecycle import record_event
+from django_ergo.conversation.messages import next_sequence
 from django_ergo.conversation.models import ConversationSession
+from django_ergo.conversation.models import MessageBlock
 from django_ergo.conversation.models import RecurringWake
 from django_ergo.conversation.models import RecurringWakeLock
 from django_ergo.conversation.models import RecurringWakeOccurrence
@@ -32,6 +35,7 @@ from django_ergo.conversation.models import (
     RecurringWakeOccurrenceStatus as OccurrenceStatus,
 )
 from django_ergo.conversation.models import RecurringWakeStatus as Status
+from django_ergo.conversation.models import SessionMessage
 from django_ergo.conversation.models import ThreadMessage
 from django_ergo.conversation.models import ThreadMessageStatus as MessageStatus
 from django_ergo.settings import api_settings
@@ -46,6 +50,7 @@ FIRE_BATCH = 100
 # A claim may commit before bot.ask persists its StructuredCall.
 CLAIM_START_GRACE_SECONDS = 60
 MAX_NOTE_CHARS = 2000
+INVOCATION_LIMIT = 12
 MAX_INTEGER = 2_147_483_647
 POLICY_KEYS = (
     "voice_session_id",
@@ -108,6 +113,7 @@ def describe(schedule: RecurringWake) -> dict:
         "max_occurrences": schedule.max_occurrences,
         "occurrences": schedule.occurrences,
         "periodic_checkins": schedule.periodic_checkins,
+        "invocations": schedule.invocations,
         "blocked_reason": schedule.blocked_reason,
     }
 
@@ -255,6 +261,7 @@ def _save(schedule: RecurringWake, now: datetime) -> None:
             "blocked_reason",
             "next_run_at",
             "occurrences",
+            "invocations",
             "updated_at",
         ]
     )
@@ -298,7 +305,54 @@ def _cancel_queued(schedule: RecurringWake, reason: str, now: datetime) -> None:
         _record_terminal(occurrence, schedule.session_id)
 
 
-def control(  # noqa: C901, PLR0912 — explicit owner-controlled state transitions
+def _stop_for_outcome(schedule: RecurringWake, reason: str, now: datetime) -> bool:
+    """Stop and announce once, in the same transaction as the state change."""
+    if schedule.status not in LIVE:
+        return False
+    schedule.status = Status.CANCELLED
+    schedule.blocked_reason = reason
+    _cancel_queued(schedule, "Recurring wake stopped", now)
+    _save(schedule, now)
+    text = (
+        "Recurring wake stopped: the wait has ended."
+        if reason == "wait_ended"
+        else "Recurring wake stopped after 12 automated checks."
+    )
+    row = SessionMessage.objects.create(
+        session=schedule.session,
+        role="assistant",
+        sequence=next_sequence(schedule.session),
+        author=system_identity("recurring_wake", "Recurring wake"),
+        provenance={"kind": "event", "recurring_wake": str(schedule.pk)},
+    )
+    MessageBlock.objects.create(message=row, sequence=0, block_type="text", text=text)
+    return True
+
+
+def _answer_outcome(occurrence: RecurringWakeOccurrence, now: datetime) -> None:
+    """Honor wait_ended; all other outcomes consume the same fixed budget."""
+    schedule = occurrence.schedule
+    if schedule.status not in LIVE:
+        return
+    response = (
+        schedule.session.structured_calls.filter(
+            kind="chat_reply",
+            status="completed",
+            metadata__thread_message=str(occurrence.thread_message_id),
+        )
+        .order_by("-created_at", "-id")
+        .values_list("response", flat=True)
+        .first()
+    )
+    response = response if isinstance(response, dict) else {}
+    outcome = response.get("wake_outcome")
+    if outcome == "wait_ended":
+        _stop_for_outcome(schedule, "wait_ended", now)
+    elif schedule.invocations >= INVOCATION_LIMIT:
+        _stop_for_outcome(schedule, "invocation_limit", now)
+
+
+def control(  # noqa: C901, PLR0912, PLR0915 — explicit owner-controlled transitions
     session: ConversationSession, schedule_id, action: str, now: datetime | None = None
 ) -> dict:
     if action not in ("pause", "resume", "cancel"):
@@ -312,6 +366,7 @@ def control(  # noqa: C901, PLR0912 — explicit owner-controlled state transiti
     except (ValueError, TypeError, AttributeError):
         msg = "Recurring wake not found in this thread"
         raise LookupError(msg) from None
+    error = ""
     with transaction.atomic():
         session = ConversationSession.objects.select_for_update().get(pk=session.pk)
         schedule = (
@@ -325,20 +380,18 @@ def control(  # noqa: C901, PLR0912 — explicit owner-controlled state transiti
         _reconcile_thread(session, now)
         schedule.refresh_from_db()
         if action == "cancel":
-            if schedule.status != Status.COMPLETED:
+            if schedule.status not in (Status.CANCELLED, Status.COMPLETED):
                 schedule.status = Status.CANCELLED
                 schedule.blocked_reason = ""
                 _cancel_queued(schedule, "Recurring wake cancelled", now)
         elif schedule.status in (Status.CANCELLED, Status.COMPLETED):
-            msg = "A cancelled or completed recurring wake cannot be changed"
-            raise ValueError(msg)
+            error = "A cancelled or completed recurring wake cannot be changed"
         elif action == "pause":
             schedule.status = Status.PAUSED
             schedule.blocked_reason = ""
             _cancel_queued(schedule, "Recurring wake paused", now)
         elif _archived(session):
-            msg = "An archived thread cannot resume recurring wakes"
-            raise ValueError(msg)
+            error = "An archived thread cannot resume recurring wakes"
         elif schedule.expires_at is not None and schedule.expires_at <= now:
             schedule.status = Status.COMPLETED
             schedule.blocked_reason = ""
@@ -348,10 +401,10 @@ def control(  # noqa: C901, PLR0912 — explicit owner-controlled state transiti
             and schedule.occurrences >= schedule.max_occurrences
         ):
             if schedule.scheduled_occurrences.filter(status__in=OUTSTANDING).exists():
-                msg = "This recurring wake has used all its occurrences"
-                raise ValueError(msg)
-            schedule.status = Status.COMPLETED
-            schedule.blocked_reason = ""
+                error = "This recurring wake has used all its occurrences"
+            else:
+                schedule.status = Status.COMPLETED
+                schedule.blocked_reason = ""
         else:
             schedule.status = Status.ACTIVE
             schedule.blocked_reason = ""
@@ -361,6 +414,8 @@ def control(  # noqa: C901, PLR0912 — explicit owner-controlled state transiti
             )
         _save(schedule, now)
         _notify(session)
+    if error:
+        raise ValueError(error)
     return describe(schedule)
 
 
@@ -425,9 +480,15 @@ def _retire_abandoned(
     return False
 
 
-def _reconcile_thread(session: ConversationSession, now: datetime) -> bool:
+def _reconcile_thread(session: ConversationSession, now: datetime) -> bool:  # noqa: C901
     """Recover lifecycle state after a crash without dispatching or retrying work."""
     changed = False
+    for schedule in (
+        RecurringWake.objects.select_for_update()
+        .filter(session=session, status__in=LIVE, invocations__gte=INVOCATION_LIMIT)
+        .exclude(scheduled_occurrences__status__in=OUTSTANDING)
+    ):
+        changed |= _stop_for_outcome(schedule, "invocation_limit", now)
     outstanding = RecurringWakeOccurrence.objects.filter(
         schedule__session=session, status__in=OUTSTANDING
     ).select_related("thread_message", "schedule")
@@ -455,6 +516,13 @@ def _reconcile_thread(session: ConversationSession, now: datetime) -> bool:
         occurrence.save(update_fields=["status", "error", "completed_at", "updated_at"])
         changed |= previous_status != occurrence.status
         _record_terminal(occurrence, session.pk)
+        if occurrence.status == OccurrenceStatus.ANSWERED:
+            _answer_outcome(occurrence, now)
+        elif (
+            occurrence.status == OccurrenceStatus.FAILED
+            and schedule.invocations >= INVOCATION_LIMIT
+        ):
+            _stop_for_outcome(schedule, "invocation_limit", now)
         if (
             occurrence.status == OccurrenceStatus.WAITING
             and schedule.status == Status.ACTIVE
@@ -502,6 +570,8 @@ def delivery_failed(message: ThreadMessage, error: str) -> None:
         occurrence.save(update_fields=["status", "error", "completed_at", "updated_at"])
         _record_terminal(occurrence, session.pk)
         _block(occurrence.schedule, occurrence.error, now)
+        if occurrence.schedule.invocations >= INVOCATION_LIMIT:
+            _stop_for_outcome(occurrence.schedule, "invocation_limit", now)
         _notify(session)
 
 
@@ -521,7 +591,7 @@ def delivery_finished(message: ThreadMessage, now: datetime | None = None) -> No
             _notify(session)
 
 
-def validate_delivery(  # noqa: C901, PLR0911 — transactional claim state machine
+def validate_delivery(  # noqa: C901, PLR0911, PLR0912, PLR0915 — claim state machine
     message: ThreadMessage, now: datetime | None = None, *, claim: bool = False
 ) -> bool:
     """Claim QUEUED once (claim=True), or validate DELIVERED before bot.ask.
@@ -541,6 +611,8 @@ def validate_delivery(  # noqa: C901, PLR0911 — transactional claim state mach
         )
         if session is None:
             return False
+        if _reconcile_thread(session, now):
+            _notify(session)
         occurrence = (
             RecurringWakeOccurrence.objects.select_related("schedule")
             .filter(thread_message=message)
@@ -586,6 +658,9 @@ def validate_delivery(  # noqa: C901, PLR0911 — transactional claim state mach
         expected = MessageStatus.QUEUED if claim else MessageStatus.DELIVERED
         if row.status != expected:
             return False
+        if claim and schedule.invocations >= INVOCATION_LIMIT:
+            _stop_for_outcome(schedule, "invocation_limit", now)
+            return False
         valid = (
             schedule.status == Status.ACTIVE
             and not _archived(session)
@@ -619,6 +694,8 @@ def validate_delivery(  # noqa: C901, PLR0911 — transactional claim state mach
                 _save(schedule, now)
             return False
         if claim:
+            schedule.invocations += 1
+            _save(schedule, now)
             row.status = MessageStatus.DELIVERED
             row.save(update_fields=["status", "updated_at"])
             occurrence.status = OccurrenceStatus.DELIVERED

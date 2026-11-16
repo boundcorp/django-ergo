@@ -746,6 +746,7 @@ class RecurringWake(TimeStampedMixin):
     max_occurrences = models.PositiveIntegerField(null=True, blank=True)
     occurrences = models.PositiveIntegerField(default=0)
     periodic_checkins = models.BooleanField(default=False)
+    invocations = models.PositiveSmallIntegerField(default=0)
     blocked_reason = models.TextField(blank=True, default="")
     depth = models.PositiveIntegerField(default=0)
     # Execution restrictions inherited from the scheduling turn, never its text.

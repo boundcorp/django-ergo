@@ -173,6 +173,159 @@ def test_max_count_completes_after_final_answer(session, now):
     assert schedule.scheduled_occurrences.count() == 2
 
 
+def test_schedule_stops_after_twelve_claimed_invocations(session, now):
+    schedule = create(session, now, max_occurrences=13)
+    for index in range(1, 13):
+        moment = now + timedelta(minutes=index)
+        assert recurring_wakes.fire_due(moment) == [str(schedule.pk)]
+        occurrence = schedule.scheduled_occurrences.order_by("-scheduled_for").first()
+        assert recurring_wakes.validate_delivery(
+            occurrence.thread_message, now=moment, claim=True
+        )
+        answer(occurrence.thread_message, moment)
+        schedule.refresh_from_db()
+        assert schedule.invocations == index
+    assert schedule.status == "cancelled"
+    assert schedule.blocked_reason == "invocation_limit"
+    assert recurring_wakes.fire_due(now + timedelta(minutes=13)) == []
+    assert schedule.scheduled_occurrences.count() == 12
+
+
+def test_progress_claim_and_unrelated_message_do_not_reset_limit(session, now):
+    schedule = create(session, now, max_occurrences=13)
+    sender = ConversationSession.objects.create(
+        user=session.user,
+        engine_type="claude",
+        transport_type="api",
+        status="active",
+        bot_name="other-bot",
+    )
+    for index in range(1, 13):
+        moment = now + timedelta(minutes=index)
+        evidence = ThreadMessage.objects.create(
+            sender_session=sender,
+            recipient_session=session,
+            text="The deployment advanced.",
+            status="answered",
+        )
+        assert recurring_wakes.fire_due(moment) == [str(schedule.pk)]
+        occurrence = schedule.scheduled_occurrences.order_by("-scheduled_for").first()
+        assert recurring_wakes.validate_delivery(
+            occurrence.thread_message, now=moment, claim=True
+        )
+        StructuredCall.objects.create(
+            session=session,
+            kind="chat_reply",
+            status="completed",
+            metadata={"thread_message": str(occurrence.thread_message_id)},
+            response={
+                "wake_outcome": "progress",
+                "progress_evidence": str(evidence.pk),
+            },
+        )
+        answer(occurrence.thread_message, moment)
+        schedule.refresh_from_db()
+        assert schedule.invocations == index
+    assert schedule.status == "cancelled"
+    assert schedule.blocked_reason == "invocation_limit"
+    assert recurring_wakes.fire_due(now + timedelta(minutes=13)) == []
+    assert schedule.scheduled_occurrences.count() == 12
+
+
+def test_wait_ended_cancels_immediately(session, now):
+    schedule = create(session, now, max_occurrences=8)
+    moment = now + timedelta(minutes=1)
+    assert recurring_wakes.fire_due(moment) == [str(schedule.pk)]
+    message = schedule.scheduled_occurrences.get().thread_message
+    assert recurring_wakes.validate_delivery(message, now=moment, claim=True)
+    StructuredCall.objects.create(
+        session=session,
+        kind="chat_reply",
+        status="completed",
+        metadata={"thread_message": str(message.pk)},
+        response={"wake_outcome": "wait_ended"},
+    )
+    answer(message, moment)
+    schedule.refresh_from_db()
+    assert schedule.status == "cancelled"
+    assert schedule.blocked_reason == "wait_ended"
+    assert recurring_wakes.fire_due(now + timedelta(minutes=2)) == []
+    assert schedule.scheduled_occurrences.count() == 1
+
+
+def test_duplicate_completion_callbacks_do_not_count_one_answer_twice(session, now):
+    schedule = create(session, now, max_occurrences=8)
+    moment = now + timedelta(minutes=1)
+    recurring_wakes.fire_due(moment)
+    message = schedule.scheduled_occurrences.get().thread_message
+    assert recurring_wakes.validate_delivery(message, now=moment, claim=True)
+    StructuredCall.objects.create(
+        session=session,
+        kind="chat_reply",
+        status="completed",
+        metadata={"thread_message": str(message.pk)},
+        response={"wake_outcome": "unchanged"},
+    )
+    answer(message, moment)
+    for _ in range(4):
+        recurring_wakes.delivery_finished(message, now=moment)
+    schedule.refresh_from_db()
+    assert schedule.invocations == 1
+    assert schedule.status == "active"
+    assert recurring_wakes.fire_due(now + timedelta(minutes=2)) == [str(schedule.pk)]
+
+
+def test_reconciliation_counts_answer_after_callback_is_lost(session, now):
+    schedule = create(session, now, max_occurrences=8)
+    moment = now + timedelta(minutes=1)
+    recurring_wakes.fire_due(moment)
+    message = schedule.scheduled_occurrences.get().thread_message
+    assert recurring_wakes.validate_delivery(message, now=moment, claim=True)
+    StructuredCall.objects.create(
+        session=session,
+        kind="chat_reply",
+        status="completed",
+        metadata={"thread_message": str(message.pk)},
+        response={"wake_outcome": "unchanged"},
+    )
+    ThreadMessage.objects.filter(pk=message.pk).update(
+        status="answered", reply_text="", updated_at=moment
+    )
+    # A later sweep observes the persisted result without a delivery callback.
+    recurring_wakes.fire_due(moment + timedelta(seconds=1))
+    schedule.refresh_from_db()
+    assert schedule.invocations == 1
+    recurring_wakes.delivery_finished(message, now=moment + timedelta(seconds=2))
+    schedule.refresh_from_db()
+    assert schedule.invocations == 1
+    assert schedule.status == "active"
+
+
+def test_concurrent_completion_callbacks_count_one_answer_once(session, now):
+    if connection.vendor != "postgresql":
+        pytest.skip("Requires PostgreSQL row locks")
+    schedule = create(session, now, max_occurrences=8)
+    moment = now + timedelta(minutes=1)
+    recurring_wakes.fire_due(moment)
+    message = schedule.scheduled_occurrences.get().thread_message
+    assert recurring_wakes.validate_delivery(message, now=moment, claim=True)
+    StructuredCall.objects.create(
+        session=session,
+        kind="chat_reply",
+        status="completed",
+        metadata={"thread_message": str(message.pk)},
+        response={"wake_outcome": "unchanged"},
+    )
+    ThreadMessage.objects.filter(pk=message.pk).update(
+        status="answered", reply_text="", updated_at=moment
+    )
+    run_workers(lambda _: recurring_wakes.delivery_finished(message, now=moment))
+    schedule.refresh_from_db()
+    assert schedule.invocations == 1
+    assert schedule.status == "active"
+    assert recurring_wakes.fire_due(now + timedelta(minutes=2)) == [str(schedule.pk)]
+
+
 def test_expiry_never_starts_overdue_work_and_cancels_queued(session, now):
     expiry = now + timedelta(minutes=3)
     schedule = create(session, now, max_occurrences=None, expires_at=expiry)
