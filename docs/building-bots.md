@@ -427,9 +427,24 @@ suggested answers that channels show as buttons.
 
 With `orchestration: true` (the default), a chat has the `orchestration`
 skill: `ergo_bot_list`, `ergo_thread_list`, `ergo_thread_send` and
-`ergo_thread_archive`. Messages are asynchronous. `ergo_thread_send` returns
-at once; the recipient answers in a turn of its own, and its reply comes
-back to the sender as a new message.
+`ergo_thread_archive`. Messages are asynchronous: `ergo_thread_send` returns
+at once, and the recipient runs a turn of its own. Its `reply_mode` controls
+whether that turn's reply is routed back to the sender:
+
+- `auto` (the default) sends a reply for ordinary requests, but treats a
+  thread's message to its own main chat, a chat's message to its parent bot's
+  main chat (unless the parent is also in `permissions.call_bots`), and a
+  message addressed by session ID to an exact or inherited starter as
+  one-way reports.
+- `response` routes the reply back even for a report, and takes precedence
+  over `ask: false`.
+- `notification` does not route the reply back, but still invokes the
+  recipient's turn.
+
+For compatibility, `ask: true` with `auto` requests a response on a report
+route. `notification` with `ask: true` is rejected; use `response` when an
+answer is needed.
+
 Use `ergo_thread_list(query="words in title")` to find a specific thread,
 including resolved ones. If you already know its ID, read it directly with
 the chat history tools instead.
@@ -442,8 +457,8 @@ retelling it with `ergo_thread_send`. The destination shows who wrote the
 words separately from the bot that forwarded them and the source chat/time;
 notes and shared files are separate from the original body. A forwarded
 Telegram message keeps its Telegram author. The recipient answers there,
-with nothing routed back; ordinary bot sends identify the sending bot and
-still route replies back. See [message identity](bots.md#message-identity)
+with nothing routed back; bot sends identify the sending bot and route replies
+according to `reply_mode`. See [message identity](bots.md#message-identity)
 for the storage and compatibility details.
 
 A chat with orchestration enabled may send to or forward a user's message to

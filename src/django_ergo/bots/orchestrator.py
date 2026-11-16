@@ -280,7 +280,9 @@ def thread_status(session: ConversationSession) -> dict:
         ).count(),
         "waiting_on": session.sent_thread_messages.filter(
             status__in=OPEN_STATUSES, in_reply_to__isnull=True
-        ).count(),
+        )
+        .filter(~Q(metadata__report=True) | Q(metadata__report__isnull=True))
+        .count(),
         "blocked_on": blocked_on(session),
         "workers_running": Worker.objects.filter(
             session=session, status__in=[WorkerStatus.QUEUED, WorkerStatus.RUNNING]
@@ -306,6 +308,7 @@ def blocked_on(session: ConversationSession) -> list[str]:
             in_reply_to__isnull=True,
             recipient_session__structured_calls__status=StructuredCallStatus.AWAITING_APPROVAL,
         )
+        .filter(~Q(metadata__report=True) | Q(metadata__report__isnull=True))
         .select_related("recipient_session")
         .distinct()
     )
@@ -543,8 +546,17 @@ def ergo_thread_list(
         "ask": {
             "type": "boolean",
             "description": (
-                "For messages upward or to your starter chat: true when you need an "
-                "answer back. Otherwise it's a one-way report and no reply comes back."
+                "Legacy option: true requests an answer, including upward or to your "
+                "starter. False preserves the route's default; it does not silence peers."
+            ),
+        },
+        "reply_mode": {
+            "type": "string",
+            "enum": ["auto", "response", "notification"],
+            "description": (
+                "auto preserves route defaults and ask; response requests a reply; "
+                "notification invokes the recipient without an automatic reply. "
+                "notification cannot be combined with ask=true."
             ),
         },
         "attachments": {
@@ -578,15 +590,13 @@ def ergo_thread_send(  # noqa: PLR0913
     attachments: list[str] | None = None,
     ask: bool = False,
     interrupt: bool = False,
+    reply_mode: str = "auto",
 ) -> dict:
     """Send a message to a bot's main chat, a named chat, a thread, or a new thread.
 
-    Returns at once. The reply arrives later as a new message in this chat, except
-    for a report upward (see ``ask``). A busy thread doesn't refuse it: it is
-    queued (``status: "queued"``, with its ``queue_position``) and goes out in
-    order as the thread's next turn. Follow-ups to a thread that hasn't answered
-    yet are fine: they queue behind the earlier ones, and each reply comes back
-    separately. Don't send pure status pings ("any news?", "continue", thanks).
+    Returns at once. The recipient runs a turn even for a notification. In auto
+    mode upward and starter reports do not return a reply unless ask is true;
+    other routes do. A busy thread queues each message in order.
     """
     return _send(
         ctx,
@@ -597,6 +607,7 @@ def ergo_thread_send(  # noqa: PLR0913
         attachments,
         ask=ask,
         interrupt=interrupt,
+        reply_mode=reply_mode,
     )
 
 
@@ -796,9 +807,16 @@ def _send(  # noqa: PLR0913
     *,
     ask: bool = False,
     interrupt: bool = False,
+    reply_mode: str = "auto",
 ) -> dict:
     # Before anything the send does first, such as stopping the recipient's turn.
     forbid("send a thread message")
+    if reply_mode not in ("auto", "response", "notification"):
+        msg = "reply_mode must be auto, response, or notification"
+        raise ValueError(msg)
+    if reply_mode == "notification" and ask:
+        msg = "reply_mode=notification cannot be combined with ask=true"
+        raise ValueError(msg)
     messaging.require_export(ctx.session, target.name, ctx.bot.registry)
     check_spacing(message, "message")
     thread = (thread or "main").strip()
@@ -820,10 +838,14 @@ def _send(  # noqa: PLR0913
     upward = _is_main(recipient) and (
         (target is ctx.bot and not _is_main(ctx.session)) or _upward_only(ctx, target)
     )
-    report = (upward or starter) and not ask
+    report = reply_mode == "notification" or (
+        reply_mode == "auto" and (upward or starter) and not ask
+    )
     metadata = {"attachments": shared} if shared else {}
     if report:
         metadata["report"] = True
+    if reply_mode == "notification":
+        metadata["notification"] = True
     interrupted = False
     if interrupting:
         # Before storing the message: a stop that landed after it could hit the turn
@@ -838,7 +860,7 @@ def _send(  # noqa: PLR0913
     )
     delivery = _delivery(recipient, sent)
     note = (
-        "Sent as a report: no reply comes back (ask=true when you need one)."
+        "Sent as a report: the recipient runs a turn; no automatic turn reply comes back."
         if report
         else "The reply will arrive as a new message in this chat."
     )
@@ -856,6 +878,7 @@ def _send(  # noqa: PLR0913
         **_session_metadata(recipient),
         **delivery,
         **({"interrupted": interrupted} if interrupt else {}),
+        "reply_mode": "notification" if report else "response",
         "note": note,
         **({"shared_files": [f["filename"] for f in shared]} if shared else {}),
     }

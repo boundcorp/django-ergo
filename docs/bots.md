@@ -1036,14 +1036,29 @@ hyphenated compounds don't count.
 
 Messages between sessions are asynchronous, like thread-to-thread
 delegation in Codex (`django_ergo.bots.messaging`). `ergo_thread_send`
-stores a `ThreadMessage` and returns. The recipient answers it in a turn of
-its own, which starts with a `[Message from <bot> · <thread> (thread <id>)]`
-header; when that turn finishes, its reply goes back to the sender as a new
-message (`[Reply from ...]`) and starts a turn there. Replies are never
-answered back, chains of delegation stop after six hops, a recipient that is
-mid-turn finishes first, and a turn that stops for approval replies once the
-user decides. A message from a person routes nothing back, so a bot's main
-chat can take delegated work without its replies reaching Telegram.
+stores a `ThreadMessage` and returns. The recipient runs a turn of its own,
+with a header identifying the sender and whether a reply is expected.
+The `reply_mode` argument controls what happens when that turn finishes:
+
+- `auto` (the default) follows the route's existing semantics: ordinary
+  requests send a reply back to the sender as a new message (`[Reply from
+  ...]`), starting a turn there; report routes are one-way, as described below.
+- `response` sends the recipient's reply back, even on a report route. It
+  takes precedence over `ask: false`.
+- `notification` is one-way: it still invokes a recipient turn, but its
+  reply is not sent back to the sender.
+
+For compatibility, `ask: true` with `auto` requests a response even on a
+report route. `notification` with `ask: true` is rejected; choose `response`
+when an answer is needed. Replies are never answered back, chains of delegation
+stop after six hops, and a recipient that is mid-turn finishes first. A turn
+that stops for approval resumes once the user decides; only response-mode turns
+route their reply back. A message from a person
+routes nothing back, so a bot's main chat can take delegated work without its
+replies reaching Telegram.
+
+Explicit notifications also suppress automatic delivery-failure messages.
+For compatibility, default one-way reports can still return a delivery failure.
 Delivery goes through `DJANGO_ERGO["THREAD_MESSAGE_RUNNER"]` (Ergonaut
 queues a Celery task) or a background thread. Set `orchestration: false` for
 a bot that never delegates; it has no `orchestration` skill (it still
@@ -1270,11 +1285,12 @@ Who may message whom:
 - **Reports get no reply.** A thread's message to its own main chat, a chat's
   message to its parent bot's main chat (unless the parent is also in
   `permissions.call_bots`), or a message addressed by session ID to an exact
-  or inherited starter is a one-way report by default. The
-  recipient's turn starts with `[Report from …]` and its reply isn't sent
-  back, so a status update doesn't cost the sender an acknowledgement turn.
-  Pass `ask: true` to `ergo_thread_send` (or `ergo_message_up` for its
-  upward destinations) when an answer is needed.
+  or inherited starter is a one-way report by default with `reply_mode:
+  "auto"`. The recipient's turn starts with `[Report from …]` and its reply
+  isn't sent back, so a status update doesn't cost the sender an
+  acknowledgement turn. Set `reply_mode: "response"` or pass `ask: true`
+  to `ergo_thread_send` when an answer is needed (or `ask: true` to
+  `ergo_message_up` for its upward destinations).
 - **Worker results reach the starter.** A thread often answers a request
   with "I've started a worker". When that worker finishes, the thread's reply
   to the result goes to the chat that started the thread as a report
