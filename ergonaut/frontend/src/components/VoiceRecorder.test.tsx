@@ -482,6 +482,33 @@ for (const kind of ['chat', 'new-thread'] as const) {
       expect(win.localStorage.getItem(otherKey)).toBe('other draft')
     })
 
+    if (kind === 'new-thread')
+      test('a background send does not leave another bot composer busy', async () => {
+        const transcription = Promise.withResolvers<{ text: string }>()
+        api.transcribeVoice = () => transcription.promise
+        const created: string[] = []
+        const { router, input } = await mountConsumer(kind)
+        api.newThread = async bot => {
+          created.push(bot)
+          return { ...session, id: `${bot}-thread` }
+        }
+        await click('Record voice message')
+        await submitForm(input)
+        await act(async () => {
+          await router.navigate('/bots/other/new-thread')
+        })
+        await act(async () => {
+          transcription.resolve({ text: 'speech' })
+          await Promise.resolve()
+          await Promise.resolve()
+        })
+        expect(created).toEqual(['example'])
+        const other = composerInput()
+        editDraft(other, 'other message')
+        await submitForm(other)
+        expect(created).toEqual(['example', 'other'])
+      })
+
     test('acknowledgment clears only the originating draft after navigation', async () => {
       const response = Promise.withResolvers<typeof queuedTurn>()
       const calls: string[] = []

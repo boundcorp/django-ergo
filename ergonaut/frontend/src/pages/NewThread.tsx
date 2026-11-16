@@ -9,6 +9,10 @@ import { ComposerVoice, useComposerAttachments, useComposerVoice } from '../comp
 // message right away, and a generated one (new_thread_metadata) a moment later.
 export function NewThread({ onChange, userId }: { onChange: () => void; userId: string }) {
   const { name = '' } = useParams()
+  return <NewThreadComposer key={`${name}.${userId}`} name={name} onChange={onChange} userId={userId} />
+}
+
+function NewThreadComposer({ name, onChange, userId }: { name: string; onChange: () => void; userId: string }) {
   const navigate = useNavigate()
   const location = useLocation()
   // Devbox drafts can contain private chat links; do not reuse them across accounts.
