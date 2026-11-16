@@ -36,7 +36,8 @@ import { WakeNotice } from '../components/WakeNotice'
 import { RecurringWakeNotice } from '../components/RecurringWakeNotice'
 import { usePersistedFlag } from '../persistedFlag'
 import { WorkerActivityView, WorkerPulse } from '../components/WorkerActivity'
-import { UsageBars, useSessionUsage } from '../components/UsageSparkline'
+import { useSessionUsage } from '../components/UsageSparkline'
+import { UsageHistory } from '../components/UsageHistory'
 import { agoLong } from '../time'
 import { linkedLine, messageAnchor } from '../messageLink'
 
@@ -773,7 +774,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
               )}
             </div>
             <div className="ml-auto flex flex-wrap items-center gap-3">
-              {usage && <UsageBars usage={usage} />}
+              {usage && <UsageHistory key={id} sessionId={id} usage={usage} />}
               <ThreadOptions open={menuOpen} onOpenChange={setMenuOpen}>
                 {threadOptions}
               </ThreadOptions>
@@ -810,7 +811,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
               )}
               {usage && (
                 <div className="mt-2">
-                  <UsageBars usage={usage} />
+                  <UsageHistory key={id} sessionId={id} usage={usage} />
                 </div>
               )}
             </>

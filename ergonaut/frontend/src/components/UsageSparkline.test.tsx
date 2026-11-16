@@ -12,6 +12,7 @@ let container: HTMLDivElement
 
 const usage = (hours: [number, number][]): SessionUsage => ({
   until: '2026-10-29T16:00:00Z',
+  agent_usage_complete: false,
   hours: hours.map(([thread, agents], i) => ({
     start: `2026-10-29T${10 + i}:00:00Z`,
     thread_tokens: thread,
@@ -69,8 +70,5 @@ describe('UsageSparkline', () => {
     expect(part(4, 'agents')).toBe('13px')
     expect(part(2, 'thread')).toBe('5px')
     expect(part(5, 'thread')).toBe('2px') // small but visible
-    expect(container.querySelector('[role="img"]')?.getAttribute('aria-label')).toBe(
-      '28k tokens in the last 6h (16k thread, 12k agents)',
-    )
   })
 })

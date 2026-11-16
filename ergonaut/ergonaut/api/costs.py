@@ -23,18 +23,17 @@ from __future__ import annotations
 
 import uuid
 from collections import defaultdict
-from datetime import UTC, timedelta
+from datetime import UTC, datetime, time, timedelta
 from decimal import localcontext
 
-from django.db.models import CharField, Q
+from django.db.models import CharField, Q, Sum
 from django.db.models.fields.json import KeyTextTransform
-from django.db.models.functions import Cast
+from django.db.models.functions import Cast, TruncDate
 from django.utils import timezone
 from django_ergo.bots.registry import may_use
 from django_ergo.conversation.chat_reply import CHAT_REPLY_KIND
 from django_ergo.conversation.models import (
     AgentUsage,
-    AgentUsageEvent,
     ConversationSession,
     InferenceOutcome,
     InferenceRequest,
@@ -211,6 +210,40 @@ class SessionUsageOut(Schema):
     hours: list[UsageHour]
     thread_tokens: int
     agent_tokens: int
+    agent_usage_complete: bool = False
+
+
+class UsageTokenParts(Schema):
+    input_tokens: int
+    output_tokens: int
+    cache_write_tokens: int
+    cache_read_tokens: int
+
+
+class UsageHistoryTotals(Schema):
+    thread: UsageTokenParts
+    agents: UsageTokenParts
+
+
+class UsageDay(Schema):
+    date: str
+    thread_tokens: int
+    agent_tokens: int
+
+
+class UsageModel(Schema):
+    model: str
+    thread_tokens: int
+    agent_tokens: int
+
+
+class SessionUsageHistoryOut(Schema):
+    until: str
+    timezone: str
+    days: list[UsageDay]
+    all_time: UsageHistoryTotals
+    models: list[UsageModel]
+    agent_usage_complete: bool = False
 
 
 class CostsOut(Schema):
@@ -720,9 +753,11 @@ def _spread(bins: list[int], since, hour: timedelta, first, last, tokens: int) -
 
 @router.get("/sessions/{session_id}/usage", response=SessionUsageOut)
 def session_usage(request, session_id: str, hours: int = 6):
-    """Tokens per hour for one chat over the last ``hours``, split into its own calls and its
-    workers' coding agents. Agents report per-request events when their transcript was
-    captured; otherwise a worker's running totals are spread evenly over its active span."""
+    """Direct chat calls and provenance-marked worker-run totals over rolling hours.
+
+    Agent history is incomplete; native-session events and legacy aggregates have
+    no reliable thread ownership and are deliberately excluded.
+    """
     session = visible_sessions(request.auth).filter(id=uuid_or_404(session_id)).first()
     if session is None:
         raise HttpError(404, "No such session")
@@ -741,18 +776,7 @@ def session_usage(request, session_id: str, hours: int = 6):
     for row in own.filter(created_at__gte=since, created_at__lte=until).values_list("created_at", *fields):
         thread[slot(row[0])] += sum(n or 0 for n in row[1:])
 
-    events = AgentUsageEvent.objects.filter(
-        session__thread_links__conversation=session, occurred_at__gte=since, occurred_at__lte=until
-    ).distinct()
-    for row in events.values_list("occurred_at", *AGENT_FIELDS):
-        agents[slot(row[0])] += sum(n or 0 for n in row[1:])
-    # Workers whose agent transcript was captured are counted by event above.
-    captured = set(
-        AgentUsageEvent.objects.filter(
-            session__thread_links__conversation=session, session__thread_links__worker__isnull=False
-        ).values_list("session__thread_links__worker", flat=True)
-    )
-    totals = AgentUsage.objects.filter(session=session, last_at__gte=since).exclude(worker__in=captured)
+    totals = AgentUsage.objects.filter(session=session, source="local_shell_run_v1", last_at__gte=since)
     for usage in totals:
         tokens = sum(getattr(usage, field) for field in AGENT_FIELDS)
         _spread(agents, since, hour, usage.first_at, min(usage.last_at, until), tokens)
@@ -765,6 +789,73 @@ def session_usage(request, session_id: str, hours: int = 6):
         ],
         "thread_tokens": sum(thread),
         "agent_tokens": sum(agents),
+    }
+
+
+@router.get("/sessions/{session_id}/usage/history", response=SessionUsageHistoryOut)
+def session_usage_history(request, session_id: str):
+    """Seven UTC calendar days and all-time recorded totals for a chat.
+
+    Only explicitly owned local-shell run aggregates contribute agent tokens.
+    Native events and legacy aggregates are excluded, never combined with these
+    estimates. Agent history remains incomplete, including for deleted workers.
+    """
+    session = visible_sessions(request.auth).filter(id=uuid_or_404(session_id)).first()
+    if session is None:
+        raise HttpError(404, "No such session")
+    until = timezone.now().astimezone(UTC)
+    today = until.date()
+    since = datetime.combine(today - timedelta(days=6), time.min, tzinfo=UTC)
+    day = timedelta(days=1)
+    days = [
+        {"date": (since + index * day).date().isoformat(), "thread_tokens": 0, "agent_tokens": 0} for index in range(7)
+    ]
+    models = defaultdict(lambda: {"thread_tokens": 0, "agent_tokens": 0})
+    all_time = {scope: {field: 0 for field in AGENT_FIELDS} for scope in ("thread", "agents")}
+    own = _of_chats(_for_chat(StructuredCall.objects.all()), ConversationSession.objects.filter(pk=session.pk))
+    # The versioned source marks totals collected only from explicitly owned run
+    # transcripts. The session FK survives worker deletion. Never infer event
+    # ownership from thread links, cwd, or the mutable legacy run_session field.
+    totals = AgentUsage.objects.filter(session=session, source="local_shell_run_v1")
+    call_fields = [field for _, field, _ in PARTS]
+
+    def grouped(query, model_field, fields, scope):
+        sums = {f"sum_{index}": Sum(field) for index, field in enumerate(fields)}
+        for row in query.values(model_field).annotate(**sums):
+            counts = [row[f"sum_{index}"] or 0 for index in range(len(fields))]
+            for part, value in zip((part for part, _, _ in PARTS), counts):
+                all_time[scope][f"{part}_tokens"] += value
+            models[row[model_field] or ""][f"{scope if scope == 'thread' else 'agent'}_tokens"] += sum(counts)
+
+    grouped(own, "model_name", call_fields, "thread")
+    grouped(totals, "model", AGENT_FIELDS, "agents")
+
+    def daily(query, date_field, fields, key):
+        sums = {f"sum_{index}": Sum(field) for index, field in enumerate(fields)}
+        rows = (
+            query.filter(**{f"{date_field}__gte": since, f"{date_field}__lte": until})
+            .annotate(usage_date=TruncDate(date_field, tzinfo=UTC))
+            .values("usage_date")
+            .annotate(**sums)
+        )
+        for row in rows:
+            index = (row["usage_date"] - since.date()).days
+            days[index][key] += sum(row[f"sum_{i}"] or 0 for i in range(len(fields)))
+
+    daily(own, "created_at", call_fields, "thread_tokens")
+    bins = [0] * 7
+    active = totals.filter(last_at__gte=since).filter(Q(first_at__lte=until) | Q(first_at__isnull=True))
+    for usage in active:
+        tokens = sum(getattr(usage, field) for field in AGENT_FIELDS)
+        _spread(bins, since, day, usage.first_at, min(usage.last_at, until), tokens)
+    for index, tokens in enumerate(bins):
+        days[index]["agent_tokens"] += tokens
+    return {
+        "until": until.isoformat(),
+        "timezone": "UTC",
+        "days": days,
+        "all_time": all_time,
+        "models": [{"model": model, **counts} for model, counts in sorted(models.items())],
     }
 
 

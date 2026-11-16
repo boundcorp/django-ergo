@@ -296,7 +296,28 @@ export type CostBucket = {
 
 // GET /api/sessions/{id}/usage: one chat's tokens per hour, its own calls and its workers' agents.
 export type UsageHour = { start: string; thread_tokens: number; agent_tokens: number }
-export type SessionUsage = { until: string; hours: UsageHour[]; thread_tokens: number; agent_tokens: number }
+export type SessionUsage = {
+  until: string
+  hours: UsageHour[]
+  thread_tokens: number
+  agent_tokens: number
+  agent_usage_complete: boolean
+}
+
+export type UsageTokenParts = {
+  input_tokens: number
+  output_tokens: number
+  cache_write_tokens: number
+  cache_read_tokens: number
+}
+export type SessionUsageHistory = {
+  until: string
+  timezone: 'UTC'
+  agent_usage_complete: boolean
+  days: { date: string; thread_tokens: number; agent_tokens: number }[]
+  all_time: { thread: UsageTokenParts; agents: UsageTokenParts }
+  models: { model: string; thread_tokens: number; agent_tokens: number }[]
+}
 
 // List-price-equivalent view of one population; not an invoice and not subscription quota.
 // Passive cost-ledger projection. known_amount is Decimal text; null means every row is unknown, never 0.
@@ -1018,6 +1039,7 @@ export const api = {
     request<{ enabled: boolean; max_duration: number }>('GET', `/sessions/${encodeURIComponent(id)}/voice`),
   transcribeVoice,
   sessionUsage: (id: string, hours = 6) => request<SessionUsage>('GET', `/sessions/${id}/usage?hours=${hours}`),
+  sessionUsageHistory: (id: string) => request<SessionUsageHistory>('GET', `/sessions/${id}/usage/history`),
   debugShortcut: (id: string) => request<{ url: string }>('GET', `/sessions/${id}/debug-shortcut`),
   illustrateSuggestions: (id: string, focus = '') =>
     request<IllustrationSuggestions>('POST', `/sessions/${id}/illustrations/suggest`, { focus }),

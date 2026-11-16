@@ -4,6 +4,13 @@ This document tracks the major milestones and evolution of the Django Ergo proje
 
 ## Development Timeline
 
+### Thread token usage history (November 2026)
+
+- The chat usage sparkline opens a thread-scoped history with rolling six-hour
+  detail, seven UTC calendar days, and all-time token and model breakdowns.
+- Captured coding-agent request events are counted once; legacy worker totals
+  are spread over their active span for time buckets and labeled as estimates.
+
 ### Realtime voice close-cause evidence (November 2026)
 
 - Added bounded, payload-free durable provider/socket/SDK/room/end observations

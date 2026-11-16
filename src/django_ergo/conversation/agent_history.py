@@ -133,14 +133,16 @@ def ingest_omp_content(
     raw: bytes,
     *,
     source_name: str,
-    worker=None,
     host_namespace: str = "local",
     profile_namespace: str = "default",
 ):
-    """Idempotently ingest local or transported omp JSONL bytes."""
-    from django_ergo.conversation.models import AgentRunSession
+    """Ingest immutable, unattributed native events and private transcript bytes.
+
+    A matching cwd or observing worker is not ownership evidence. Native sessions
+    can be resumed across workers and threads, so ingestion must not create thread
+    links or assign/reassign event run ownership.
+    """
     from django_ergo.conversation.models import AgentSession
-    from django_ergo.conversation.models import AgentSessionThreadLink
     from django_ergo.conversation.models import AgentUsageEvent
     from django_ergo.conversation.models import AgentWorkspaceObservation
 
@@ -155,24 +157,6 @@ def ingest_omp_content(
             native_session_id=native_id,
             defaults={"initial_cwd": cwd, "transcript_completeness": "complete"},
         )
-        run_session = None
-        if worker is not None:
-            run_session, _ = AgentRunSession.objects.get_or_create(
-                worker=worker,
-                session=session,
-                launch_key=str(worker.id),
-                segment_key="native",
-                defaults={"relation": "primary"},
-            )
-            AgentSessionThreadLink.objects.get_or_create(
-                session=session,
-                conversation=worker.session,
-                defaults={
-                    "worker": worker,
-                    "owner": worker.session.user,
-                    "title": worker.title,
-                },
-            )
         observation = None
         if cwd:
             identity = derive_project_identity(cwd, host_namespace)
@@ -180,7 +164,6 @@ def ingest_omp_content(
                 session=session,
                 source_event_key="session-header",
                 defaults={
-                    "run_session": run_session,
                     "observed_cwd": cwd,
                     "repo_root": identity.repo_root,
                     "worktree_path": identity.worktree_path,
@@ -212,7 +195,7 @@ def ingest_omp_content(
                 "reasoning": usage.get("reasoningTokens"),
             }
             estimate, snapshot = estimate_cost(str(message.get("model") or ""), counts)
-            AgentUsageEvent.objects.update_or_create(
+            AgentUsageEvent.objects.get_or_create(
                 session=session,
                 source_event_key=event_key,
                 defaults={
@@ -231,8 +214,8 @@ def ingest_omp_content(
                     "cost_status": "estimated" if estimate is not None else "missing",
                     "price_snapshot": snapshot,
                     "workspace_observation": observation,
-                    "run_session": run_session,
                     "parser_version": "omp-jsonl-v1",
+                    "source_semantics": "native_session_unattributed_v1",
                 },
             )
         store_transcript(
@@ -250,7 +233,6 @@ def ingest_omp_content(
 def ingest_omp_file(
     path: Path,
     *,
-    worker=None,
     host_namespace: str = "local",
     profile_namespace: str = "default",
 ):
@@ -258,7 +240,6 @@ def ingest_omp_file(
     return ingest_omp_content(
         path.read_bytes(),
         source_name=path.name,
-        worker=worker,
         host_namespace=host_namespace,
         profile_namespace=profile_namespace,
     )

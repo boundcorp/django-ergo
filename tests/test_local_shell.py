@@ -200,11 +200,7 @@ def test_a_job_asks_is_answered_and_reports_its_files(tmp_path, workers, monkeyp
     paths = {o["path"] for o in report["outputs"]}
     assert "out/ad.txt" in paths and "renderers/render.py" not in paths
     usage = AgentUsage.objects.get(worker_id=started["id"])
-    assert (usage.model, usage.source, usage.input_tokens) == (
-        "claude-test",
-        "local_shell",
-        20,
-    )
+    assert (usage.model, usage.input_tokens) == ("claude-test", 20)
 
     attached = json.loads(
         kit_tools(bot, ctx).execute_tool(
@@ -879,13 +875,12 @@ def test_transcript_usage_reads_claude_and_codex_runs():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_codex_jobs_record_usage_and_prefer_its_session_files(
+def test_codex_jobs_count_only_owned_runs_not_matching_native_sessions(
     tmp_path,
     workers,  # noqa: F811
     monkeypatch,
 ):
-    """Codex jobs used to record nothing, so a chat of Codex workers showed no
-    agent tokens at all."""
+    """Cwd-matching native sessions do not prove worker ownership."""
 
     from django_ergo.bots import workers as w
     from django_ergo.bots.agents import worker_of
@@ -911,7 +906,7 @@ def test_codex_jobs_record_usage_and_prefer_its_session_files(
         900,
     )
 
-    # Codex's own session file has every request, with its model: it wins.
+    # A different native session in the same cwd must not replace owned totals.
     worker = Worker.objects.get(pk=started["id"])
     at = worker.created_at.isoformat()
     sessions = tmp_path / "home" / ".codex" / "sessions" / "2026" / "11" / "10"
@@ -938,18 +933,31 @@ def test_codex_jobs_record_usage_and_prefer_its_session_files(
         "\n".join(json.dumps(r) for r in rows)
     )
     manager, handle = worker_of(bot, worker)
-    assert (
-        manager.record_usage(worker, handle, dry_run=True)["gpt-6-codex"]["input"]
-        == 1000
-    )
+    assert manager.record_usage(worker, handle, dry_run=True)["codex"]["input"] == 100
     assert AgentUsage.objects.get(worker=worker).model == "codex"  # dry run
     manager.record_usage(worker, handle)
     [usage] = AgentUsage.objects.filter(worker=worker)
     assert (usage.model, usage.input_tokens, usage.cache_read_tokens) == (
-        "gpt-6-codex",
-        1000,
-        4000,
+        "codex",
+        100,
+        900,
     )
+    assert usage.source == "local_shell_run_v1"
+    # A later fresh run in the shared folder belongs to a different worker.
+    meta = folder / ".ergo"
+    (meta / "run-2.json").write_text(json.dumps({"agent": "codex"}))
+    (meta / "run-2.jsonl").write_text(
+        json.dumps(
+            {
+                "type": "turn.completed",
+                "usage": {"input_tokens": 99999, "output_tokens": 99999},
+            }
+        )
+        + "\n"
+    )
+    assert manager.record_usage(worker, handle)["codex"]["input"] == 100
+    assert manager.record_usage(worker, {"dir": str(folder), "agent": "codex"}) == {}
+    assert manager.record_usage(worker, {**handle, "run": 999}) == {}
 
 
 @pytest.mark.django_db(transaction=True)

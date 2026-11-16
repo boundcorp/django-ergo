@@ -215,6 +215,7 @@ beforeEach(async () => {
     hours: [],
     thread_tokens: 0,
     agent_tokens: 0,
+    agent_usage_complete: false,
   })
   // React DOM must initialize after the test document exists.
   const { createRoot } = await import('react-dom/client')
