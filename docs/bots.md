@@ -1333,15 +1333,66 @@ exact starter as described above. Each session starts with an
 A bot with `private: true` is closed to other bots: none of them, its parent
 and bots that list it in `call_bots` included, can message it, list its chats,
 see it in the "Bots and threads" block, open a link to one of its chats with
-the history tools, or open its files (attachments, `orca_upload`). It is one
-way: the private bot still messages its parent and the bots in its own
-`call_bots`, gets their replies, and can share a file with a message
-(`attachments`), which the recipient may then open. A thread it started may
-report to and ask the exact chat that started it, as any thread may. What the
-private bot sends is then in the other bot's history, so its instructions
-should say what may leave. This is a rule for Ergo's own tools, not a sandbox:
-a bot with a shell on the same host and user can still read the files and the
-database (see "Secret hygiene and its limits").
+the history tools, or open its source files (attachments, `orca_upload`).
+Ordinary outbound sends and forwards to another bot are also blocked, before
+creating a recipient or interrupting it. Same-bot work and legitimate incoming
+replies from a child it started remain available. Public bots' ordinary file
+sharing is unchanged.
+
+### Approved private exports
+
+The opt-in `private_exports` plugin requires `private: true`. It is the narrow
+route for releasing a reviewed brief and selected files to another bot:
+
+```yaml
+private: true
+permissions:
+  call_bots: [research] # explicit outward export targets, not inbound access
+plugins:
+  - name: private_exports
+```
+
+1. Inspect the source files and compose the exact brief to release. Call
+   `ergo_private_export_prepare(destination, message, attachments)` with the
+   **exact existing destination session UUID**, the exact brief text, and
+   optional file references owned by the source session.
+2. Preparation returns the exact arguments for `ergo_private_export`:
+   `destination`, `message`, and `artifacts` containing each file's `id`,
+   `sha256`, `filename`, and `media_type`. Preparation does not send anything.
+3. Submit those arguments unchanged to `ergo_private_export`. The chat's
+   authenticated owner must approve that exact shown pending batch (the web
+   approval card or `ergonaut-remote approve` with its shown-batch arguments).
+   Automatic review, a bare library `resume(True)`, and channels without
+   authenticated shown-batch evidence cannot authorize exports. The reviewed
+   text is the exact text sent; artifact IDs and digests bind the inspected
+   source files. No hidden transcript or source history is copied.
+
+Approval fails closed if destination or content changes, a source file mutates,
+the turn is older than 15 minutes, or the approval is replayed or stale
+(including a newer call or message). An approval is for one exact current
+call, not general permission to export or a model's claim of user consent.
+
+Exported files are immutable, destination-owned snapshots, readable only by
+that exact destination session. They grant no access to source IDs, history,
+or sibling sessions, and cannot be forwarded or shared onward, including
+through Telegram, Orca, or local-shell file transfer tools. Historical share
+metadata does not override private source-file isolation. The receipt records
+authorization, source/destination IDs, selected artifact hashes and result IDs,
+not private bodies. Limits: ten stored files, 5 MB per file, an 8000-character
+brief; URL-only files are refused. Normal parent/starter routing permissions
+still apply, but never waive approval. See
+[Attachments](attachments.md#private-export-snapshots).
+
+Activation requires the framework version containing the plugin and its
+database migration, applying that migration, and reviewing the bot's config
+and instructions. A config change alone is not activation; these repository
+changes do not activate or deploy a running bot.
+
+This is a boundary for Ergo's tools, **not a hardened execution sandbox**:
+bash or custom code may still reach the host's files, clients, or database.
+The bot's instructions **MUST forbid shell, client, database, and direct-file
+fallbacks around export approval**. Do not use those routes to send a brief,
+copy files, or otherwise bypass a rejected or unavailable export.
 
 ### Pre-seeded tool calls
 

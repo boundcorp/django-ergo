@@ -695,10 +695,14 @@ def ergo_thread_forward(
         raise ValueError(msg)
     check_spacing(note, "note")
     target = _target(ctx, bot, thread)
+    messaging.require_export(ctx.session, target.name, ctx.bot.registry)
     thread = (thread or "").strip()
     if not thread:
         msg = 'Name the thread: an id, "main", a named chat, or "new".'
         raise ValueError(msg)
+    # Validate files before a forward can create its destination session.
+    for item in original["attachments"]:
+        messaging.find_shareable_file(ctx.session, item["id"])
     recipient = _recipient(
         ctx, target, thread, title or messaging.snippet(original["text"])[:60]
     )
@@ -795,6 +799,7 @@ def _send(  # noqa: PLR0913
 ) -> dict:
     # Before anything the send does first, such as stopping the recipient's turn.
     forbid("send a thread message")
+    messaging.require_export(ctx.session, target.name, ctx.bot.registry)
     check_spacing(message, "message")
     thread = (thread or "main").strip()
     starter = _is_starter(ctx.session, target.name, thread)

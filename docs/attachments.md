@@ -47,6 +47,36 @@ it isn't, the skill list shows how many there are, so the bot knows to load
 it when someone uploads something. The bot writes only into its own chat
 and reads other chats only when they belong to the same person.
 
+### Private export snapshots
+
+Private source files cannot be shared by ordinary sends, forwards, or old
+share metadata. The opt-in `private_exports` plugin requires `private: true`
+and normal outward routing permission (for example `permissions.call_bots`;
+parent/starter routing remains implicit). This grants no inbound access. See
+[Approved private exports](bots.md#approved-private-exports) for configuration,
+migration prerequisites, and the approval workflow.
+
+Call `ergo_private_export_prepare` with an exact existing destination session
+UUID, the exact brief text, and optional source-session-owned file references.
+It returns the exact `destination`, `message`, and `artifacts` arguments for
+`ergo_private_export`; each artifact includes `id`, `sha256`, `filename`, and
+`media_type`. Inspect the source files before requesting approval: the real
+authenticated user reviews the exact text and artifact IDs/digests, not a
+hidden transcript. No source history is copied.
+
+Destination/content changes, source mutation, expired (15-minute turn lifetime),
+replayed, or stale approvals fail closed. A successful export creates immutable,
+destination-owned snapshots. Only the exact destination session may read
+them: there is no source-ID or sibling-session grant, and snapshots cannot
+be forwarded or shared onward. Ordinary public sharing remains unchanged.
+Private bots can still work within the same bot and receive legitimate
+incoming child replies, but cannot send or forward to another bot outside
+the approved export path.
+
+Bash and custom code are not a hardened execution boundary. Bot instructions
+**MUST forbid shell, client, database, or direct-file fallbacks around export
+approval**, including when an export is rejected or unavailable.
+
 ### Images and the context window
 
 Images are expensive, so each model call carries only the latest two
@@ -226,10 +256,13 @@ only files in its own session. Archiving is reversible, so neither tool asks
 for approval. Ergonaut's Files panel hides archived files behind a "Show N
 archived" toggle.
 
-Ergonaut's Files panel lists the chat's own files and, under "Shared with this
-chat", files another chat shared with it (`ergo_thread_send` attachments,
-forwards and events; a chat passes a shared file on the same way, by id). Those stay in the sender's chat, so they open and
-download from here but are pinned or deleted there. Images and videos show a preview
+For ordinary public sharing, Ergonaut's Files panel lists the chat's own
+files and, under "Shared with this chat", files another chat shared with it
+(`ergo_thread_send` attachments, forwards and events; a chat passes a shared
+file on the same way, by id). Those stay in the sender's chat, so they open
+and download from here but are pinned or deleted there. Private export
+snapshots instead belong to the exact destination and cannot be reshared.
+Images and videos show a preview
 (`/api/attachments/<id>/thumbnail`: Pillow downscales images, ffmpeg grabs a
 video frame); the panel filters
 by type (images as a grid, docs, media) and searches by name once a chat has

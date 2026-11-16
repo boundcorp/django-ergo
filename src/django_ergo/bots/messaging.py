@@ -29,6 +29,7 @@ from __future__ import annotations
 import logging
 import threading
 import weakref
+from contextvars import ContextVar
 from datetime import timedelta
 from typing import TYPE_CHECKING
 
@@ -57,6 +58,9 @@ from django_ergo.conversation.models import ThreadMessage
 from django_ergo.conversation.models import ThreadMessageStatus
 from django_ergo.daemon import start_daemon
 from django_ergo.settings import api_settings
+
+# Set only by the approved snapshot exporter, for one exact delivery.
+private_export_delivery = ContextVar("private_export_delivery", default=None)
 
 if TYPE_CHECKING:
     from django_ergo.bots.registry import BotRegistry
@@ -101,6 +105,55 @@ def shared_file(row) -> dict:
     }
 
 
+def private_source(session, registry=None) -> bool:
+    if session is None:
+        return False
+    if registry is not None and registry.is_private(session.bot_name):
+        return True
+    bot = KNOWN_BOTS.get(session.bot_name)
+    return bool(bot and bot.definition.private)
+
+
+def require_export(sender, recipient_bot, registry=None) -> None:
+    if sender.bot_name != recipient_bot and private_source(sender, registry):
+        msg = "Private outward messages require ergo_private_export with user approval."
+        raise ValueError(msg)
+
+
+def _check_delivery(sender, recipient, text, metadata, registry):
+    """One policy for send, forward, replies, and attachment provenance."""
+    from django_ergo.conversation.models import ConversationAttachment
+
+    files = (metadata or {}).get("attachments") or []
+    permit = private_export_delivery.get()
+    approved = permit == (
+        str(sender.pk) if sender else "",
+        str(recipient.pk),
+        text,
+        tuple(str(f.get("id")) for f in files),
+    )
+    if sender is not None and not approved:
+        require_export(sender, recipient.bot_name, registry)
+    for item in files:
+        row = (
+            ConversationAttachment.objects.select_related("session")
+            .filter(pk=item.get("id"))
+            .first()
+        )
+        if row is None or row.session.user_id != recipient.user_id:
+            msg = "Invalid shared file"
+            raise ValueError(msg)
+        if row.private_export_id:
+            if not approved or row.session_id != recipient.pk:
+                msg = "Private export snapshots cannot be forwarded."
+                raise ValueError(msg)
+        elif row.session.bot_name != recipient.bot_name and private_source(
+            row.session, registry
+        ):
+            msg = "Private source files cannot be shared; export a snapshot."
+            raise ValueError(msg)
+
+
 def shared_with(session: ConversationSession, file_id: str) -> bool:
     """Whether a thread message to ``session`` shared the file ``file_id``."""
     shares = ThreadMessage.objects.filter(
@@ -130,16 +183,26 @@ def find_shareable_file(session: ConversationSession, ref: str):
     from django_ergo.conversation.models import ConversationAttachment
 
     try:
-        return find_session_file(session, ref)
+        row = find_session_file(session, ref)
     except ValueError as not_found:
         try:
             file_id = str(uuid.UUID(str(ref).strip()))
         except ValueError:
             raise not_found from None
+    else:
+        if row.private_export_id:
+            msg = "Private export snapshots cannot be forwarded."
+            raise ValueError(msg)
+        return row
     row = ConversationAttachment.objects.filter(
         id=file_id, session__user_id=session.user_id
     ).first()
-    if row is None or not shared_with(session, file_id):
+    if (
+        row is None
+        or row.private_export_id
+        or (row.session.bot_name != session.bot_name and private_source(row.session))
+        or not shared_with(session, file_id)
+    ):
         raise not_shared_error(ref)
     return row
 
@@ -215,6 +278,7 @@ def send(  # noqa: C901, PLR0913 - provenance and inherited execution restrictio
     ``depth``: the hops a message with no sender continues (a self-wake keeps
     the depth of the message its turn was answering)."""
     forbid("send a thread message")
+    _check_delivery(sender, recipient, text, metadata, registry)
     handling = (
         current_thread_message(sender)
         if sender is not None and in_reply_to is None

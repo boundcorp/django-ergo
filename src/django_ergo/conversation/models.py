@@ -462,6 +462,13 @@ class ConversationAttachment(TimeStampedMixin):
     # Set when a bot (or person) archives the file: it stays stored and readable
     # by id but drops out of the default file list and the bot's context.
     archived_at = models.DateTimeField(null=True, blank=True)
+    private_export = models.ForeignKey(
+        "PrivateExport",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="copies",
+    )
 
     class Meta:
         ordering = ["message_sequence", "position"]
@@ -1337,3 +1344,39 @@ class ModelCatalogSnapshot(TimeStampedMixin):
     scope = models.CharField(max_length=64, unique=True)
     coverage = models.JSONField(default=list, blank=True)
     models = models.JSONField(default=dict, blank=True)
+
+
+class PrivateExport(TimeStampedMixin):
+    """Privacy-safe receipt; bodies live only in the destination message/files."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    source = models.ForeignKey(
+        ConversationSession,
+        on_delete=models.PROTECT,
+        related_name="private_exports",
+    )
+    destination = models.ForeignKey(
+        ConversationSession,
+        on_delete=models.PROTECT,
+        related_name="received_exports",
+    )
+    call = models.ForeignKey(StructuredCall, on_delete=models.PROTECT)
+    authorization_id = models.CharField(max_length=100)
+    actor_id = models.CharField(max_length=100)
+    tool_use_id = models.CharField(max_length=200)
+    manifest_sha256 = models.CharField(max_length=64)
+    artifacts = models.JSONField(default=list)
+    result = models.OneToOneField(
+        ThreadMessage,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+    )
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["call", "tool_use_id"],
+                name="ergo_private_export_once",
+            ),
+        ]

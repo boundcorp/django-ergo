@@ -726,6 +726,7 @@ class OrcaPlugin(BotPlugin):
         session_id: str = "",
     ) -> list[dict]:
         """Copy chat files into ``folder`` of a worktree."""
+        from django_ergo.conversation.attachments import check_snapshot_access
         from django_ergo.conversation.attachments import find_session_file
         from django_ergo.conversation.models import ConversationSession
 
@@ -741,6 +742,8 @@ class OrcaPlugin(BotPlugin):
                 msg = f"No chat {session_id} of yours"
                 raise ValueError(msg)
         rows = [find_session_file(source, ref) for ref in files]
+        for row in rows:
+            check_snapshot_access(row, ctx.session, transfer=True)
         root = self.worktree_path(worktree)
         written = []
         for row in rows:

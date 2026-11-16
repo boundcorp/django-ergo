@@ -325,6 +325,13 @@ def guess_media_type(filename: str, default: str = "application/octet-stream") -
     return default
 
 
+def check_snapshot_access(row, session, *, transfer=False) -> None:
+    """Snapshots are readable only here and may not leave through file tools."""
+    if row.private_export_id and (transfer or row.session_id != session.pk):
+        msg = "Private export snapshots are destination-only and cannot be forwarded."
+        raise ValueError(msg)
+
+
 def is_text(media_type: str) -> bool:
     return media_type.startswith("text/") or media_type in TEXT_MEDIA_TYPES
 
@@ -361,6 +368,9 @@ def replace_session_file(
     row: ConversationAttachment, data: bytes
 ) -> ConversationAttachment:
     """Overwrite a file's bytes, keeping its id; counts versions in metadata."""
+    if row.private_export_id:
+        msg = "Private export snapshots are immutable; create a new file instead."
+        raise ValueError(msg)
     old = row.file.name if row.file else ""
     _store(row, data)
     row.metadata = {
