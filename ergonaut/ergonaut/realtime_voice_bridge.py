@@ -889,15 +889,30 @@ class Assistant(Agent):
             event = await sync_to_async(thread_update_event if normal else completion_event, thread_sensitive=True)(
                 self.voice_id, task
             )
-            if event is None or not await sync_to_async(claim_announcement, thread_sensitive=True)(event):
+            if event is None:
                 continue
-            # Silent authoritative context precedes correlated commentary. Neither proves
-            # transmission, playback, or that generated speech follows the context.
+            routine = task["status"] in ("queued", "delivered")
+            if not routine and not await sync_to_async(claim_announcement, thread_sensitive=True)(event):
+                continue
+            # Distinguish a root's handoff from its linked task's still-pending outcome.
+            # Routine progress is silent context, not another unsolicited speech request.
+            # Neither append establishes provider consumption, playback or hearing.
             label = "Durable task status" if event.kind == "task_status" else "Verified background outcome"
-            outcome = f"{label} for request {task['event_id']}: {event.text[:1500]}"
+            reference = json.dumps(
+                {
+                    "task_identity": identity,
+                    "root_event_id": task["event_id"],
+                    "transition_id": key,
+                    "status": task["status"],
+                    "observation": bool(task.get("observation", False)),
+                }
+            )
+            outcome = f"{label} {reference}: {event.text[:1500]}"
             self.duplex_session.append_thinking(outcome)
-            # Result reading is voice context, not a new backend response or task.
-            self.duplex_session.append_commentary(event.text[:1500])
+            # Approval waits and terminal results retain one durable announcement attempt.
+            # Routine entries remain unclaimed; reconnect may restore their silent context.
+            if not routine:
+                self.duplex_session.append_commentary(event.text[:1500])
             self.announced.add(key)
 
     async def watch_results(self):

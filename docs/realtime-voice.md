@@ -57,6 +57,28 @@ do not create work. Corrections/cancellation after submission fail closed with n
 thread-control guidance; the prototype does not pretend it can safely stop or rewrite
 already accepted work. Function arguments are never action approval.
 
+Routine `queued`/`delivered` transitions are durable, identified silent voice context,
+not unsolicited commentary. Root requests and linked thread tasks have distinct
+machine identities, even when they share a voice request ID. Unchanged polling
+does not append context again. Normal approval waits and terminal outcomes retain
+one durable announcement attempt; a root handoff is not its linked task's completion.
+Silent progress entries remain `delivery=unknown`, not `announcement_claimed`.
+This removes explicit repetitive progress speech requests, not the model's ability
+to mention pending work in later speech. Native tool-output continuations remain
+mandatory in the pinned SDK and are not disabled. Exactly-once durable result
+identity and at-most-once announcement attempts are **not** exactly-once provider
+consumption, playback or hearing; a claim can survive a crash before sending.
+
+The latest retained owner call on November 16 ran from **15:31:05.430Z to
+15:41:34.569Z (629.139 seconds)** and ended through explicit application End before
+provider/SDK teardown. It had two accepted native requests, each followed by one
+tool-free interpreter continuation, not a tool loop. Five routine root/linked-task
+transitions previously requested generic progress speech. Both root results were
+announced; a linked result completed just after End and remained durable/unannounced.
+The owner's duration acceptance applies to this call, not the unexplained November
+15 hangup or blanket physical/provider reliability. See the
+[sanitized investigation](../artifacts/voice-waiting-20261116/REPORT.md).
+
 An exact scoped `unlimited_intentional_requests: true` grant, reviewed follow-up
 cost approval and a new approval reference permit **no cumulative intentional-request
 count cap**. Old `max_requests` policy is rejected, not silently widened. Four

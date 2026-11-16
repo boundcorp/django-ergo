@@ -1120,6 +1120,11 @@ not proof of a user hangup. This adds observability, not a demonstrated repair o
 the November 15 premature hangup. See [close-cause diagnostics](realtime-voice.md#close-cause-diagnostics).
 Handler acceptance, result persistence and an announcement claim remain distinct
 from actual model execution/consumption, playback and physical hearing.
+Routine queued/delivered voice updates persist as silent, task-identified context
+without claiming an announcement; unchanged polling does not repeat them. Approval
+waits and terminal outcomes keep their single announcement attempt. A root handoff
+and its downstream task's result are distinct. This removes explicit routine-status
+commentary, not native tool continuations or possible model-generated status wording.
 See the [current release and capability evidence](realtime-voice-causal-review.md#current-release-reconciliation--2026-11-12)
 and [acceptance gates](realtime-voice-progress.md#hosted-phone-acceptance-and-follow-ups--2026-11-12).
 The web entry is the originating thread's top-bar options → Voice call.
