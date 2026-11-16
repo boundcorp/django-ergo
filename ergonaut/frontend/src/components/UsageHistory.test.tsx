@@ -88,6 +88,23 @@ describe('UsageHistory', () => {
     expect(window.document.activeElement).toBe(opener())
   })
 
+  test('chart bars expose exact values on focus and selection', async () => {
+    api.sessionUsageHistory = async () => history
+    render()
+    await act(async () => opener().click())
+    const hourly = dialog().querySelector(
+      '[aria-label="Last hour: 123 thread tokens, 45 known agent tokens"]',
+    ) as HTMLButtonElement
+    expect(hourly).not.toBeNull()
+    act(() => hourly.focus())
+    expect(dialog().querySelector('[aria-live="polite"]')?.textContent).toContain('123 thread · 45 known agents')
+    const daily = dialog().querySelector(
+      '[aria-label="2026-10-29: 800 thread tokens, 200 known agent tokens"]',
+    ) as HTMLButtonElement
+    act(() => daily.click())
+    expect(daily.closest('section')?.textContent).toContain('800 thread · 200 known agents')
+  })
+
   test('offers retry and displays empty history', async () => {
     api.sessionUsageHistory = async () => {
       throw new Error('unavailable')
