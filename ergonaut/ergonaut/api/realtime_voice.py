@@ -5,6 +5,7 @@ import re
 import uuid
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 
 from asgiref.sync import async_to_sync
 from django.conf import settings
@@ -315,6 +316,7 @@ def finish_standby_close(voice_id, claim_id, *, audio_uncertain=False):
 def bridge_state(voice_id, *, include_briefing=True):
     """Durable snapshot; only bridge startup/reconnect should render the full briefing."""
     from ergonaut.realtime_voice_interpreter import context_for_session
+    from ergonaut.realtime_voice_text import status as text_status
 
     session = RealtimeVoiceSession.objects.select_related("chat", "user").get(pk=voice_id)
     events = list(session.events.order_by("-id")[:100])
@@ -331,6 +333,7 @@ def bridge_state(voice_id, *, include_briefing=True):
         and live.get("claim_id") == session.bridge_claim_id
         and not bridge_lease_expired(session)
     )
+    alternate = session.state.get("voice_mode") == "text_agent"
     transcript = [
         {
             "turn_id": e.event_id,
@@ -374,6 +377,7 @@ def bridge_state(voice_id, *, include_briefing=True):
         "session_id": str(session.id),
         "chat_id": str(session.chat_id),
         "user_id": str(session.user_id),
+        "mode": session.state.get("voice_mode", "native"),
         "status": session.status,
         "standby_state": session.standby_state,
         "bridge_started_at": session.bridge_started_at.isoformat() if session.bridge_started_at else None,
@@ -383,9 +387,15 @@ def bridge_state(voice_id, *, include_briefing=True):
         "transcript": transcript,
         "runtime": live.get("runtime", UNKNOWN_RUNTIME) if has_live_bridge else dict(UNKNOWN_RUNTIME),
         "activities": activities,
-        "request_budget": native_budget_projection(session),
+        "request_budget": (
+            {"limit": None, "remaining": None, "collecting": False, "inflight": bool(state["pending_task_ids"])}
+            if alternate
+            else native_budget_projection(session)
+        ),
         "native_context": context_for_session(session),
-        "briefing": startup_briefing(session) if include_briefing else delegation_status(session),
+        "briefing": text_status(session)
+        if alternate
+        else (startup_briefing(session) if include_briefing else delegation_status(session)),
         "thread_updates": thread_updates(session, delegations),
         "delegations": [
             {
@@ -403,6 +413,10 @@ def bridge_state(voice_id, *, include_briefing=True):
 
 def persist_thread_event(session, event):
     """Write a finalized voice event once to the same thread, preserving delivery uncertainty."""
+    # Alternate requests/results already enter history through the normal bot;
+    # the voice event is a separate playback/transcript projection, not a second message.
+    if session.state.get("voice_mode") == "text_agent":
+        return
     if event.kind not in ("user", "user_transcript", "assistant"):
         return
     chat = ConversationSession.objects.select_for_update().select_related("user").get(pk=session.chat_id)
@@ -838,6 +852,8 @@ def delegate(voice_id, event_id, text, *, native_identity=None):
         raise ValueError("Invalid delegation")
     with transaction.atomic():
         session = RealtimeVoiceSession.objects.select_for_update().select_related("chat", "user").get(pk=voice_id)
+        if session.state.get("voice_mode", "native") != "native":
+            raise ValueError("Native delegation cannot execute in a text-agent voice session.")
         old = session.delegations.select_related("message").filter(event_id=event_id).first()
         if old:
             if old.text != text:
@@ -978,6 +994,7 @@ def session_out(session):
     return {
         "id": str(session.id),
         "chat_id": str(session.chat_id),
+        "mode": state["mode"],
         "status": session.status,
         "standby_state": session.standby_state,
         "bridge_started_at": session.bridge_started_at.isoformat() if session.bridge_started_at else None,
@@ -1000,11 +1017,25 @@ def session_out(session):
 
 class CreateIn(Schema):
     chat_id: str
+    mode: Literal["native", "text_agent"] = "native"
 
 
 @router.get("/realtime-voice/config")
-def config(request):
-    return {"enabled": voice_allowed(request.auth), "standby_enabled": standby_allowed(request.auth)}
+def config(request, chat_id: str | None = None):
+    from ergonaut.realtime_voice_text import availability
+
+    alternate = {"enabled": False, "reason": "Select a thread to check text-agent voice configuration and consent."}
+    if chat_id and voice_allowed(request.auth):
+        chat = visible_sessions(request.auth).filter(pk=uuid_or_404(chat_id), user=request.auth).first()
+        if chat is None:
+            raise HttpError(404, "No such chat")
+        get_bot(chat.bot_name, request.auth)
+        alternate = availability(chat, request.auth)
+    return {
+        "enabled": voice_allowed(request.auth),
+        "standby_enabled": standby_allowed(request.auth),
+        "text_agent": alternate,
+    }
 
 
 @router.get("/realtime-voice/sessions")
@@ -1029,9 +1060,16 @@ def create_session(request, data: CreateIn):
     get_bot(chat.bot_name, request.auth)
     if chat.status == "completed":
         raise HttpError(409, "Chat is closed")
-    return session_out(
-        RealtimeVoiceSession.objects.create(chat=chat, user=request.auth, state=initial_state(chat, request.auth))
-    )
+    state = initial_state(chat, request.auth)
+    if data.mode == "text_agent":
+        from ergonaut.realtime_voice_text import media_authorization
+
+        try:
+            state["text_media_authorization"] = media_authorization(chat, request.auth)
+        except ValueError as exc:
+            raise HttpError(409, str(exc)) from None
+    state["voice_mode"] = data.mode
+    return session_out(RealtimeVoiceSession.objects.create(chat=chat, user=request.auth, state=state))
 
 
 @router.get("/realtime-voice/sessions/{session_id}")
@@ -1100,6 +1138,15 @@ def token(request, session_id: str):
     if session.bridge_started_at:
         if not standby_allowed(request.auth) or session.standby_state != "resuming":
             raise HttpError(409, "Voice session already connected; start a new one")
+    if session.state.get("voice_mode") == "text_agent":
+        from ergonaut.realtime_voice_text import media_authorization
+
+        try:
+            grant = media_authorization(session.chat, session.user)
+            if grant != session.state.get("text_media_authorization") or not session_authorization(session):
+                raise ValueError("Text-agent voice consent changed; end this call and review configuration.")
+        except ValueError as exc:
+            raise HttpError(409, str(exc)) from None
     url, key, secret = settings.LIVEKIT_URL, settings.LIVEKIT_API_KEY, settings.LIVEKIT_API_SECRET
     if not all((url, key, secret)):
         raise HttpError(503, "Realtime voice is not configured")

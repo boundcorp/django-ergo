@@ -64,6 +64,14 @@ REALTIME_VOICE_DELEGATION_BUDGET = None
 REALTIME_VOICE_THREAD_EXECUTION_AUTHORIZATIONS = json.loads(
     os.environ.get("REALTIME_VOICE_THREAD_EXECUTION_AUTHORIZATIONS", "{}")
 )
+# Alternate STT -> normal text assistant -> TTS is separately authorized, never
+# enabled by native interpreter consent. No implicit TTS model/voice or new key.
+REALTIME_VOICE_TEXT_AGENT_ENABLED = env_variable_truthy("REALTIME_VOICE_TEXT_AGENT_ENABLED")
+REALTIME_VOICE_TEXT_AGENT_TTS_MODEL = os.environ.get("REALTIME_VOICE_TEXT_AGENT_TTS_MODEL", "")
+REALTIME_VOICE_TEXT_AGENT_TTS_VOICE = os.environ.get("REALTIME_VOICE_TEXT_AGENT_TTS_VOICE", "")
+REALTIME_VOICE_TEXT_AGENT_MEDIA_AUTHORIZATIONS = json.loads(
+    os.environ.get("REALTIME_VOICE_TEXT_AGENT_MEDIA_AUTHORIZATIONS", "{}")
+)
 # Server-owned policy is read on each native operation so a genuine fresh quote
 # can be installed atomically without redeploying every Ergonaut role.
 RUNPOD_ACCOUNTS_FILE = os.environ.get("RUNPOD_ACCOUNTS_FILE", "")

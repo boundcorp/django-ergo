@@ -121,9 +121,10 @@ class RealtimeVoiceSession(models.Model):
 
 
 class RealtimeVoiceLedgerEntry(models.Model):
-    """One durable native identity, rather than a session-sized JSON archive.
+    """One durable protocol-scoped identity, rather than a session-sized JSON archive.
 
-    The interpreter bounds each data payload before writing it. Identity hashes
+    Native interpretation and alternate finalized STT/output bindings bound each
+    data payload before writing it. Identity hashes
     keep lookups indexable even for compound provider/claim identities; the exact
     identity is retained and checked rather than trusting hash equality.
     """

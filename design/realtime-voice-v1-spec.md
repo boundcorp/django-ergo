@@ -2,6 +2,15 @@
 
 Status: proposed implementation spec, November 10, 2026. No implementation or deployment authorized by this document alone.
 
+November 17 amendment: the owner additionally requested an explicitly selectable
+STT → normal originating text assistant/tools/thread → TTS pipeline alongside
+native live voice. This supersedes “No alternate STT-only mode” below only for
+that requested alternative; it does not authorize the broader wake/Stage/four-mode
+ideas. Native remains the default and composer dictation Stop/Send stays separate.
+See the [checkpoint](voice-text-agent-pipeline.md) and
+[current setup/consent contract](../docs/realtime-voice.md#optional-text-assistant-speech-pipeline--draft-not-activated).
+
+
 ## Current isolated first-slice contract
 
 The original target below describes a later product, not the scope authorized

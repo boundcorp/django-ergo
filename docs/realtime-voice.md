@@ -2,6 +2,109 @@
 
 This is an **off-by-default prototype**, separate from composer dictation, enabled on Octo for one allowlisted account only (see "Hosted deployment"). Wake-word and a general Stage are out of scope. Django holds session state, finalized text and task references; LiveKit carries audio, not durable memory. No audio recordings are stored by this code.
 
+## Optional text-assistant speech pipeline — draft, not activated
+
+The November 17 alternate is **alongside**, not a replacement for native live
+voice. Before Start, select **Native live voice** (the default) or **Text
+assistant + speech**. The choice is fixed for that logical session, including
+manual resume. Missing media configuration or consent disables alternate Start
+with an actionable reason; it never falls back to another protocol/model.
+Composer dictation remains separate: Stop produces editable text without sending,
+while Send submits once through its existing normal handler.
+
+The alternate has no GPT-Live model or managed interpreter. Silero finalizes an
+audio utterance, assigns an opaque identity **before** STT, then uses the existing
+OpenAI transcription helper and configured model. Its final text becomes one
+durable request through the existing `messaging.send(None, originating_chat, ...)`
+normal bot handler. This is the same normal engine/context/tools/ACL/approval
+and serialized thread-work path used for durable native delegations, not a new
+assistant. Unlike the composer's transient inbox, concurrent utterances retain
+separate durable roots rather than being merged or used to steer a running turn.
+No authenticated interactive host-review principal is fabricated from speech.
+
+The durable identity binds logical session, bridge claim and finalized utterance.
+Same-identity replay returns the original receipt; conflicting text fails closed.
+Partial/native captions, transcript similarity and timing guesses cannot start
+work. End and admission serialize under the session lock. A late STT result,
+stale bridge, revoked consent or STT error cannot submit new work; accepted work
+survives audio interruption, disconnect and End. Each normal request carries
+the existing voice at-most-once tool/never-automatic-model-retry policy.
+
+Speech onset interrupts current/queued audio only. New finalized speech submits
+automatically without a per-turn Send; accepted requests queue normally and action
+approvals remain in the thread. Verified root/child outcomes retain explicit
+request/task/result/speech identities. Queued/delivered transitions remain silent;
+approval waits and terminal results have at most one durable speech attempt at a
+conversational gap. Interrupted, late or unplayed outcomes remain accessible in
+the originating thread/session. Crash-after-claim may lose an announcement, not
+the result, and resume never automatically repeats a previously claimed result.
+The spoken/transcript projection is bounded to the existing 4,000-character event
+size; full normal answers remain in the thread.
+
+Only the initiating owner's microphone track enters STT; room/assistant output
+tracks never feed it. Browser echo cancellation is explicit in this mode.
+That prevents digital feedback wiring, **not proof of perfect acoustic echo
+rejection**, semantic turn boundaries or physical-device behavior. There is no
+new fixed call duration or lifetime request cap. Existing transcription service
+rate limits and per-recording size/duration limits still apply; they are not
+permission to widen an existing media allowance.
+
+### Configuration and distinct spending consent
+
+Keep the existing realtime kill switch, exact account allowlist, LiveKit room
+credentials and normal originating owner/chat/bot task/follow-up cost grant.
+The alternate additionally requires the existing transcription flag/key and:
+
+| Setting | Default | Required value |
+| --- | --- | --- |
+| `REALTIME_VOICE_TEXT_AGENT_ENABLED` | `false` | Explicit alternate enablement |
+| `REALTIME_VOICE_TEXT_AGENT_TTS_MODEL` | empty | `tts-1`, `tts-1-hd` or `gpt-4o-mini-tts`, as listed by pinned SDK 1.8.11 |
+| `REALTIME_VOICE_TEXT_AGENT_TTS_VOICE` | empty | `alloy`, `ash`, `ballad`, `coral`, `echo`, `fable`, `onyx`, `nova`, `sage` or `shimmer` |
+| `REALTIME_VOICE_TEXT_AGENT_MEDIA_AUTHORIZATIONS` | `{}` | Reviewed JSON policy keyed by exact originating chat UUID |
+
+Each policy requires exact `owner` username, `bot`, `stt_model` equal to existing
+`VOICE_TRANSCRIPTION_MODEL`, the selected `tts_model` and `tts_voice`,
+`stt_tts_costs_approved: true`, and a nonempty **separate** `approval_reference`.
+The STT helper's existing priced choices are `gpt-transcribe`,
+`gpt-4o-mini-transcribe` and `whisper-1`. Both web and bridge must have matching
+configuration. New sessions snapshot this media grant; later changes fail closed,
+not silently upgrade old sessions. The normal-task/follow-up grant is checked
+independently and is never reset or widened by mode selection.
+
+No new provider or key provisioning is needed: reuse the existing OpenAI secret
+through its normal access route. Native interpreter approval is **not** this
+STT/TTS spending consent. Source inclusion, a supported SDK model string, or
+successful read-only model metadata access does not establish generation
+entitlement, remaining credit or billing capacity. No activation, paid inference,
+new room, real-owner task, device capture or shared configuration change was
+performed for this draft.
+
+[OpenAI published pricing](https://developers.openai.com/api/docs/pricing),
+read November 17, lists:
+
+| Incremental media model | Published list price |
+| --- | --- |
+| `gpt-transcribe` (existing default STT) | $0.0045 per input minute |
+| `gpt-4o-mini-transcribe` | Estimated $0.003 per input minute |
+| `whisper-1` | $0.006 per input minute |
+| `tts-1` | $15 per million input characters |
+| `tts-1-hd` | $30 per million input characters |
+| `gpt-4o-mini-tts` | $0.60 per million text input tokens + $12 per million audio output tokens |
+
+Normal originating-bot/tool costs and existing LiveKit charges are additional;
+there is no quoted maximum full-stack cost or inferred shared allowance. STT
+retains its existing usage records. TTS stores usage-only `voice_synthesis`
+records, estimated list-price cost when its billing basis is available, and
+UNKNOWN cost rather than zero when mini-TTS token usage is absent. No audio is
+persisted. No model/voice is selected implicitly by the new settings.
+
+The [design checkpoint](../design/voice-text-agent-pipeline.md) and
+[offline evidence](../artifacts/voice-text-agent-20261117/REPORT.md) distinguish
+source behavior from hosted/device acceptance. Rollback: disable the separate
+alternate gate and revert this draft; never cancel accepted normal tasks.
+Merge/deploy require coordinator release checkpoint and a fresh quiet notice.
+
+
 **Historical acceptance/release checkpoint, 2026-11-12:** Lee accepted phone audio/basic conversation, not Android Bluetooth or orchestration. Source PR #297 was live as `6b33f825` / `ffa206f6` through infra-octo #171. After all old consumers exited and a fresh acknowledged quiet window, exact scoped policy #170 merged at 23:34:50 (`eff442d9`) and matching web/bridge configuration was verified at 23:38:39. Only new logical sessions could receive the normal-thread grant; the then-newest retained 22:46 call stayed ungranted and had failed before durable delegation. Normal task costs were approved at 21:15:41; normal approvals, one root request and the 90-second voice cap remain. No hosted normal-task/provider test ran at that checkpoint, and Android output remained physically unknown. [Historical policy evidence](realtime-voice-progress.md#continuation--newest-live-session-and-ux-2026-11-12) separates policy activation from the UX frontend release.
 
 **Latest owner correction, 2026-11-13 18:53 UTC:** input transcription now

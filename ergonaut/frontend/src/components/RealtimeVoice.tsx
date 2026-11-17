@@ -17,6 +17,8 @@ import {
   type RealtimeVoiceSession,
   type SessionDetail,
   type VoiceTaskUpdate,
+  type VoiceMode,
+  type TextVoiceAvailability,
 } from '../api'
 import { initialVoiceAudioOutput, VoiceAudioOutput, type VoiceAudioOutputState } from '../voiceAudioOutput'
 import { VoiceBackgroundWork, VoiceDeliverySummary } from './VoiceSessionCard'
@@ -102,7 +104,7 @@ type VoiceCallOwner = {
   outputRouting: RefObject<VoiceAudioOutput | null>
   audio: RefObject<HTMLDivElement | null>
   inspect: (session: RealtimeVoiceSession) => void
-  start: (chatId: string) => Promise<void>
+  start: (chatId: string, mode?: VoiceMode) => Promise<void>
   end: () => Promise<void>
   changeStandby: (resume: boolean, retry?: boolean) => Promise<void>
   toggleMute: () => Promise<void>
@@ -358,7 +360,7 @@ function useVoiceOwner(): VoiceCallOwner {
     update(session)
   }
 
-  async function connect(chatId: string, resumed?: RealtimeVoiceSession) {
+  async function connect(chatId: string, resumed?: RealtimeVoiceSession, mode?: VoiceMode) {
     const attempt = ++generation.current
     setError('')
     setErrorChatId(chatId)
@@ -381,7 +383,10 @@ function useVoiceOwner(): VoiceCallOwner {
         if (attempt !== generation.current) return
         session = sessions.find(item => item.chat_id === chatId && item.status === 'active') ?? null
       }
-      if (!session) session = await api.startRealtimeVoice(chatId)
+      if (!session) session = await api.startRealtimeVoice(chatId, mode ?? 'native')
+      if (mode && (session.mode ?? 'native') !== mode) {
+        throw new Error('An existing call uses another voice mode. End it before starting a different mode.')
+      }
       if (session.chat_id !== chatId) throw new Error('Voice session does not belong to this thread.')
       if (attempt !== generation.current) return
       sessionStorage.setItem(storageKey(chatId), session.id)
@@ -396,7 +401,9 @@ function useVoiceOwner(): VoiceCallOwner {
       }
       const credentials = await api.realtimeVoiceToken(session.id)
       if (attempt !== generation.current) return
-      const current = new Room()
+      const current = new Room(
+        session.mode === 'text_agent' ? { audioCaptureDefaults: { echoCancellation: true } } : undefined,
+      )
       room.current = current
       inputObserver.current?.dispose()
       inputObserver.current = new VoiceAudioInput(current, navigator.mediaDevices, next => {
@@ -557,7 +564,7 @@ function useVoiceOwner(): VoiceCallOwner {
     }
   }
 
-  async function start(chatId: string) {
+  async function start(chatId: string, mode?: VoiceMode) {
     if (!enabled || actionLock.current || room.current) return
     if (voiceRef.current?.status === 'active' && voiceRef.current.chat_id !== chatId) return
     actionLock.current = true
@@ -566,7 +573,7 @@ function useVoiceOwner(): VoiceCallOwner {
     setAction('start')
     initializeOutput()
     try {
-      await connect(chatId)
+      await connect(chatId, undefined, mode)
     } finally {
       revision.current++
       connectingChat.current = null
@@ -889,6 +896,29 @@ export function VoicePage() {
   const [loadError, setLoadError] = useState('')
   const [loading, setLoading] = useState(true)
   const [audioDiagnostics, setAudioDiagnostics] = useState<VoiceAudioDiagnostics | null>(null)
+  const [mode, setMode] = useState<VoiceMode>('native')
+  const [textAvailability, setTextAvailability] = useState<TextVoiceAvailability>({
+    enabled: false,
+    reason: 'Checking text-agent media configuration and consent…',
+  })
+  useEffect(() => {
+    let alive = true
+    setMode('native')
+    setTextAvailability({ enabled: false, reason: 'Checking text-agent media configuration and consent…' })
+    api
+      .realtimeVoiceConfig(id)
+      .then(config => {
+        if (alive)
+          setTextAvailability(config.text_agent ?? { enabled: false, reason: 'Text-agent voice is not configured.' })
+      })
+      .catch(() => {
+        if (alive)
+          setTextAvailability({ enabled: false, reason: 'Text-agent voice availability could not be checked.' })
+      })
+    return () => {
+      alive = false
+    }
+  }, [id])
   const inspectRef = useRef(owner.inspect)
   inspectRef.current = owner.inspect
   useEffect(() => {
@@ -919,6 +949,7 @@ export function VoicePage() {
   }, [id])
   const owns = owner.voice?.chat_id === id
   const voice = owns ? owner.voice : existing?.chat_id === id ? existing : null
+  const displayedMode = voice?.status === 'active' ? (voice.mode ?? 'native') : mode
   const bridgeInput = bridgeInputEvidence(voice?.events ?? [])
   const blocked = owner.voice?.status === 'active' && !owns
   const closed = detail?.session.status === 'completed' && detail.session.role !== 'thread'
@@ -1008,18 +1039,26 @@ export function VoicePage() {
                             ? 'Disconnected'
                             : 'Ready to start'}
               </strong>{' '}
-              · Microphone: {owns ? microphone : 'unknown'}
+              · Microphone: {owns ? microphone : 'unknown'} · Mode:{' '}
+              {displayedMode === 'text_agent' ? 'Text assistant + speech' : 'Native live voice'}
             </p>
             <p>
               Browser capture: {owns ? owner.input.capture : 'unknown'} · Microphone publication:{' '}
               {owns ? owner.input.publication : 'unknown'}. Published does not prove bridge or provider receipt.
             </p>
-            <p>
-              Bridge Silero speech: {bridgeInput.speech ? 'observed' : 'not observed'} · Provider send queue:{' '}
-              {bridgeInput.forwarded ? 'observed (not remote receipt)' : 'not observed'} · Provider session:{' '}
-              {bridgeInput.provider_started ? 'started (not input receipt)' : 'start not observed'} · Transcript:{' '}
-              {bridgeInput.transcribed ? 'observed' : 'not observed'}.
-            </p>
+            {displayedMode === 'text_agent' ? (
+              <p>
+                Speech transcription → this thread's normal assistant/tools → spoken verified results. Transcripts and
+                identified task outcomes appear below; audio receipt and hearing remain unverified.
+              </p>
+            ) : (
+              <p>
+                Bridge Silero speech: {bridgeInput.speech ? 'observed' : 'not observed'} · Provider send queue:{' '}
+                {bridgeInput.forwarded ? 'observed (not remote receipt)' : 'not observed'} · Provider session:{' '}
+                {bridgeInput.provider_started ? 'started (not input receipt)' : 'start not observed'} · Transcript:{' '}
+                {bridgeInput.transcribed ? 'observed' : 'not observed'}.
+              </p>
+            )}
             {bridgeInput.provider_error && (
               <p>Provider error observed; input receipt is not established by that event.</p>
             )}
@@ -1032,7 +1071,9 @@ export function VoicePage() {
             {voice?.briefing?.restriction && (
               <p>
                 {voice.briefing.execution_mode === 'normal_thread'
-                  ? 'Normal thread execution: task costs are separate from voice and managed interpretation costs. Normal action approvals still apply.'
+                  ? voice.mode === 'text_agent'
+                    ? 'Normal text assistant: separately approved STT/TTS media costs. Normal task costs and action approvals still apply.'
+                    : 'Normal thread execution: task costs are separate from voice and managed interpretation costs. Normal action approvals still apply.'
                   : 'Restricted read-only mode.'}
               </p>
             )}
@@ -1105,11 +1146,39 @@ export function VoicePage() {
       <footer className="max-h-[30dvh] min-h-0 shrink overflow-y-auto border-t border-stroke bg-surface px-4 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] sm:px-6">
         <div className="sticky top-0 z-10 flex flex-wrap gap-2 bg-surface [&_button]:min-h-11 [&_button]:rounded-md [&_button]:border [&_button]:border-stroke [&_button]:px-3 [&_button]:py-2 [&_button]:text-sm [&_button]:disabled:opacity-50">
           {(!voice || voice.status !== 'active') && (
+            <label className="flex flex-col gap-1 text-sm">
+              Voice mode
+              <select
+                aria-label="Voice mode"
+                value={mode}
+                disabled={!!action || !!blocked}
+                onChange={event => setMode(event.target.value as VoiceMode)}
+              >
+                <option value="native">Native live voice</option>
+                <option value="text_agent">Text assistant + speech</option>
+              </select>
+              {mode === 'text_agent' && (
+                <span className="text-muted">
+                  {textAvailability.reason} Speech submits automatically; speaking interrupts audio, not accepted work.
+                </span>
+              )}
+            </label>
+          )}
+          {(!voice || voice.status !== 'active') && (
             <button
               type="button"
               className="bg-accent text-white"
-              disabled={!enabled || !detail || loading || !!loadError || closed || !!blocked || !!action}
-              onClick={() => void owner.start(id)}
+              disabled={
+                !enabled ||
+                !detail ||
+                loading ||
+                !!loadError ||
+                closed ||
+                !!blocked ||
+                !!action ||
+                (mode === 'text_agent' && !textAvailability.enabled)
+              }
+              onClick={() => void owner.start(id, mode)}
             >
               Start call
             </button>

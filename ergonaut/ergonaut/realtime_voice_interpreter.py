@@ -179,6 +179,8 @@ def _result(session, status, receipts=None, explanation=""):
 def _live_error(session, claim_id):
     from ergonaut.api.realtime_voice import bridge_lease_expired, voice_allowed
 
+    if session.state.get("voice_mode", "native") != "native":
+        return "Native interpreter events cannot admit work in a text-agent voice session."
     if session.status != "active" or bridge_lease_expired(session):
         return "Voice session ended or its bridge disconnected; no new work was admitted."
     if not voice_allowed(session.user):

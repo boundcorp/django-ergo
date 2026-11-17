@@ -241,6 +241,59 @@ test('restricted page is honest and cannot start a microphone', async () => {
   expect(container.textContent).toContain('unavailable or restricted')
 })
 
+test('text assistant mode is selectable but cannot start without separate media consent', async () => {
+  api.realtimeVoiceSessions = async () => []
+  api.realtimeVoiceConfig = async () => ({
+    enabled: true,
+    text_agent: { enabled: false, reason: 'Separate STT + TTS spending consent is required.' },
+  })
+  let starts = 0
+  api.startRealtimeVoice = async () => {
+    starts++
+    return session
+  }
+  await mountVoice()
+  const selector = container.querySelector<HTMLSelectElement>('select[aria-label="Voice mode"]')!
+  expect(selector.value).toBe('native')
+  await act(async () => {
+    selector.value = 'text_agent'
+    selector.dispatchEvent(new window.Event('change', { bubbles: true }))
+  })
+  expect(button('Start call').disabled).toBe(true)
+  expect(container.textContent).toContain('Separate STT + TTS spending consent')
+  expect(starts).toBe(0)
+  await act(async () => {
+    selector.value = 'native'
+    selector.dispatchEvent(new window.Event('change', { bubbles: true }))
+  })
+  expect(button('Start call').disabled).toBe(false)
+})
+
+test('selected text mode is fixed for the created call with no native fallback', async () => {
+  api.realtimeVoiceSessions = async () => []
+  api.realtimeVoiceConfig = async () => ({
+    enabled: true,
+    text_agent: { enabled: true, reason: 'Separately approved media configuration.' },
+  })
+  const modes: unknown[] = []
+  api.startRealtimeVoice = async (_, mode) => {
+    modes.push(mode)
+    return { ...session, mode: 'text_agent' }
+  }
+  await mountVoice()
+  await act(async () => {
+    const selector = container.querySelector<HTMLSelectElement>('select[aria-label="Voice mode"]')!
+    selector.value = 'text_agent'
+    selector.dispatchEvent(new window.Event('change', { bubbles: true }))
+  })
+  await act(async () => {
+    button('Start call').click()
+  })
+  expect(modes).toEqual(['text_agent'])
+  expect(container.querySelector('select[aria-label="Voice mode"]')).toBeNull()
+  expect(container.textContent).toContain('Text assistant + speech')
+})
+
 test('unsupported delegation reasons and closing-boundary warnings are visible without opening details', async () => {
   const unavailable = 'This thread uses a subscription engine that cannot enforce the request budget.'
   api.realtimeVoiceSessions = async () => [

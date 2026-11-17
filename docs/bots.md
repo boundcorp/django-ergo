@@ -1151,6 +1151,18 @@ and its downstream task's result are distinct. This removes explicit routine-sta
 commentary, not native tool continuations or possible model-generated status wording.
 See the [current release and capability evidence](realtime-voice-causal-review.md#current-release-reconciliation--2026-11-12)
 and [acceptance gates](realtime-voice-progress.md#hosted-phone-acceptance-and-follow-ups--2026-11-12).
+
+An optional, separately default-off **Text assistant + speech** mode instead
+uses the existing OpenAI STT helper, durably identified finalized audio turns,
+the same normal originating-thread bot handler, and explicitly configured
+supported TTS. There is no voice LLM/interpreter in this mode, no per-turn Send,
+and no inference from native captions. Mode selection is explicit before Start
+and immutable during the call. Its exact owner/chat/bot STT/TTS cost consent is
+separate from normal-task and native-interpreter approval; unavailable setup
+denies Start without protocol fallback. Interruption stops audio, not accepted
+normal work or normal action approvals. See
+[setup and pricing](realtime-voice.md#configuration-and-distinct-spending-consent).
+
 The web entry is the originating thread's top-bar options → Voice call.
 Its dedicated page keeps one app-owned connection across in-tab navigation;
 End call stops voice, not submitted thread work. Progressive drafts are not
