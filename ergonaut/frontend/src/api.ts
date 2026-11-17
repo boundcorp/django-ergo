@@ -894,9 +894,12 @@ export type VoiceTaskUpdate = {
   chat_id?: string
   observation?: boolean
 }
+export type VoiceMode = 'native' | 'text_agent'
+export type TextVoiceAvailability = { enabled: boolean; reason: string }
 export type RealtimeVoiceSession = {
   id: string
   chat_id: string
+  mode?: VoiceMode
   status: string
   transcript?: {
     turn_id: string
@@ -964,11 +967,15 @@ export type ClientLifecycleReport = {
 }
 
 export const api = {
-  realtimeVoiceConfig: () => request<{ enabled: boolean; standby_enabled?: boolean }>('GET', '/realtime-voice/config'),
+  realtimeVoiceConfig: (chatId?: string) =>
+    request<{ enabled: boolean; standby_enabled?: boolean; text_agent?: TextVoiceAvailability }>(
+      'GET',
+      `/realtime-voice/config${chatId ? `?chat_id=${encodeURIComponent(chatId)}` : ''}`,
+    ),
   realtimeVoiceSessions: (chatId: string) =>
     request<RealtimeVoiceSession[]>('GET', `/realtime-voice/sessions?chat_id=${encodeURIComponent(chatId)}`),
-  startRealtimeVoice: (chatId: string) =>
-    request<RealtimeVoiceSession>('POST', '/realtime-voice/sessions', { chat_id: chatId }),
+  startRealtimeVoice: (chatId: string, mode: VoiceMode = 'native') =>
+    request<RealtimeVoiceSession>('POST', '/realtime-voice/sessions', { chat_id: chatId, mode }),
   realtimeVoiceSession: (id: string) =>
     request<RealtimeVoiceSession>('GET', `/realtime-voice/sessions/${encodeURIComponent(id)}`),
   realtimeVoiceToken: (id: string) =>

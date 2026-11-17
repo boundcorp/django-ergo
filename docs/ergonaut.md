@@ -49,13 +49,24 @@ the original file and the existing attachment access controls.
 The originating thread's options → **Voice call** opens its dedicated page.
 Opening it does not capture a microphone; Start/Resume are explicit, and an
 active call survives in-tab navigation. End call stops voice, not accepted
-background work. The original 90-second deadline still applies.
+background work. Healthy calls have no fixed application maximum duration.
 The desktop panel and mobile drawer group Conversation (voice/files),
 Model & reasoning, Thread data (export) and Thread lifecycle (resolve).
 Resolve archives the thread and stops queued/running workers and their agents;
 a new message reopens the thread, not cancelled work. It is separated and
 danger-styled. Rename and pins remain in thread details. Keyboard focus enters
 the panel/dialog and Escape returns it.
+
+Before connecting, choose **Native live voice** (default) or **Text assistant +
+speech**. The alternate transcribes finalized utterances into durably identified
+normal originating-thread requests and speaks verified results; each new turn
+submits automatically. Speaking interrupts audio, not accepted work. The mode
+cannot change during a call or manual resume. Alternate Start remains disabled
+with an actionable reason until the existing STT integration, explicit supported
+TTS model/voice and separate exact owner/chat/bot media-cost consent are configured.
+Native interpreter consent does not authorize additional STT/TTS spending.
+See [alternate setup, prices and release gates](realtime-voice.md#optional-text-assistant-speech-pipeline--draft-not-activated).
+
 
 Start call joins voice and requests microphone access. **Enable sound** is
 different: it stays visible while connected until the browser confirms the

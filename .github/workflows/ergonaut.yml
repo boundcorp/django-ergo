@@ -100,6 +100,7 @@ jobs:
           ergonaut/api/tests/test_realtime_voice_execution.py
           ergonaut/api/tests/test_realtime_voice_outbox.py
           ergonaut/api/tests/test_realtime_voice_broker.py
+          ergonaut/api/tests/test_realtime_voice_text.py
           ../artifacts/voice-interpreter-20261114/test_native_timing.py
 
 

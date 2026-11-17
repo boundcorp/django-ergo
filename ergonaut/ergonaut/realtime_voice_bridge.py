@@ -982,6 +982,11 @@ async def voice_session(ctx: agents.JobContext):
     http_session = None
     try:
         snapshot = await sync_to_async(bridge_state, thread_sensitive=True)(voice_id, include_briefing=True)
+        if snapshot.get("mode", "native") == "text_agent":
+            from ergonaut.realtime_voice_text_bridge import text_voice_session
+
+            await text_voice_session(ctx, voice_id, claim_id, snapshot)
+            return
         await ctx.connect()
         started = time.monotonic()
         http_session = aiohttp.ClientSession()
