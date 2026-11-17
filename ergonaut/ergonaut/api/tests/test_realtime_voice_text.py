@@ -158,14 +158,22 @@ def test_end_preserves_accepted_work_but_late_stt_and_stale_claims_cannot_admit(
 @pytest.mark.parametrize("approve", [False, True])
 def test_alternate_uses_real_normal_approval_and_child_identity(text_voice, use_bots, monkeypatch, client, approve):
     chat, target, voice = text_voice
+    from ergonaut.realtime_voice_outbox import thread_update_event
+    from ergonaut.realtime_voice_text import pending_outputs
+
     monkeypatch.setattr(orchestrator.ergo_thread_send.__bot_tool__, "requires_approval", True)
     use_bots(
         tool_call("ergo_thread_send", {"thread": str(target.pk), "message": "Approved disposable child"}),
         say("Applied the normal approval decision."),
+        say("The approved child completed."),
     )
     root = submit(voice, "approval", "Ask that existing thread, subject to normal approval.")
     deliver(root)
     assert root.status == "waiting" and not ThreadMessage.objects.filter(sender_session=chat).exists()
+    [waiting] = pending_outputs(voice.pk)
+    assert waiting["message_id"] == str(root.pk) and waiting["status"] == "waiting"
+    assert claim_output(voice.pk, "text-claim", thread_update_event(voice.pk, waiting), waiting)
+    assert pending_outputs(voice.pk) == []
     call = chat.structured_calls.get()
     ids = [item["id"] for item in call.metadata["pending_approvals"]]
     endpoint = f"/api/sessions/{chat.pk}/approvals"
@@ -176,6 +184,13 @@ def test_alternate_uses_real_normal_approval_and_child_identity(text_voice, use_
     if approve:
         assert children.get().metadata["voice_event_id"] == root.metadata["voice_event_id"]
         assert children.get().metadata["parent_thread_message"] == str(root.pk)
+        child = children.get()
+        deliver(child)
+        child_outcome = next(row for row in pending_outputs(voice.pk) if row["message_id"] == str(child.pk))
+        assert child_outcome["update_id"] == f"thread:{child.pk}:answered"
+        assert child_outcome["event_id"] == root.metadata["voice_event_id"]
+    root_outcome = next(row for row in pending_outputs(voice.pk) if row["message_id"] == str(root.pk))
+    assert root_outcome["status"] == "answered" and "update_id" not in root_outcome
     assert post(client, endpoint, {"approve": True, "approval_ids": ids}).status_code == 409
 
 
@@ -261,16 +276,14 @@ def test_verified_result_is_silent_until_gap_correlated_once_and_not_replayed(te
             return None
 
         assistant.observe_output = played
-        snapshot = await sync_to_async(realtime_voice.bridge_state)(voice.pk, include_briefing=False)
         with patch.object(TextAssistant, "session", new_callable=PropertyMock, return_value=Output()):
             assistant.user_speaking = True
-            await assistant.deliver_results(snapshot)
+            await assistant.deliver_results()
             assert said == []
             assistant.user_speaking = False
-            await assistant.deliver_results(snapshot)
-            await assistant.deliver_results(snapshot)
+            await assistant.deliver_results()
+            await assistant.deliver_results()
             assert said == ["Verified result: cobalt-spoon."]
-        return snapshot
 
     async_to_sync(scenario)()
     [binding] = voice.native_ledger.filter(namespace="text_output")
@@ -320,11 +333,7 @@ def test_barge_in_interrupts_audio_not_accepted_work_and_keeps_new_turn(text_voi
                 stopped.set()
 
         with patch.object(TextAssistant, "session", new_callable=PropertyMock, return_value=Output()):
-            delivery = asyncio.create_task(
-                assistant.deliver_results(
-                    await sync_to_async(realtime_voice.bridge_state)(voice.pk, include_briefing=False)
-                )
-            )
+            delivery = asyncio.create_task(assistant.deliver_results())
             await asyncio.wait_for(begun.wait(), timeout=3)
             assistant.user_state_changed(SimpleNamespace(new_state="speaking"))
             await asyncio.wait_for(delivery, timeout=3)
@@ -373,3 +382,128 @@ def test_speech_cost_uses_known_billing_basis_and_missing_usage_is_unknown(
     assert row.cost_usd == (Decimal(expected) if expected else None)
     assert row.metadata["synthesis"]["unpriced"] is (expected is None)
     assert row.metadata["synthesis"]["cancelled"] is True
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("model", ["tts-1", "tts-1-hd"])
+def test_model_specific_unsupported_voice_cannot_enable_spending(text_voice, settings, model):
+    chat, _, voice = text_voice
+    settings.REALTIME_VOICE_TEXT_AGENT_TTS_MODEL = model
+    settings.REALTIME_VOICE_TEXT_AGENT_TTS_VOICE = "ballad"
+    settings.REALTIME_VOICE_TEXT_AGENT_MEDIA_AUTHORIZATIONS[str(chat.pk)].update(tts_model=model, tts_voice="ballad")
+    assert not availability(chat, chat.user)["enabled"]
+    with pytest.raises(HttpError):
+        realtime_voice.create_session(
+            SimpleNamespace(auth=chat.user), realtime_voice.CreateIn(chat_id=str(chat.pk), mode="text_agent")
+        )
+    assert not voice.delegations.exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_oldest_unannounced_answer_is_spoken_after_more_than_restore_window_requests(text_voice, use_bots):
+    pytest.importorskip("livekit.agents")
+    from ergonaut.apps.bots.models import RealtimeVoiceDelegation
+    from ergonaut.realtime_voice_outbox import thread_update_event
+    from ergonaut.realtime_voice_text_bridge import TextAssistant
+
+    chat, _, voice = text_voice
+    # Completed/announced history precedes an outstanding root, followed by a
+    # full restore window of newer requests. Neither bounded projection contains it.
+    prior = ThreadMessage.objects.bulk_create(
+        [
+            ThreadMessage(
+                recipient_session=chat,
+                text=f"Prior request {index}",
+                status="answered",
+                reply_text="Already announced.",
+                metadata={
+                    "voice_session_id": str(voice.pk),
+                    "voice_event_id": f"prior-{index}",
+                    "voice_execution_mode": "normal_thread",
+                },
+            )
+            for index in range(100)
+        ]
+    )
+    RealtimeVoiceDelegation.objects.bulk_create(
+        [
+            RealtimeVoiceDelegation(session=voice, event_id=row.metadata["voice_event_id"], text=row.text, message=row)
+            for row in prior
+        ]
+    )
+    for row in prior:
+        task = {
+            "message_id": str(row.pk),
+            "event_id": row.metadata["voice_event_id"],
+            "status": "answered",
+            "result": row.reply_text,
+        }
+        assert claim_output(voice.pk, "text-claim", thread_update_event(voice.pk, task), task)
+    use_bots(say("The oldest accepted request finally completed."))
+    oldest = submit(voice, "oldest")
+    for index in range(100):
+        submit(voice, f"newer-{index}", f"Later distinct request {index}")
+    deliver(oldest)
+    # The public restore projection must not relabel older roots as child tasks.
+    snapshot = realtime_voice.bridge_state(voice.pk, include_briefing=False)
+    assert snapshot["thread_updates"] == []
+
+    async def scenario():
+        assistant = TextAssistant(str(voice.pk), "text-claim", None, None)
+        assistant.recognizer = SimpleNamespace(pending=0)
+        said = []
+
+        class Output:
+            def say(self, text, **_):
+                said.append(text)
+                return None
+
+        async def played(*_):
+            return None
+
+        assistant.observe_output = played
+        with patch.object(TextAssistant, "session", new_callable=PropertyMock, return_value=Output()):
+            await assistant.deliver_results()
+        assert said == ["The oldest accepted request finally completed."]
+
+    async_to_sync(scenario)()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_end_between_output_claim_and_authoritative_event_write_never_starts_tts(text_voice, use_bots, monkeypatch):
+    pytest.importorskip("livekit.agents")
+    from ergonaut import realtime_voice_text_bridge as bridge
+
+    _, _, voice = text_voice
+    use_bots(say("Verified result retained after End."))
+    root = submit(voice, "ending")
+    deliver(root)
+    original_claim = bridge.claim_output
+
+    def claim_then_end(*args):
+        claimed = original_claim(*args)
+        if claimed:
+            realtime_voice.end_voice_session(voice.pk)
+        return claimed
+
+    monkeypatch.setattr(bridge, "claim_output", claim_then_end)
+
+    async def scenario():
+        assistant = bridge.TextAssistant(str(voice.pk), "text-claim", None, None)
+        assistant.recognizer = SimpleNamespace(pending=0)
+        said = []
+
+        class Output:
+            def say(self, text, **_):
+                said.append(text)
+                return None
+
+        async def played(*_):
+            return None
+
+        assistant.observe_output = played
+        with patch.object(bridge.TextAssistant, "session", new_callable=PropertyMock, return_value=Output()):
+            await assistant.deliver_results()
+        assert said == []
+
+    async_to_sync(scenario)()

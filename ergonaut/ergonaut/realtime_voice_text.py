@@ -9,16 +9,23 @@ from decimal import Decimal
 
 from django.conf import settings
 from django.db import transaction
+from django.db.models import CharField, Exists, OuterRef, Q
+from django.db.models.fields.json import KeyTextTransform
+from django.db.models.functions import Cast
 from django_ergo.bots import messaging
 from django_ergo.conversation.identity import django_user_identity
-from django_ergo.conversation.models import StructuredCall, StructuredCallStatus
+from django_ergo.conversation.models import StructuredCall, StructuredCallStatus, ThreadMessage
 
 from ergonaut.apps.bots.models import RealtimeVoiceDelegation, RealtimeVoiceLedgerEntry, RealtimeVoiceSession
 from ergonaut.realtime_voice_execution import configured_authorization, session_authorization
 
 # Supported by the pinned livekit-plugins-openai 1.8.11, never inferred defaults.
-TTS_MODELS = {"tts-1", "tts-1-hd", "gpt-4o-mini-tts"}
-TTS_VOICES = {"alloy", "ash", "ballad", "coral", "echo", "fable", "onyx", "nova", "sage", "shimmer"}
+TTS_LEGACY_VOICES = {"alloy", "ash", "coral", "echo", "fable", "onyx", "nova", "sage", "shimmer"}
+TTS_MODEL_VOICES = {
+    "tts-1": TTS_LEGACY_VOICES,
+    "tts-1-hd": TTS_LEGACY_VOICES,
+    "gpt-4o-mini-tts": TTS_LEGACY_VOICES | {"ballad"},
+}
 
 
 def media_authorization(chat, user):
@@ -34,7 +41,7 @@ def media_authorization(chat, user):
         )
     model = getattr(settings, "REALTIME_VOICE_TEXT_AGENT_TTS_MODEL", "")
     voice = getattr(settings, "REALTIME_VOICE_TEXT_AGENT_TTS_VOICE", "")
-    if model not in TTS_MODELS or voice not in TTS_VOICES:
+    if voice not in TTS_MODEL_VOICES.get(model, ()):
         raise ValueError("Configure an explicitly supported OpenAI TTS model and voice; neither has a default.")
     policies = getattr(settings, "REALTIME_VOICE_TEXT_AGENT_MEDIA_AUTHORIZATIONS", {})
     policy = policies.get(str(chat.pk)) if isinstance(policies, dict) else None
@@ -214,6 +221,66 @@ def fail_utterance(voice_id, claim_id, utterance_id):
         )
 
 
+def pending_outputs(voice_id):
+    """Read a bounded batch of unannounced outcomes, never the bounded restore window."""
+    session = RealtimeVoiceSession.objects.get(pk=voice_id)
+    if session.status != "active":
+        return []
+    bindings = (
+        session.native_ledger.filter(namespace="text_output")
+        .annotate(
+            bound_message=KeyTextTransform("message_id", "data"),
+            bound_status=KeyTextTransform("status", "data"),
+        )
+        .filter(
+            bound_message=Cast(OuterRef("pk"), CharField()),
+            bound_status=OuterRef("status"),
+        )
+    )
+    # Only normal, causally linked, same-owner work touching this exact thread.
+    # Root membership is authoritative even when its request left the history window.
+    roots = session.delegations.filter(event_id=OuterRef("root_event"))
+    rows = list(
+        ThreadMessage.objects.filter(
+            metadata__voice_session_id=str(session.pk),
+            metadata__voice_execution_mode="normal_thread",
+            recipient_session__user_id=session.user_id,
+            status__in=("waiting", "answered", "failed"),
+        )
+        .filter(Q(sender_session=session.chat) | Q(recipient_session=session.chat))
+        .filter(Q(sender_session__isnull=True) | Q(sender_session__user_id=session.user_id))
+        .annotate(
+            root_event=KeyTextTransform("voice_event_id", "metadata"),
+            authorized_root=Exists(roots),
+            output_claimed=Exists(bindings),
+        )
+        .filter(
+            authorized_root=True,
+            output_claimed=False,
+        )
+        .select_related("recipient_session")
+        .order_by("created_at", "pk")[:32]
+    )
+    root_messages = set(
+        session.delegations.filter(message_id__in=[row.pk for row in rows]).values_list("message_id", flat=True)
+    )
+    return [
+        {
+            "message_id": str(row.pk),
+            "event_id": row.metadata["voice_event_id"],
+            **({} if row.pk in root_messages else {"update_id": f"thread:{row.pk}:{row.status}"}),
+            "text": row.text[:500],
+            "status": row.status,
+            "result": row.reply_text[:4000],
+            "error": row.error[:4000],
+            "execution_mode": "normal_thread",
+            "chat_id": str(row.recipient_session_id),
+            "observation": False,
+        }
+        for row in rows
+    ]
+
+
 def claim_output(voice_id, claim_id, event, task):
     from ergonaut.realtime_voice_outbox import claim_announcement
 
@@ -228,6 +295,8 @@ def claim_output(voice_id, claim_id, event, task):
             defaults={
                 "identity": identity,
                 "data": {
+                    "message_id": task["message_id"],
+                    "status": task["status"],
                     "root_event_id": task["event_id"],
                     "task_identity": task.get("update_id", f"root:{task['event_id']}"),
                     "result_event_id": event.event_id,

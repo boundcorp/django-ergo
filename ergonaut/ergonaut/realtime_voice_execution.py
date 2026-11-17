@@ -163,7 +163,8 @@ def thread_updates(session, delegations):
             | Q(recipient_session=session.chat, metadata__has_key="worker", created_at__gte=session.created_at)
         )
         .filter(Q(sender_session=session.chat) | Q(recipient_session=session.chat))
-        .exclude(pk__in=[delegation.message_id for delegation in normal])
+        # Root identity survives eviction from the bounded restore projection.
+        .exclude(voice_delegation__session=session)
         .select_related("recipient_session", "sender_session")
         .order_by("created_at", "id")[:100]
     )

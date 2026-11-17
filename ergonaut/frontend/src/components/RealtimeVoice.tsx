@@ -1048,8 +1048,8 @@ export function VoicePage() {
             </p>
             {displayedMode === 'text_agent' ? (
               <p>
-                Speech transcription → this thread's normal assistant/tools → spoken verified results. Transcripts and
-                identified task outcomes appear below; audio receipt and hearing remain unverified.
+                AI-generated speech: transcription → this thread's normal assistant/tools → spoken verified results.
+                Transcripts and identified task outcomes appear below; audio receipt and hearing remain unverified.
               </p>
             ) : (
               <p>

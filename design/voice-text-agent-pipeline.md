@@ -13,6 +13,15 @@ Checkpoint: November 17, 2026; baseline `7433edf`. Draft source only; no merge, 
 
 No protocol fallback: missing alternate media configuration denies alternate Start instead of silently using GPT-Live, changing models, creating keys or using browser speech APIs. Alternate selection is explicit before connecting and fixed for the logical session, including manual resume. Native remains default; choosing an alternate call must never mutate the native interpreter grant.
 
+Provider clarification during independent review: the current Speech API guide
+deprecates the pinned TTS models with shutdown scheduled January 6, 2027. This
+adapter is not a six-month provider-availability promise; a Realtime successor
+requires a different, explicitly reviewed protocol, never a substituted Speech
+API model alias. Model-specific voices, separate media consent, prices, memory
+headroom and this sunset must be checked in the
+[current activation contract](../docs/realtime-voice.md#configuration-and-distinct-spending-consent).
+
+
 ## Automatic turns and durable identity
 
 Use the separate pipeline `owner microphone -> Silero-finalized audio utterance -> existing STT helper -> durably identified normal originating-thread request -> exact verified result -> TTS`. No LLM runs inside this voice adapter. The originating bot does all interpretation, conversation and tool use.

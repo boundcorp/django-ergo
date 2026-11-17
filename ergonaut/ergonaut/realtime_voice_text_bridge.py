@@ -35,6 +35,7 @@ from ergonaut.realtime_voice_text import (
     claim_output,
     fail_utterance,
     finish_utterance,
+    pending_outputs,
     record_synthesis,
     require_session,
 )
@@ -144,8 +145,8 @@ class TextAssistant(Agent):
             {"user_state": self.user_state, "agent_state": self.agent_state, "observed_at": self.observed_at},
         )
 
-    async def deliver_results(self, snapshot):
-        for task in [*snapshot["delegations"], *snapshot.get("thread_updates", [])]:
+    async def deliver_results(self):
+        for task in await sync_to_async(pending_outputs)(self.voice_id):
             event = await sync_to_async(thread_update_event)(self.voice_id, task)
             if event is None or task["status"] in ("queued", "delivered"):
                 continue
@@ -156,7 +157,7 @@ class TextAssistant(Agent):
                 continue
             speech_id = f"spoken:{event.event_id}"
             interrupted = self.closed or self.user_speaking or self.generation != generation
-            await sync_to_async(record_event)(
+            published = await sync_to_async(record_event)(
                 self.voice_id,
                 speech_id,
                 "assistant",
@@ -166,6 +167,8 @@ class TextAssistant(Agent):
             )
             # Recording can yield while new speech or End changes the boundary.
             interrupted = interrupted or self.closed or self.user_speaking or self.generation != generation
+            if published is None:
+                return
             if interrupted:
                 continue
             handle = self.session.say(event.text, allow_interruptions=True, add_to_chat_ctx=False)
@@ -209,7 +212,11 @@ async def text_voice_session(ctx, voice_id, claim_id, snapshot):
     speech = openai.TTS(model=grant["tts_model"], voice=grant["tts_voice"], base_url=effective_openai_base_url())
     try:
         session = AgentSession(
-            vad=silero.VAD.load(),
+            # Retain eligible long utterances; any actual overflow now exceeds
+            # the existing recording limit and is rejected before transcription.
+            vad=silero.VAD.load(max_buffered_speech=settings.VOICE_TRANSCRIPTION_MAX_DURATION + 1),
+            # SDK warmup otherwise sends silence to STT during early barge-in.
+            aec_warmup_duration=None,
             turn_handling={
                 "turn_detection": "vad",
                 "interruption": {"enabled": True, "mode": "vad"},
@@ -271,10 +278,7 @@ async def text_voice_session(ctx, voice_id, claim_id, snapshot):
 
         async def results():
             while not disconnected.is_set():
-                current = await sync_to_async(bridge_state)(voice_id, include_briefing=False)
-                if current["status"] != "active":
-                    return
-                await assistant.deliver_results(current)
+                await assistant.deliver_results()
                 await asyncio.sleep(0.25)
 
         watcher = asyncio.create_task(results())

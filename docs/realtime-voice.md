@@ -38,11 +38,19 @@ approval waits and terminal results have at most one durable speech attempt at a
 conversational gap. Interrupted, late or unplayed outcomes remain accessible in
 the originating thread/session. Crash-after-claim may lose an announcement, not
 the result, and resume never automatically repeats a previously claimed result.
+Unannounced outcomes are queried from the canonical durable work rows independently
+of the bounded history window, in bounded batches; old roots never become children
+merely because their transcript/request left the restore projection.
 The spoken/transcript projection is bounded to the existing 4,000-character event
 size; full normal answers remain in the thread.
 
 Only the initiating owner's microphone track enters STT; room/assistant output
 tracks never feed it. Browser echo cancellation is explicit in this mode.
+SDK AEC warmup input suppression is disabled so early barge-in audio reaches STT,
+not silence. Silero buffering covers the existing recording allowance; an actual
+overflow exceeds that allowance and is rejected, never automatically submitted as
+a truncated request. At a one-hour recording bound and 16 kHz, each SDK VAD stream
+can reserve about 110 MiB; account for both recognition streams before activation.
 That prevents digital feedback wiring, **not proof of perfect acoustic echo
 rejection**, semantic turn boundaries or physical-device behavior. There is no
 new fixed call duration or lifetime request cap. Existing transcription service
@@ -59,7 +67,7 @@ The alternate additionally requires the existing transcription flag/key and:
 | --- | --- | --- |
 | `REALTIME_VOICE_TEXT_AGENT_ENABLED` | `false` | Explicit alternate enablement |
 | `REALTIME_VOICE_TEXT_AGENT_TTS_MODEL` | empty | `tts-1`, `tts-1-hd` or `gpt-4o-mini-tts`, as listed by pinned SDK 1.8.11 |
-| `REALTIME_VOICE_TEXT_AGENT_TTS_VOICE` | empty | `alloy`, `ash`, `ballad`, `coral`, `echo`, `fable`, `onyx`, `nova`, `sage` or `shimmer` |
+| `REALTIME_VOICE_TEXT_AGENT_TTS_VOICE` | empty | `alloy`, `ash`, `coral`, `echo`, `fable`, `onyx`, `nova`, `sage` or `shimmer`; `ballad` additionally with `gpt-4o-mini-tts` only |
 | `REALTIME_VOICE_TEXT_AGENT_MEDIA_AUTHORIZATIONS` | `{}` | Reviewed JSON policy keyed by exact originating chat UUID |
 
 Each policy requires exact `owner` username, `bot`, `stt_model` equal to existing
@@ -70,6 +78,15 @@ The STT helper's existing priced choices are `gpt-transcribe`,
 configuration. New sessions snapshot this media grant; later changes fail closed,
 not silently upgrade old sessions. The normal-task/follow-up grant is checked
 independently and is never reset or widened by mode selection.
+
+**Provider sunset:** OpenAI's [current Speech API guide](https://developers.openai.com/api/docs/guides/text-to-speech)
+deprecates all three listed TTS models and schedules shutdown on **January 6,
+2027**. They remain the pinned adapter's current workflow, not a six-month
+availability promise. The provider's suggested `gpt-realtime-2.1-mini` successor
+requires a **different Realtime API workflow** and is not a valid `/audio/speech`
+model alias. No such protocol migration, new media cost approval or silent fallback
+is included here. Revalidate provider availability and the sunset before any activation.
+
 
 No new provider or key provisioning is needed: reuse the existing OpenAI secret
 through its normal access route. Native interpreter approval is **not** this
