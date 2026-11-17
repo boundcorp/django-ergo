@@ -96,6 +96,28 @@ def _record_worker_event(
         logger.debug("Could not schedule worker lifecycle event")
 
 
+def _voice_origin_metadata(worker: Worker) -> dict:
+    origin = worker.originating_message
+    if origin is None or origin.recipient_session_id != worker.session_id:
+        return {}
+    metadata = origin.metadata or {}
+    keys = (
+        "voice_session_id",
+        "voice_event_id",
+        "voice_execution_mode",
+        "tool_execution_policy",
+        "model_retry_policy",
+    )
+    if metadata.get("voice_execution_mode") != "normal_thread" or not all(
+        metadata.get(key) for key in keys
+    ):
+        return {}
+    return {
+        **{key: metadata[key] for key in keys},
+        "parent_thread_message": str(origin.pk),
+    }
+
+
 def _queue_event(worker: Worker) -> None:
     # The persisted next-poll timestamp identifies the durable scheduling request.
     try:
@@ -172,6 +194,7 @@ class WorkerContext:
             source_label=f"Worker: {self.worker.title}",
             registry=self.bot.registry,
             metadata={
+                **_voice_origin_metadata(self.worker),
                 **(
                     {"recurring_origin": str(self.worker.recurring_origin)}
                     if self.worker.recurring_origin
@@ -314,7 +337,9 @@ def start(  # noqa: PLR0913
     from django.utils import timezone
 
     from django_ergo.bots.messaging import current_thread_message
+    from django_ergo.conversation.models import ThreadMessage
     from django_ergo.conversation.models import Worker
+    from django_ergo.conversation.structured import current_call
 
     if ":" not in function:
         function = f"task:{function}"
@@ -327,6 +352,19 @@ def start(  # noqa: PLR0913
     recurring_origin = metadata.get("recurring_wake") or metadata.get(
         "recurring_origin"
     )
+    # Bind the exact executing turn, never whichever unrelated turn happens to
+    # be latest in this chat. The FK survives process changes and state resets.
+    call = current_call.get()
+    call_metadata = (call.metadata or {}) if call else {}
+    origin = None
+    if (
+        call
+        and call.session_id == session.pk
+        and call_metadata.get("voice_execution_mode") == "normal_thread"
+    ):
+        origin = ThreadMessage.objects.filter(
+            pk=call_metadata.get("thread_message"), recipient_session=session
+        ).first()
     with transaction.atomic():
         worker = Worker.objects.create(
             session=session,
@@ -336,6 +374,7 @@ def start(  # noqa: PLR0913
             args=dict(args),
             notify=notify,
             recurring_origin=recurring_origin or None,
+            originating_message=origin,
             state=dict(state or {}),
             next_poll_at=timezone.now(),
         )
@@ -651,6 +690,7 @@ def _finish(worker: Worker, status: str, result: Any, error: str) -> None:
         source_label=f"Worker: {worker.title}",
         registry=registry,
         metadata={
+            **_voice_origin_metadata(worker),
             **(
                 {"recurring_origin": str(worker.recurring_origin)}
                 if worker.recurring_origin

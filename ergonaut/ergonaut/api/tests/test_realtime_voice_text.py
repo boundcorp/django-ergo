@@ -507,3 +507,153 @@ def test_end_between_output_claim_and_authoritative_event_write_never_starts_tts
         assert said == []
 
     async_to_sync(scenario)()
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("ended", [False, True])
+@pytest.mark.parametrize("child", [False, True])
+def test_normal_worker_completion_keeps_durable_root_after_its_state_is_replaced(
+    text_voice, bot_folder, use_bots, settings, ended, child
+):
+    from django_ergo.bots import webhooks, workers
+    from django_ergo.conversation.models import Worker
+
+    from ergonaut.realtime_voice_text import pending_outputs
+
+    chat, target, voice = text_voice
+    tools = bot_folder / "tools" / "pantry.py"
+    tools.write_text(
+        tools.read_text()
+        + """
+from django_ergo.bots import bot_task
+
+@bot_task
+def finish_later(ctx):
+    ctx.state.clear()
+    return "Verified worker result: cobalt-spoon."
+
+@bot_tool(takes_context=True)
+def launch_later(ctx):
+    return str(ctx.workers.start("finish_later", title="Disposable voice worker").pk)
+
+@bot_tool(takes_context=True)
+def request_child(ctx, thread_id: str):
+    from django_ergo.bots.messaging import send
+    from django_ergo.conversation.models import ConversationSession
+    target = ConversationSession.objects.get(pk=thread_id)
+    return str(send(ctx.session, target, "Start the disposable worker.", registry=ctx.bot.registry).pk)
+"""
+    )
+    held_workers = []
+    settings.DJANGO_ERGO = {
+        **settings.DJANGO_ERGO,
+        "WORKER_RUNNER": lambda identity, delay: held_workers.append(identity),
+    }
+    responses = [
+        tool_call("launch_later", {}),
+        say("The worker is running."),
+        say("Verified worker result: cobalt-spoon."),
+    ]
+    if child:
+        responses[:0] = [
+            tool_call("request_child", {"thread_id": str(target.pk)}),
+            say("The child thread has the request."),
+        ]
+    use_bots(*responses)
+    root = submit(voice, "worker-root", "Start the disposable background worker.")
+    deliver(root)
+    origin = root
+    if child:
+        origin = ThreadMessage.objects.get(sender_session=chat, recipient_session=target)
+        deliver(origin)
+    [worker_id] = held_workers
+    worker = Worker.objects.get(pk=worker_id)
+    if ended:
+        realtime_voice.end_voice_session(voice.pk)
+    assert workers.run(worker_id, webhooks.get_registry()) == "completed"
+    notification = ThreadMessage.objects.get(metadata__worker=worker_id, metadata__worker_finished=True)
+    assert notification.metadata["voice_session_id"] == str(voice.pk)
+    assert notification.metadata["voice_event_id"] == root.metadata["voice_event_id"]
+    assert notification.metadata["parent_thread_message"] == str(origin.pk)
+    assert notification.metadata["message_author"]["kind"] == "system"
+    assert notification.metadata["message_author"]["ref"] == f"worker:{worker.pk}"
+    deliver(notification)
+    assert notification.status == "answered" and "cobalt-spoon" in notification.reply_text
+    restored = realtime_voice.session_out(voice)
+    update = next(row for row in restored["thread_updates"] if row["update_id"] == f"thread:{notification.pk}:answered")
+    assert update["event_id"] == root.metadata["voice_event_id"] and update["observation"] is False
+    worker.refresh_from_db()
+    assert worker.state == {} and worker.status == "completed"
+    if ended:
+        assert pending_outputs(voice.pk) == []
+    else:
+        outcome = next(row for row in pending_outputs(voice.pk) if row["message_id"] == str(notification.pk))
+        assert outcome["event_id"] == root.metadata["voice_event_id"]
+        assert outcome["update_id"] == f"thread:{notification.pk}:answered"
+        assert outcome["result"] == notification.reply_text
+
+
+@pytest.mark.django_db(transaction=True)
+def test_owner_disconnect_rejects_drained_stt_but_preserves_previously_accepted_work(text_voice, use_bots, monkeypatch):
+    pytest.importorskip("livekit.agents")
+    from livekit import rtc
+    from livekit.agents import APIConnectOptions, APIError
+
+    from ergonaut import realtime_voice_text_bridge as bridge
+
+    chat, _, voice = text_voice
+    use_bots(say("The accepted task survived transport loss."))
+    accepted = submit(voice, "before-transport-loss")
+
+    async def scenario():
+        started, release = asyncio.Event(), asyncio.Event()
+        room = rtc.Room()
+        observations = {}
+
+        async def transcribe(*_args, **_kwargs):
+            started.set()
+            await release.wait()
+            return SimpleNamespace(text="Late drained speech must not start work.", usage=None)
+
+        class DrainingSession:
+            current_speech = None
+
+            def __init__(self, **_):
+                pass
+
+            def on(self, _event):
+                return lambda callback: callback
+
+            async def start(self, *, agent, **_):
+                frame = rtc.AudioFrame(data=bytes(4800), sample_rate=24000, num_channels=1, samples_per_channel=2400)
+                self.recognition = asyncio.create_task(
+                    agent.recognizer.recognize(buffer=frame, conn_options=APIConnectOptions(max_retry=0))
+                )
+                await started.wait()
+                room.emit("participant_disconnected", SimpleNamespace(identity=f"user-{chat.user_id}"))
+
+            async def aclose(self):
+                observations["status_before_drain"] = await sync_to_async(
+                    lambda: RealtimeVoiceSession.objects.get(pk=voice.pk).status
+                )()
+                release.set()
+                try:
+                    await self.recognition
+                except APIError:
+                    observations["rejected"] = True
+
+        async def connected():
+            pass
+
+        monkeypatch.setattr(bridge, "openai_transcription", transcribe)
+        monkeypatch.setattr(bridge, "AgentSession", DrainingSession)
+        ctx = SimpleNamespace(room=room, connect=connected, shutdown=lambda **_: None)
+        await bridge.text_voice_session(ctx, str(voice.pk), "text-claim", {"user_id": chat.user_id})
+        assert observations["status_before_drain"] == "ended"
+        assert observations.get("rejected") is True
+
+    async_to_sync(scenario)()
+    assert voice.delegations.count() == 1
+    assert not voice.native_ledger.filter(namespace="text_turn", pending=True).exists()
+    deliver(accepted)
+    assert accepted.status == "answered" and "survived transport loss" in accepted.reply_text

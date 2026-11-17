@@ -1160,7 +1160,11 @@ and no inference from native captions. Mode selection is explicit before Start
 and immutable during the call. Its exact owner/chat/bot STT/TTS cost consent is
 separate from normal-task and native-interpreter approval; unavailable setup
 denies Start without protocol fallback. Interruption stops audio, not accepted
-normal work or normal action approvals. See
+normal work or normal action approvals.
+Normal workers started by those turns retain a durable originating-message
+binding through state resets and later system-authored completion notifications,
+including after End; apply core migration `0051_worker_originating_message`
+before running the updated source. See
 [setup and pricing](realtime-voice.md#configuration-and-distinct-spending-consent).
 
 The web entry is the originating thread's top-bar options → Voice call.

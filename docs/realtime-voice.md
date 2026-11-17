@@ -25,8 +25,9 @@ No authenticated interactive host-review principal is fabricated from speech.
 The durable identity binds logical session, bridge claim and finalized utterance.
 Same-identity replay returns the original receipt; conflicting text fails closed.
 Partial/native captions, transcript similarity and timing guesses cannot start
-work. End and admission serialize under the session lock. A late STT result,
-stale bridge, revoked consent or STT error cannot submit new work; accepted work
+work. End and admission serialize under the session lock. Transport loss closes
+local admission immediately and ends durable admission before SDK STT draining.
+A late STT result, stale bridge, revoked consent or STT error cannot submit new work; accepted work
 survives audio interruption, disconnect and End. Each normal request carries
 the existing voice at-most-once tool/never-automatic-model-retry policy.
 
@@ -41,6 +42,11 @@ the result, and resume never automatically repeats a previously claimed result.
 Unannounced outcomes are queried from the canonical durable work rows independently
 of the bounded history window, in bounded batches; old roots never become children
 merely because their transcript/request left the restore projection.
+Normal background workers retain their exact originating message in a nullable
+`Worker.originating_message` foreign key, independent of mutable worker state.
+Their system-authored updates and completion follow-ups carry the original
+root and execution restrictions, including causal child-thread work; unrelated
+worker observations cannot be attributed to an arbitrary voice request.
 The spoken/transcript projection is bounded to the existing 4,000-character event
 size; full normal answers remain in the thread.
 
@@ -61,6 +67,13 @@ permission to widen an existing media allowance.
 
 Keep the existing realtime kill switch, exact account allowlist, LiveKit room
 credentials and normal originating owner/chat/bot task/follow-up cost grant.
+
+Apply additive core migration `0051_worker_originating_message` before starting
+this source's web/workers/bridge. It preserves existing workers with a null
+origin and does not backfill guessed voice authority. No hosted migration was
+performed for this draft. Disabling the alternate gate requires no reverse
+migration and must not cancel accepted work.
+
 The alternate additionally requires the existing transcription flag/key and:
 
 | Setting | Default | Required value |

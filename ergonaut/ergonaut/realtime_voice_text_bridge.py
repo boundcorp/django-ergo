@@ -55,12 +55,15 @@ class OriginatingThreadSTT(stt.STT):
         super().__init__(capabilities=stt.STTCapabilities(streaming=False, interim_results=False))
         self.voice_id, self.claim_id = voice_id, claim_id
         self.pending = 0
+        self.accepting = True
 
     async def _recognize_impl(self, buffer, *, language, conn_options):
         # Assign before STT, independent of transcript content, time and SDK captions.
         utterance_id = uuid.uuid4().hex
         self.pending += 1
         try:
+            if not self.accepting:
+                raise ValueError("Audio admission has closed.")
             await sync_to_async(begin_utterance)(self.voice_id, self.claim_id, utterance_id)
             voice, grant = await sync_to_async(media_scope)(self.voice_id, self.claim_id)
             if not await sync_to_async(_charge)(voice.user):
@@ -82,6 +85,8 @@ class OriginatingThreadSTT(stt.STT):
             for audio, mime, name, seconds in chunks:
                 # Recheck consent at each media operation; no inferred approval or retries.
                 await sync_to_async(media_scope)(self.voice_id, self.claim_id)
+                if not self.accepting:
+                    raise ValueError("Audio admission has closed.")
                 response = await asyncio.wait_for(
                     openai_transcription(
                         audio,
@@ -97,6 +102,8 @@ class OriginatingThreadSTT(stt.STT):
                 )
                 texts.append(response.text)
             text = _join_transcripts(texts)
+            if not self.accepting:
+                raise ValueError("Audio admission has closed.")
             await asyncio.shield(sync_to_async(finish_utterance)(self.voice_id, self.claim_id, utterance_id, text))
             return stt.SpeechEvent(
                 type=stt.SpeechEventType.FINAL_TRANSCRIPT,
@@ -243,16 +250,19 @@ async def text_voice_session(ctx, voice_id, claim_id, snapshot):
     @ctx.room.on("participant_disconnected")
     def participant_left(participant):
         if participant.identity == owner and not tearing_down:
+            recognizer.accepting = False
             disconnected.set()
 
     @ctx.room.on("disconnected")
     def room_left(*_):
         if not tearing_down:
+            recognizer.accepting = False
             disconnected.set()
 
     @session.on("close")
     def session_closed(_):
         if not tearing_down:
+            recognizer.accepting = False
             disconnected.set()
 
     @session.on("user_state_changed")
@@ -310,6 +320,7 @@ async def text_voice_session(ctx, voice_id, claim_id, snapshot):
             except TimeoutError:
                 pass
     finally:
+        recognizer.accepting = False
         assistant.closed = True
         assistant.generation += 1
         tearing_down = True
@@ -317,17 +328,21 @@ async def text_voice_session(ctx, voice_id, claim_id, snapshot):
             watcher.cancel()
             await asyncio.gather(watcher, return_exceptions=True)
         try:
-            if session.current_speech:
-                session.interrupt(force=True)
-            await session.aclose()
-            if assistant.outputs:
-                await asyncio.gather(*assistant.outputs, return_exceptions=True)
+            try:
+                # End admission before SDK close drains final STT. Previously
+                # accepted normal work continues independently of this call.
+                if not standby or disconnected.is_set():
+                    await sync_to_async(end_bridge_session)(voice_id, claim_id)
+            finally:
+                if session.current_speech:
+                    session.interrupt(force=True)
+                await session.aclose()
+                if assistant.outputs:
+                    await asyncio.gather(*assistant.outputs, return_exceptions=True)
         finally:
             await asyncio.gather(speech.aclose(), recognizer.aclose(), ctx.room.disconnect(), return_exceptions=True)
             if accounting:
                 await asyncio.gather(*accounting, return_exceptions=True)
             if standby and not disconnected.is_set():
                 await sync_to_async(finish_standby_close)(voice_id, claim_id, audio_uncertain=True)
-            else:
-                await sync_to_async(end_bridge_session)(voice_id, claim_id)
             ctx.shutdown(reason="text-agent voice bridge closed")

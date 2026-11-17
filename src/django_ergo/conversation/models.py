@@ -628,6 +628,14 @@ class Worker(TimeStampedMixin):
     # Restricts renewal after a recurring turn's worker result, even if its
     # originating schedule has since been deleted.
     recurring_origin = models.UUIDField(null=True, blank=True)
+    # Causal identity is independent of mutable worker-owned state.
+    originating_message = models.ForeignKey(
+        "ThreadMessage",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="started_workers",
+    )
     polls = models.PositiveIntegerField(default=0)
     next_poll_at = models.DateTimeField(null=True, blank=True)
     # Set while one step runs, so a late or duplicate runner call skips it.

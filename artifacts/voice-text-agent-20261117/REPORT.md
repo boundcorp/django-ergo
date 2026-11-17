@@ -15,12 +15,13 @@ November 17, 2026. Draft source only; no activation, merge, deployment, real-own
 
 | Surface | Observed evidence |
 | --- | --- |
-| Backend native/alternate/dictation regressions | **206 passed** on the initial candidate; final revised alternate-only rerun **24 passed**, including model/voice eligibility, old unannounced outcomes outside both restore windows, approval-wait-to-terminal/root/child identities, End/publication race and UNKNOWN synthesis usage |
+| Final backend native/alternate/dictation/worker/import-layer regressions | **249 passed, 1 skipped**, including 29 alternate cases covering model/voice eligibility, old unannounced outcomes outside both restore windows, approval/root/child identities, synthesis UNKNOWN usage, normal root/child worker completion after state reset and End, and disconnect/STT draining |
 | Frontend production build | TypeScript + Vite passed; existing >500kB chunk warning remains |
 | Frontend regressions | Full suite **393 passed**, 1,643 assertions; the voice/composer subset separately passed **107 cases**, 514 assertions, covering explicit alternate selection, unavailable spending gate, immutable active mode and existing recorder Stop/Send behavior. Existing React `act` warnings remain |
 | Standalone actual installed SDK + disposable PostgreSQL + isolated Redis/Celery | Actual AgentSession/Silero consumed synthetic local PCM; **2 finalized STT batches**, **2 real broker-delivered normal tasks**, **1 actual OpenAI plugin HTTP/PCM fixture request**, **960 output samples** before interruption, **2 audio buffer clears**, verified second result after End |
 | Actual alternate session disconnect branch | Real `text_voice_session`/AgentSession with offline Room boundary fixture ended on owner disconnect, closed media resources and left the accepted normal request queued; real broker delivery then completed and its verified result remained recoverable after disconnect |
 | Final revised result-consumer runtime | Actual normal handler, disposable PostgreSQL and installed AgentSession/OpenAI TTS HTTP fixture: one normal request, one unannounced root selected, one speech attempt, zero pending outcomes afterward, complete 2,400-sample fixture PCM retained within 2,880 SDK output samples, original context/root identity and usage-only synthesis cost record preserved |
+| Final worker and disconnect-boundary runtime | Standalone disposable PostgreSQL, actual normal bot/tool/worker/follow-up and AgentSession/OpenAI HTTP fixture: worker completed, exact root retained, **1 TTS request**, full fixture PCM retained in **2,880 output samples**. Actual Silero/AgentSession consumed locally synthesized PCM while STT was held across owner disconnect: durable state **ended before SDK drain**, **0 late requests**, prior accepted task **answered after disconnect** |
 | Actual Chromium, 390×844 | Native selected initially; alternate displayed actionable missing-consent/config reason with disabled Start and explicit AI-generated-voice disclosure; approved offline fixture submitted exactly `{chat_id: disposable-chat, mode: text_agent}`, made one deliberately denied token request, hid the active-session selector and retained its mode; **0 capture calls, 0 peer constructions** |
 
 These are offline parser/runtime/browser-state proofs, not real STT semantic accuracy, provider generation entitlement, physical speaker/microphone/Bluetooth behavior or hearing acceptance. Synthetic STT text and HTTP audio fixtures substitute only for external media/model transports; the normal database/queue/bot/tool/approval code is real. Scripted bot results use the repository's existing fake provider transport, never a real account's tasks.
@@ -57,6 +58,7 @@ selection. All revised alternate regressions then passed. No paid transport ran.
 - Pinned SDK-listed TTS choices: `tts-1`, `tts-1-hd`, `gpt-4o-mini-tts`; shared legacy voices `alloy`, `ash`, `coral`, `echo`, `fable`, `onyx`, `nova`, `sage`, `shimmer`, with `ballad` accepted only for mini-TTS. New model and voice settings are empty by default; no invented default alias.
 - [Published OpenAI pricing](https://developers.openai.com/api/docs/pricing), inspected read-only: existing default STT **$0.0045/input minute**; mini-STT estimated **$0.003/input minute**; Whisper **$0.006/input minute**; `tts-1` **$15/million characters**; `tts-1-hd` **$30/million characters**; mini-TTS **$0.60/million text input tokens + $12/million audio output tokens**. Normal bot/tool and LiveKit costs are additional; no maximum full-stack spend or remaining shared allowance is claimed.
 - Before activation: existing realtime enablement/account allowlist, LiveKit credentials, existing OpenAI/STT configuration, reviewed exact normal-task and intentional follow-up authorization, explicit TTS model/voice, and **separate** exact originating chat/owner/bot `stt_tts_costs_approved: true` policy matching all three model/voice fields and its own approval reference. Web and bridge must match; old session grants do not silently change.
+- Source additionally includes nullable core migration `0051_worker_originating_message`; apply it before the updated roles run. Existing workers remain null/unattributed, with no guessed backfill; disabling the alternate gate does not require schema reversal. Only disposable fixture databases were migrated with the new source; no hosted migration ran.
 - TTS stores usage-only estimates where billing basis exists and UNKNOWN cost when mini-TTS token data is absent. No audio is persisted. SDK/model listing or read-only metadata access is not evidence of generation entitlement, credit or account billing capacity.
 - Provider sunset: the [current Speech API guide](https://developers.openai.com/api/docs/guides/text-to-speech) deprecates these three TTS models with shutdown scheduled **January 6, 2027**. The proposed successor `gpt-realtime-2.1-mini` requires a different Realtime protocol, not a Speech API model alias. No automatic protocol substitution or additional spending authorization is included; revalidate this sunset before activation.
 
@@ -77,3 +79,16 @@ unclaimed-outcome query, rejected-event guard, recording-bound VAD buffering and
 disabled SDK input suppression address those boundaries without call/request caps.
 Failing-before authority regressions and actual-SDK audio-loss reproduction are
 retained in the revision evidence; final-head reruns/review are tracked in the PR.
+
+Re-review of `1bd4ead` confirmed those five corrections and found two additional
+P2 boundaries: worker completion lost normal voice causality, and owner disconnect
+could drain late STT while durable admission remained active. Both failed before
+their corrections. Workers now bind their exact executing message through an
+additive nullable FK, not user-mutable worker state or the latest chat turn;
+normal system-authored updates retain root/retry policy through completion and End.
+Disconnect closes local admission synchronously and durable admission before SDK
+drain, without cancelling accepted normal work. The standalone runtime above
+exercises both corrections with installed SDK code; its expected safe late-STT
+rejection logs no provider payload. A fixture initially omitted `takes_context=True`
+and a mixed-suite command used the wrong lifecycle filename; both harness errors
+were corrected without product workarounds.

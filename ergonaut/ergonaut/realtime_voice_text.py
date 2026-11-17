@@ -237,7 +237,7 @@ def pending_outputs(voice_id):
             bound_status=OuterRef("status"),
         )
     )
-    # Only normal, causally linked, same-owner work touching this exact thread.
+    # Only normal, causally linked, same-owner work under an exact accepted root.
     # Root membership is authoritative even when its request left the history window.
     roots = session.delegations.filter(event_id=OuterRef("root_event"))
     rows = list(
@@ -247,7 +247,6 @@ def pending_outputs(voice_id):
             recipient_session__user_id=session.user_id,
             status__in=("waiting", "answered", "failed"),
         )
-        .filter(Q(sender_session=session.chat) | Q(recipient_session=session.chat))
         .filter(Q(sender_session__isnull=True) | Q(sender_session__user_id=session.user_id))
         .annotate(
             root_event=KeyTextTransform("voice_event_id", "metadata"),

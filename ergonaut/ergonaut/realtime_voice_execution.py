@@ -6,6 +6,7 @@ reviewed policy and matching durable session grant are both required. Empty by d
 
 from django.conf import settings
 from django.db.models import Q
+from django.db.models.fields.json import KeyTextTransform
 from django.utils import timezone
 from django_ergo.conversation.models import ThreadMessage
 
@@ -150,7 +151,7 @@ def request_capacity(session):
 
 
 def thread_updates(session, delegations):
-    """Observe durable exact-thread work, not generated speech or a global owner scan."""
+    """Observe accepted causal work and labeled launch-thread worker observations."""
     normal = [d for d in delegations if (d.message.metadata or {}).get("voice_execution_mode") == "normal_thread"]
     if not normal:
         return []
@@ -158,11 +159,17 @@ def thread_updates(session, delegations):
     # Causal sends/replies propagate the root's identifiers. Existing worker reports
     # arriving in the launch chat are observations, explicitly not claimed as started by voice.
     rows = (
-        ThreadMessage.objects.filter(
-            Q(metadata__voice_session_id=str(session.pk))
-            | Q(recipient_session=session.chat, metadata__has_key="worker", created_at__gte=session.created_at)
+        ThreadMessage.objects.annotate(voice_root=KeyTextTransform("voice_event_id", "metadata"))
+        .filter(
+            Q(
+                metadata__voice_session_id=str(session.pk),
+                voice_root__in=session.delegations.values("event_id"),
+            )
+            | (
+                Q(recipient_session=session.chat, metadata__has_key="worker", created_at__gte=session.created_at)
+                & ~Q(metadata__has_key="voice_session_id")
+            )
         )
-        .filter(Q(sender_session=session.chat) | Q(recipient_session=session.chat))
         # Root identity survives eviction from the bounded restore projection.
         .exclude(voice_delegation__session=session)
         .select_related("recipient_session", "sender_session")

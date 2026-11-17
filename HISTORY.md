@@ -12,6 +12,8 @@ This document tracks the major milestones and evolution of the Django Ergo proje
 - Finalized audio identities retain durable normal request/result bindings;
   barge-in stops audio without cancelling accepted work. Native voice and separate
   composer dictation Stop/Send semantics remain unchanged.
+- Preserved causal normal-worker completion through a nullable originating-message
+  binding (migration `0051`), and closed disconnect admission before SDK STT drain.
 - Offline SDK/database/broker/browser proof is not paid entitlement, device
   acceptance or deployment authorization.
 
