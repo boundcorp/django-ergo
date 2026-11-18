@@ -165,10 +165,10 @@ def record_agent_usage(  # noqa: PLR0913
         AgentUsage.objects.update_or_create(
             worker=worker,
             model=model,
+            source=source,
             defaults={
                 "session": session,
                 "bot_name": worker.bot_name,
-                "source": source,
                 "agent": agent,
                 **{
                     f"{field}_tokens": int(usage.get(field) or 0)
@@ -180,6 +180,6 @@ def record_agent_usage(  # noqa: PLR0913
             },
         )
     if replace:
-        AgentUsage.objects.filter(worker=worker).exclude(
+        AgentUsage.objects.filter(worker=worker, source=source).exclude(
             model__in=list(models)
         ).delete()

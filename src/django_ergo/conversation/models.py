@@ -867,7 +867,8 @@ class AgentUsage(TimeStampedMixin):
     class Meta:
         constraints = [
             models.UniqueConstraint(
-                fields=["worker", "model"], name="agent_usage_worker_model"
+                fields=["worker", "model", "source"],
+                name="agent_usage_worker_model_source",
             )
         ]
         indexes = [models.Index(fields=["session", "last_at"])]

@@ -12,6 +12,7 @@ import hashlib
 import json
 import re
 import subprocess
+import sys
 from datetime import UTC
 from datetime import datetime
 from pathlib import Path
@@ -80,9 +81,14 @@ def _inside(at: datetime | None, since: datetime, until: datetime) -> bool:
 
 def _claude(root: Path, cwd: str, since: datetime, until: datetime) -> dict[str, dict]:
     slug = "".join(char if char.isalnum() else "-" for char in cwd)
+    paths = (root / ".claude" / "projects" / slug).glob("**/*.jsonl")
+    return _claude_models((_rows(path) for path in paths), since, until)
+
+
+def _claude_models(sources, since: datetime, until: datetime) -> dict[str, dict]:
     deduped: dict[tuple[str, str], tuple[str, dict[str, int], datetime]] = {}
-    for path in (root / ".claude" / "projects" / slug).glob("**/*.jsonl"):
-        for row in _rows(path):
+    for source in sources:
+        for row in source:
             message = row.get("message") or {}
             at = _at(row.get("timestamp"))
             if row.get("type") != "assistant" or not _inside(at, since, until):
@@ -110,61 +116,67 @@ def _claude(root: Path, cwd: str, since: datetime, until: datetime) -> dict[str,
     return models
 
 
-def _codex(root: Path, cwd: str, since: datetime, until: datetime) -> dict[str, dict]:  # noqa: C901
+def _codex(root: Path, cwd: str, since: datetime, until: datetime) -> dict[str, dict]:
     models: dict[str, dict] = {}
     for path in (root / ".codex" / "sessions").glob("*/*/*/rollout-*.jsonl"):
         rows = list(_rows(path))
         meta = next((row for row in rows if row.get("type") == "session_meta"), {})
         if (meta.get("payload") or {}).get("cwd") != cwd:
             continue
-        model = ""
-        previous_total: dict[str, int] | None = None
-        previous_snapshot: tuple[int, int, int, int] | None = None
-        for row in rows:
-            payload = row.get("payload") or {}
-            if row.get("type") == "turn_context":
-                model = str(payload.get("model") or model)
-                continue
-            if row.get("type") != "event_msg" or payload.get("type") != "token_count":
-                continue
-            at = _at(row.get("timestamp"))
-            info = payload.get("info")
-            if not isinstance(info, dict):
-                continue
-            usage = info.get("last_token_usage")
-            if not isinstance(usage, dict):
-                total = info.get("total_token_usage")
-                if not isinstance(total, dict):
-                    continue
-                current_total = {key: int(value or 0) for key, value in total.items()}
-                usage = {
-                    key: value - (previous_total or {}).get(key, 0)
-                    for key, value in current_total.items()
-                }
-                previous_total = current_total
-            if not _inside(at, since, until):
-                continue
-            cached = int(usage.get("cached_input_tokens", 0) or 0)
-            input_tokens = int(usage.get("input_tokens", 0) or 0)
-            output = int(usage.get("output_tokens", 0) or 0)
-            reasoning = int(usage.get("reasoning_output_tokens", 0) or 0)
-            snapshot = (input_tokens, cached, output, reasoning)
-            if snapshot == previous_snapshot:
-                continue
-            previous_snapshot = snapshot
-            _add(
-                models,
-                model,
-                {
-                    "input": max(0, input_tokens - cached),
-                    "cache_read": cached,
-                    "output": output,
-                    "reasoning": reasoning,
-                    "requests": 1,
-                },
-                at,
-            )
+        _codex_file(models, rows, since, until)
     return models
+
+
+def _codex_file(
+    models: dict[str, dict], rows: list[dict], since: datetime, until: datetime
+) -> None:
+    model = ""
+    previous_total: dict[str, int] | None = None
+    previous_snapshot: tuple[int, int, int, int] | None = None
+    for row in rows:
+        payload = row.get("payload") or {}
+        if row.get("type") == "turn_context":
+            model = str(payload.get("model") or model)
+            continue
+        if row.get("type") != "event_msg" or payload.get("type") != "token_count":
+            continue
+        at = _at(row.get("timestamp"))
+        info = payload.get("info")
+        if not isinstance(info, dict):
+            continue
+        usage = info.get("last_token_usage")
+        if not isinstance(usage, dict):
+            total = info.get("total_token_usage")
+            if not isinstance(total, dict):
+                continue
+            current_total = {key: int(value or 0) for key, value in total.items()}
+            usage = {
+                key: value - (previous_total or {}).get(key, 0)
+                for key, value in current_total.items()
+            }
+            previous_total = current_total
+        if not _inside(at, since, until):
+            continue
+        cached = int(usage.get("cached_input_tokens", 0) or 0)
+        input_tokens = int(usage.get("input_tokens", 0) or 0)
+        output = int(usage.get("output_tokens", 0) or 0)
+        reasoning = int(usage.get("reasoning_output_tokens", 0) or 0)
+        snapshot = (input_tokens, cached, output, reasoning)
+        if snapshot == previous_snapshot:
+            continue
+        previous_snapshot = snapshot
+        _add(
+            models,
+            model,
+            {
+                "input": max(0, input_tokens - cached),
+                "cache_read": cached,
+                "output": output,
+                "reasoning": reasoning,
+                "requests": 1,
+            },
+            at,
+        )
 
 
 # What local_shell calls in-process, where the job folders are.
@@ -181,30 +193,37 @@ def _omp(root: Path, cwd: str, since: datetime, until: datetime) -> dict[str, di
         header = next((row for row in rows if row.get("type") == "session"), {})
         if not header or header.get("cwd") != cwd:
             continue
-        for row in rows:
-            message = row.get("message") or {}
-            at = _at(row.get("timestamp"))
-            if (
-                row.get("type") != "message"
-                or message.get("role") != "assistant"
-                or not _inside(at, since, until)
-            ):
-                continue
-            usage = message.get("usage") or {}
-            if not usage:
-                continue
-            _add(
-                models,
-                str(message.get("model") or ""),
-                {
-                    "input": usage.get("input", 0),
-                    "cache_write": usage.get("cacheWrite", 0),
-                    "cache_read": usage.get("cacheRead", 0),
-                    "output": usage.get("output", 0),
-                    "requests": 1,
-                },
-                at,
-            )
+        _omp_file(models, rows, since, until)
+    return models
+
+
+def _omp_file(
+    models: dict[str, dict], rows: list[dict], since: datetime, until: datetime
+) -> None:
+    for row in rows:
+        message = row.get("message") or {}
+        at = _at(row.get("timestamp"))
+        if (
+            row.get("type") != "message"
+            or message.get("role") != "assistant"
+            or not _inside(at, since, until)
+        ):
+            continue
+        usage = message.get("usage") or {}
+        if not usage:
+            continue
+        _add(
+            models,
+            str(message.get("model") or ""),
+            {
+                "input": usage.get("input", 0),
+                "cache_write": usage.get("cacheWrite", 0),
+                "cache_read": usage.get("cacheRead", 0),
+                "output": usage.get("output", 0),
+                "requests": 1,
+            },
+            at,
+        )
     return models
 
 
@@ -351,7 +370,69 @@ def scan(  # noqa: PLR0913
     return result
 
 
+def _row_dicts(data: bytes):
+    for line in data.decode("utf-8", errors="replace").splitlines():
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(row, dict):
+            yield row
+
+
+def interval_usage(agent: str, path: Path, end: int, sha256: str, inode: int) -> dict:
+    """Usage of exactly bytes ``[0, end)`` of one session file, verified against the
+    digest and inode Orca recorded when it closed the interval. No cwd or time scan."""
+    stat = path.stat()
+    if stat.st_ino != inode or stat.st_size < end:
+        msg = "session file is not the one Orca recorded"
+        raise ValueError(msg)
+    with path.open("rb") as source:
+        data = source.read(end)
+    if (
+        len(data) != end
+        or hashlib.sha256(data).hexdigest() != sha256
+        or (end and not data.endswith(b"\n"))
+    ):
+        msg = "session file bytes do not match the recorded interval"
+        raise ValueError(msg)
+    low, high = datetime.min.replace(tzinfo=UTC), datetime.max.replace(tzinfo=UTC)
+    rows = list(_row_dicts(data))
+    models: dict[str, dict] = {}
+    if agent == "claude":
+        models = _claude_models([rows], low, high)
+    elif agent == "codex":
+        _codex_file(models, rows, low, high)
+    elif agent == "omp":
+        _omp_file(models, rows, low, high)
+    else:
+        msg = f"unsupported agent {agent}"
+        raise ValueError(msg)
+    return {"models": models}
+
+
+def interval_main(argv: list[str]) -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("agent", choices=("claude", "codex", "omp"))
+    parser.add_argument("path")
+    parser.add_argument("end", type=int)
+    parser.add_argument("sha256")
+    parser.add_argument("inode", type=int)
+    args = parser.parse_args(argv)
+    try:
+        result = interval_usage(
+            args.agent, Path(args.path), args.end, args.sha256, args.inode
+        )
+    except (OSError, ValueError) as exc:
+        print(json.dumps({"error": str(exc)}))  # noqa: T201
+        raise SystemExit(1) from exc
+    print(json.dumps(result))  # noqa: T201
+
+
 def main() -> None:
+    if sys.argv[1:2] == ["interval"]:
+        interval_main(sys.argv[2:])
+        return
     parser = argparse.ArgumentParser()
     parser.add_argument("agent", choices=("claude", "codex", "omp"))
     parser.add_argument("cwd")

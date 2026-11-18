@@ -205,6 +205,10 @@ class UsageHour(Schema):
     agent_tokens: int  # coding agents run by the chat's workers
 
 
+# Sources attributable to one thread: owned local-shell runs and Orca-attested exact intervals.
+THREAD_AGENT_SOURCES = ("local_shell_run_v1", "orca_exact")
+
+
 class AgentUsageCoverage(Schema):
     # A zero recorded total does not establish that no agent tokens were used.
     status: str = "partial"
@@ -786,7 +790,7 @@ def session_usage(request, session_id: str, hours: int = 6):
     for row in own.filter(created_at__gte=since, created_at__lte=until).values_list("created_at", *fields):
         thread[slot(row[0])] += sum(n or 0 for n in row[1:])
 
-    totals = AgentUsage.objects.filter(session=session, source="local_shell_run_v1", last_at__gte=since)
+    totals = AgentUsage.objects.filter(session=session, source__in=THREAD_AGENT_SOURCES, last_at__gte=since)
     for usage in totals:
         tokens = sum(getattr(usage, field) for field in AGENT_FIELDS)
         _spread(agents, since, hour, usage.first_at, min(usage.last_at, until), tokens)
@@ -826,7 +830,7 @@ def session_usage_history(request, session_id: str):
     # The versioned source marks totals collected only from explicitly owned run
     # transcripts. The session FK survives worker deletion. Never infer event
     # ownership from thread links, cwd, or the mutable legacy run_session field.
-    totals = AgentUsage.objects.filter(session=session, source="local_shell_run_v1")
+    totals = AgentUsage.objects.filter(session=session, source__in=THREAD_AGENT_SOURCES)
     call_fields = [field for _, field, _ in PARTS]
 
     def grouped(query, model_field, fields, scope):
@@ -885,7 +889,12 @@ def costs(request, days: int = 30, bot: str = ""):
         calls = _of_chats(calls, ConversationSession.objects.filter(bot_name=bot))
     calls = list(calls.order_by("created_at"))
     chats = _chat_of(calls)
-    agent_rows = AgentUsage.objects.filter(last_at__gte=since, last_at__lte=until).select_related("worker", "session")
+    # Exact rows duplicate the same worker's overlapping "orca" scan; they only feed thread totals.
+    agent_rows = (
+        AgentUsage.objects.filter(last_at__gte=since, last_at__lte=until)
+        .exclude(source="orca_exact")
+        .select_related("worker", "session")
+    )
     if not request.auth.is_superuser:
         agent_rows = agent_rows.filter(session__user=request.auth)
     if bot:

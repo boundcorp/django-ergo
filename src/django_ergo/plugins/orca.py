@@ -97,6 +97,8 @@ from django_ergo.plugins._common import clip
 from django_ergo.plugins._common import is_secret
 from django_ergo.plugins._common import record_agent_usage
 from django_ergo.plugins._common import trim
+from django_ergo.plugins.orca_exact_usage import EXACT_SOURCE
+from django_ergo.plugins.orca_exact_usage import exact_interval
 from django_ergo.protected_env import scrubbed_env
 
 if TYPE_CHECKING:
@@ -176,6 +178,14 @@ ARGS_SCHEMA = {
         ),
     },
 }
+
+
+def _parse_at(value):
+    return (
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if isinstance(value, str)
+        else None
+    )
 
 
 def keep_fields(value, fields: set[str]):
@@ -1225,6 +1235,68 @@ class OrcaPlugin(BotPlugin):
                 exc_info=True,
             )
 
+    def scan_exact_usage(self, ctx, dispatch: str) -> None:
+        """Record the usage Orca attributed to this dispatch alone, after release
+        closed its interval. Without that attestation nothing is recorded: the
+        cwd/time scan overlaps between workers and stays out of thread totals."""
+        agent = str(ctx.state.get("agent") or "")
+        try:
+            shown = self.cli_json(
+                ["orchestration", "worker-show", "--dispatch", dispatch]
+            )
+            interval = exact_interval(shown, dispatch, agent)
+            if interval is None:
+                return
+            if ctx.state.get("exact_usage") == {
+                key: interval[key] for key in ("session_id", "end", "sha256")
+            }:
+                return
+            proc = self.run_scanner(
+                [
+                    "interval",
+                    agent,
+                    interval["path"],
+                    str(interval["end"]),
+                    interval["sha256"],
+                    str(interval["inode"]),
+                ]
+            )
+            if proc.returncode:
+                log.warning(
+                    "Exact usage for worker %s unavailable: %s",
+                    ctx.worker.pk,
+                    (proc.stdout or proc.stderr).strip()[:300],
+                )
+                return
+            models = json.loads(proc.stdout).get("models")
+            if not isinstance(models, dict):
+                return
+            record_agent_usage(
+                ctx.worker,
+                session=ctx.session,
+                source=EXACT_SOURCE,
+                agent=agent,
+                models={
+                    model: {
+                        **usage,
+                        "first_at": _parse_at(usage.get("first_at")),
+                        "last_at": _parse_at(usage.get("last_at")),
+                    }
+                    for model, usage in models.items()
+                    if isinstance(model, str) and isinstance(usage, dict)
+                },
+                replace=True,
+            )
+            ctx.state["exact_usage"] = {
+                key: interval[key] for key in ("session_id", "end", "sha256")
+            }
+        except Exception:  # noqa: BLE001 — exact usage is best effort; absence stays unknown
+            log.warning(
+                "Couldn't record exact usage for worker %s",
+                ctx.worker.pk,
+                exc_info=True,
+            )
+
     def watch(self, ctx, dispatch: str, run: str):
         """Worker function ``orca:watch``, for workers started before ``agent:orca``."""
         from django_ergo.bots.agents import watch
@@ -1269,6 +1341,7 @@ class OrcaPlugin(BotPlugin):
             # reason to reopen the watcher and mail an already-settled worker.
             close_agent_mail(ctx.worker.pk, "Orca worker settled before delivery")
             self.end_worker(dispatch, status)
+            self.scan_exact_usage(ctx, dispatch)
             body = (report or {}).get("body") or ""
             if status == "failed" and not body:
                 failure = (shown.get("dispatch") or {}).get(

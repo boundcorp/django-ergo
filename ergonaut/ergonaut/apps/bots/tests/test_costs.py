@@ -510,6 +510,35 @@ def test_thread_usage_reports_orca_and_delayed_collection_as_unknown(client, lee
 
 
 @pytest.mark.django_db
+def test_thread_totals_count_orca_exact_but_never_the_overlapping_orca_scan(client, lee):
+    chat = ConversationSession.objects.create(user=lee, bot_name="devbox")
+    worker = Worker.objects.create(session=chat, bot_name="devbox", title="agent", function="orca:watch")
+    now = timezone.now()
+    for source, tokens in (("orca", 9000), ("orca_exact", 321)):
+        AgentUsage.objects.create(
+            worker=worker,
+            session=chat,
+            bot_name="devbox",
+            source=source,
+            agent="omp",
+            model="m",
+            input_tokens=tokens,
+            first_at=now,
+            last_at=now,
+        )
+
+    recent = client.get(f"/api/sessions/{chat.id}/usage").json()
+    history = client.get(f"/api/sessions/{chat.id}/usage/history").json()
+
+    assert recent["agent_tokens"] == 321
+    assert history["all_time"]["agents"]["input_tokens"] == 321
+    assert recent["agent_usage_complete"] is False
+    assert recent["agent_usage_coverage"]["zero_is_conclusive"] is False
+    agents = client.get("/api/costs?days=7").json()["agents"]
+    assert sum(row["input_tokens"] for row in agents["rows"]) == 9000
+
+
+@pytest.mark.django_db
 def test_session_usage_is_only_for_visible_chats(client):
     owner = get_user_model().objects.create_user("other", "o@example.com", "pw")
     chat = ConversationSession.objects.create(user=owner, bot_name="devbox")
