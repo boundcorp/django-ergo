@@ -205,12 +205,21 @@ class UsageHour(Schema):
     agent_tokens: int  # coding agents run by the chat's workers
 
 
+class AgentUsageCoverage(Schema):
+    # A zero recorded total does not establish that no agent tokens were used.
+    status: str = "partial"
+    excluded: list[str] = ["orca", "native_session", "legacy"]
+    collection: str = "periodic"
+    zero_is_conclusive: bool = False
+
+
 class SessionUsageOut(Schema):
     until: str
     hours: list[UsageHour]
     thread_tokens: int
     agent_tokens: int
     agent_usage_complete: bool = False
+    agent_usage_coverage: AgentUsageCoverage = AgentUsageCoverage()
 
 
 class UsageTokenParts(Schema):
@@ -244,6 +253,7 @@ class SessionUsageHistoryOut(Schema):
     all_time: UsageHistoryTotals
     models: list[UsageModel]
     agent_usage_complete: bool = False
+    agent_usage_coverage: AgentUsageCoverage = AgentUsageCoverage()
 
 
 class CostsOut(Schema):

@@ -17,11 +17,23 @@ const usage: SessionUsage = {
   thread_tokens: 123,
   agent_tokens: 45,
   agent_usage_complete: false,
+  agent_usage_coverage: {
+    status: 'partial',
+    excluded: ['orca', 'native_session', 'legacy'],
+    collection: 'periodic',
+    zero_is_conclusive: false,
+  },
 }
 const history: SessionUsageHistory = {
   until: '2026-10-29T16:00:00Z',
   timezone: 'UTC',
   agent_usage_complete: false,
+  agent_usage_coverage: {
+    status: 'partial',
+    excluded: ['orca', 'native_session', 'legacy'],
+    collection: 'periodic',
+    zero_is_conclusive: false,
+  },
   days: [{ date: '2026-10-29', thread_tokens: 800, agent_tokens: 200 }],
   all_time: {
     thread: { input_tokens: 101, output_tokens: 102, cache_write_tokens: 103, cache_read_tokens: 104 },
@@ -78,6 +90,9 @@ describe('UsageHistory', () => {
     expect(dialog().open).toBe(true)
     expect(requested).toBe('thread-1')
     expect(dialog().textContent).toContain('Loading usage history')
+    expect(dialog().textContent).toContain('Orca worker usage is unavailable')
+    expect(dialog().textContent).toContain('recent usage may be delayed')
+    expect(dialog().textContent).toContain('Zero recorded agent tokens does not mean no agent usage')
     expect(dialog().textContent).toContain('123')
     await act(async () => resolve(history))
     expect(dialog().textContent).toContain('2026-10-29')

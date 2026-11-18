@@ -475,6 +475,41 @@ def test_session_usage_by_hour_splits_the_chat_from_its_agents(client, lee):
 
 
 @pytest.mark.django_db
+def test_thread_usage_reports_orca_and_delayed_collection_as_unknown(client, lee):
+    chat = ConversationSession.objects.create(user=lee, bot_name="devbox")
+    worker = Worker.objects.create(session=chat, bot_name="devbox", title="agent", function="orca:watch")
+    now = timezone.now()
+    expected = {
+        "status": "partial",
+        "excluded": ["orca", "native_session", "legacy"],
+        "collection": "periodic",
+        "zero_is_conclusive": False,
+    }
+    # No scan yet is not evidence of zero usage. Nor is a legacy scan safe to
+    # attribute to this worker when multiple runs can overlap.
+    for snapshot in (False, True):
+        if snapshot:
+            AgentUsage.objects.create(
+                worker=worker,
+                session=chat,
+                bot_name="devbox",
+                source="orca",
+                agent="omp",
+                model="m",
+                input_tokens=321,
+                first_at=now,
+                last_at=now,
+            )
+        recent = client.get(f"/api/sessions/{chat.id}/usage").json()
+        history = client.get(f"/api/sessions/{chat.id}/usage/history").json()
+        assert recent["agent_tokens"] == 0
+        assert sum(history["all_time"]["agents"].values()) == 0
+        for data in (recent, history):
+            assert data["agent_usage_complete"] is False
+            assert data["agent_usage_coverage"] == expected
+
+
+@pytest.mark.django_db
 def test_session_usage_is_only_for_visible_chats(client):
     owner = get_user_model().objects.create_user("other", "o@example.com", "pw")
     chat = ConversationSession.objects.create(user=owner, bot_name="devbox")

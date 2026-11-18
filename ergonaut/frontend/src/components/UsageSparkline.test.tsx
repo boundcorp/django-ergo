@@ -13,6 +13,12 @@ let container: HTMLDivElement
 const usage = (hours: [number, number][]): SessionUsage => ({
   until: '2026-10-29T16:00:00Z',
   agent_usage_complete: false,
+  agent_usage_coverage: {
+    status: 'partial',
+    excluded: ['orca', 'native_session', 'legacy'],
+    collection: 'periodic',
+    zero_is_conclusive: false,
+  },
   hours: hours.map(([thread, agents], i) => ({
     start: `2026-10-29T${10 + i}:00:00Z`,
     thread_tokens: thread,
@@ -43,6 +49,14 @@ describe('UsageSparkline', () => {
     expect(barTitle({ start: '', thread_tokens: 12_000, agent_tokens: 0 }, 4, 6)).toBe('2–1h ago: 12k thread')
     expect(barTitle({ start: '', thread_tokens: 900, agent_tokens: 1_500_000 }, 5, 6)).toBe(
       'Last hour: 900 thread · 1.5M agents',
+    )
+  })
+
+  test('does not present an empty snapshot as zero agent usage', () => {
+    act(() => root.render(createElement(UsageBars, { usage: usage([[0, 0]]) })))
+    expect(container.textContent).toContain('agent usage unknown')
+    expect(container.querySelector('[role="img"]')?.getAttribute('aria-label')).toContain(
+      'agent usage unknown or incomplete',
     )
   })
 

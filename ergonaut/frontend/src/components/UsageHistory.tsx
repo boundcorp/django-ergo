@@ -175,9 +175,10 @@ export function UsageHistory({ sessionId, usage }: { sessionId: string; usage: S
           </div>
           <div className="space-y-5 p-4">
             <p className="rounded-control border border-stroke p-3 text-sm">
-              Agent history is incomplete. Only explicitly owned local-shell run transcripts are included.
-              Native-session events and legacy estimates are excluded because thread ownership cannot be proven. Zero
-              does not mean no agent usage.
+              Agent usage is incomplete or unknown. Orca worker usage is unavailable here because ownership cannot be
+              proven; native-session events and legacy estimates are also excluded. Only explicitly owned local-shell
+              run transcripts are included, and collection is periodic, so recent usage may be delayed. Zero recorded
+              agent tokens does not mean no agent usage. Hourly and daily agent placement is estimated.
             </p>
             <section aria-label="Recent six hours">
               <h3 className="font-semibold">Recent {usage.hours.length} hours</h3>
