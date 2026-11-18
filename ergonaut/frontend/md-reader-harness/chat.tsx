@@ -32,7 +32,7 @@ api.models = async () => ({ models: [], default: '', default_engine_type: '' })
 api.realtimeVoiceConfig = async () => ({ enabled: false })
 
 api.voiceConfig = async () => ({ enabled: false, max_duration: 0 })
-api.sessionUsage = async () => ({ until: '', hours: [], thread_tokens: 0, agent_tokens: 0 })
+api.sessionUsage = async () => ({ until: '', hours: [], thread_tokens: 0, agent_tokens: 0, agent_usage_complete: false, agent_usage_coverage: { status: 'partial', excluded: ['orca', 'native_session', 'legacy'], collection: 'periodic', zero_is_conclusive: false } })
 class FixtureEventSource {
   onmessage: ((event: MessageEvent) => void) | null = null
   private update = () => this.onmessage?.(new MessageEvent('message', { data: JSON.stringify({ messages: [{ line: 31, role: 'assistant', timestamp: null, blocks: [{ type: 'text', text: 'Synthetic live update arrived while reading.' }] }], calls: [] }) }))

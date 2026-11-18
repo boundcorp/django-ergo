@@ -216,6 +216,12 @@ beforeEach(async () => {
     thread_tokens: 0,
     agent_tokens: 0,
     agent_usage_complete: false,
+    agent_usage_coverage: {
+      status: 'partial',
+      excluded: ['orca', 'native_session', 'legacy'],
+      collection: 'periodic',
+      zero_is_conclusive: false,
+    },
   })
   // React DOM must initialize after the test document exists.
   const { createRoot } = await import('react-dom/client')
