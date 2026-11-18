@@ -1771,6 +1771,65 @@ It is also the `orca` agent manager (see [Agents](#agents)): `agents`
 (default `[codex, claude, omp]`) lists what `ergo_agent_start` may start, and
 loading the `orca` skill loads `agents` with it.
 
+#### Scoped coding admission
+
+For bots that need supervised coding without an Orca administration console:
+
+```yaml
+- name: orca
+  environment: devhost
+  files_host: devhost
+  scoped_repositories: {app: "name:app"}
+  approve_changes: true
+  root_only: false
+```
+
+`scoped_repositories` is a nonempty trusted alias-to-Orca-repository mapping.
+`ergo_agent_start(brief, workspace="app", tier="medium", manager="orca", title=...)`
+creates a new worktree from the repository's `origin/main`, skips setup hooks,
+and verifies a clean checkout at that ref before launching. Existing worktrees,
+paths and external repository selectors are rejected, including through the
+generic agent tool. The repository ref must already exist; admission does not
+fetch or install anything. Failed launches retain the created worktree and
+report its selector/path for operator review; no automatic destructive cleanup.
+
+Scoped mode exposes **no** raw Orca tools (inventory, terminal, mutation,
+upload, attachment or screenshot). It cannot be configured alongside `bash` or
+`local_shell`. It runs only `omp`, pinning every chat role to the selected model.
+The shared `agents` skill provides launch/reply/stop; load `workers` for chat-owned
+`ergo_worker_list`/`ergo_worker_cancel` status/cancellation tools. Loading the
+scoped `orca` skill loads both. Questions,
+answers and completion use the existing durable watcher. Worker status/logs in
+Ergonaut remain session-owned; a launch grants no access to another chat's jobs.
+
+Routing uses the normal tier subscription-pace scorer, filtered before selection.
+Only anthropic, openai, openai-codex and xai-oauth coding identities qualify;
+OpenAI CLI subscriptions use the `openai-codex` selector. Explicit models require
+canonical `provider/model` selectors. Both explicit and tier candidates must be
+listed, enabled, priced public **chat** models in the execution host's local
+omp catalog and the deployment's configured chat-model allowlist (worker-only
+subscriptions use the catalog). Missing metadata fails closed. The host must
+have an active OAuth credential for the provider, with no enabled non-OAuth
+credential or corresponding API-key environment variable; there is no paid API
+fallback. No supplied model/tier defaults to `medium`. Invalid explicit arguments
+are rejected even when a tier would otherwise replace them.
+
+Deploy this runtime **before** enabling the config: older runtimes do not
+recognize the scoped option. Verify the live tool surface before claiming access.
+The files host needs Python 3, Git, omp and its existing read-only `models.db` and
+OAuth credential registry; admission reads credential kinds/disabled flags only,
+never credential payloads. It does not provision credentials or install tools.
+
+This is a **launch boundary, not a shell/credential/network sandbox**. Agents still
+run as the execution-host user and can execute code with that user's permissions.
+Model roles and admission do not prevent later agent-initiated model/config
+changes, shell commands, network spending or host access; use separate OS-level
+controls if those require hard enforcement. Scope/PR-only/no-merge, deployment,
+installation, save-write and spending restrictions must remain in the brief and
+operator review. Launch approval (including `approve_changes: false`) grants no
+downstream approval bypass. Request compact reports with changed paths, tests,
+sample provenance, limitations and a reviewable PR URL, not huge transcripts.
+
 ### local_shell
 
 ```yaml

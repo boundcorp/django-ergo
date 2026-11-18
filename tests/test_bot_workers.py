@@ -280,6 +280,7 @@ def test_orca_reply_keeps_run_ownership_when_chat_moves_and_does_not_replay(
         approve_changes=False,
         poll_seconds=1,
         config={},
+        scoped_repositories=None,
         cli_json=reply,
     )
     manager = OrcaAgents(plugin)

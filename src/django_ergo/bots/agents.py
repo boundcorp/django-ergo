@@ -96,6 +96,10 @@ class AgentManager:
         """Whether this chat may use it."""
         return True
 
+    def routing_providers(self, ctx: ToolContext, spec: AgentSpec):
+        """Validate a request before side effects; restrict routing for this manager."""
+        return ctx.bot.providers
+
     def start(self, ctx: ToolContext, spec: AgentSpec) -> dict:
         """Launch the agent; return a JSON handle that ``check`` and ``reply`` take."""
         raise NotImplementedError
@@ -208,15 +212,14 @@ def start(ctx: ToolContext, spec: AgentSpec, manager: str = "") -> Worker:
     routing_receipt: dict = {}
     spec.model = check(ctx.bot, spec.model, AGENT)  # before any side effect
     found = manager_for(ctx.bot, manager, ctx)
+    providers = found.routing_providers(ctx, spec)
     choice = None
     if spec.tier:
         from django_ergo.bots.routing import pick_agent
 
         # Only candidates this manager can run, so a Claude window that's used
         # up falls back to another subscription the manager also runs.
-        choice = pick_agent(
-            ctx.bot.providers, spec.tier, found.agents, receipt=routing_receipt
-        )
+        choice = pick_agent(providers, spec.tier, found.agents, receipt=routing_receipt)
         spec.agent, spec.model, spec.effort = choice.agent, choice.model, choice.effort
         check(ctx.bot, spec.model, AGENT)
     spec.agent = spec.agent or found.default_agent
@@ -230,7 +233,7 @@ def start(ctx: ToolContext, spec: AgentSpec, manager: str = "") -> Worker:
         from django_ergo.bots.routing import record_agent_pick
 
         record_agent_pick(
-            ctx.bot.providers,
+            providers,
             spec.tier,
             choice,
             f"{found.name} agent · {spec.title}",
@@ -259,12 +262,17 @@ def start(ctx: ToolContext, spec: AgentSpec, manager: str = "") -> Worker:
             "billing_mode_provenance": "not independently verified",
         },
     }
-    return ctx.workers.start(
-        f"agent:{found.name}",
-        title=f"{spec.agent}: {spec.title}",
-        state=state,
-        handle=handle,
-    )
+    try:
+        return ctx.workers.start(
+            f"agent:{found.name}",
+            title=f"{spec.agent}: {spec.title}",
+            state=state,
+            handle=handle,
+        )
+    except Exception:
+        # A launched agent must not be left running without its durable watcher.
+        found.stop(handle)
+        raise
 
 
 def _reply_queue(worker_id: str, question_id: str, answer: str) -> str:
