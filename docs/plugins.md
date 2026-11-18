@@ -59,6 +59,26 @@ redacted server-side preview for supported changes. In Ergonaut only admins
 can approve their tools. Every option is in the
 [bot reference](bots.md#official-plugins).
 
+## Scoped Orca coding
+
+Set `orca.scoped_repositories` to a nonempty trusted repository-alias mapping
+to replace the broad Orca console with shared supervised agent lifecycle tools.
+`workspace` then accepts only an alias; the manager creates and checks a fresh
+`origin/main` worktree without setup hooks. It admits only catalog-listed,
+enabled, priced chat models with active OAuth-only coding subscriptions and
+uses normal filtered subscription-pace routing. The fixed read-only host helper
+does not accept shell commands. See [the configuration and public
+arguments](bots.md#scoped-coding-admission) for deployment prerequisites and
+failure behavior.
+
+Deploy the supporting runtime before the config, then verify the live tool
+surface. Status, questions, replies, cancellation and completion reuse the
+session-owned agent/worker APIs. Request compact reports (paths, tests, sample
+provenance, limits and PR URL); no merge/deployment/install/spend permission is
+implied. This enforces admission and chat ownership, **not OS-level sandboxing**:
+host-user filesystem, shell, credentials and network access still need separate
+controls if hard isolation is required.
+
 ## Orca instruction checkpoints
 
 Use the `orca` skill's `ergo_orca_instruct(worker_id, instruction_id, text,

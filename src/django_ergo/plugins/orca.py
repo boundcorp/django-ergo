@@ -429,6 +429,28 @@ class OrcaPlugin(BotPlugin):
         self.max_upload_bytes = int(self.config.get("max_upload_bytes", 200_000_000))
         self.poll_seconds = float(self.config.get("worker_poll_seconds", POLL_SECONDS))
         self.stall_minutes = float(self.config.get("stall_minutes", STALL_MINUTES))
+        self.scoped_repositories = self.config.get("scoped_repositories")
+        if "scoped_repositories" in self.config:
+            if (
+                not isinstance(self.scoped_repositories, dict)
+                or not self.scoped_repositories
+            ):
+                msg = (
+                    "scoped_repositories must be a nonempty alias-to-repository mapping"
+                )
+                raise ValueError(msg)
+            if not all(
+                isinstance(alias, str)
+                and re.fullmatch(r"[a-zA-Z0-9_-]+", alias)
+                and isinstance(repo, str)
+                and repo.startswith(("id:", "name:", "path:"))
+                for alias, repo in self.scoped_repositories.items()
+            ):
+                msg = "Scoped repositories require simple aliases and pinned Orca repo selectors"
+                raise ValueError(msg)
+            if any(p.name in {"bash", "local_shell"} for p in self.bot.plugins):
+                msg = "Scoped Orca cannot be combined with bash or local_shell"
+                raise ValueError(msg)
         self.manager = OrcaAgents(self)
 
     def argv(self, args: list[str]) -> list[str]:
@@ -953,8 +975,81 @@ class OrcaPlugin(BotPlugin):
         }
 
     def start_agent(self, ctx: ToolContext, spec: AgentSpec) -> dict:
-        """Create the Orca task and worker for ``spec``; the manager's handle."""
+        if self.scoped_repositories is not None:
+            self.manager.routing_providers(ctx, spec)
+            if spec.agent != "omp" or not spec.model:
+                msg = "Scoped launch requires a selected omp subscription model"
+                raise ValueError(msg)
+            import uuid
+
+            created = self.cli_json(
+                [
+                    "worktree",
+                    "create",
+                    "--repo",
+                    self.scoped_repositories[spec.workspace],
+                    "--name",
+                    f"ergo-{uuid.uuid4().hex}",
+                    "--base-branch",
+                    "origin/main",
+                    "--setup",
+                    "skip",
+                    "--no-parent",
+                ]
+            )
+            path = _first_path(created)
+            worktree_id = _first_key(created, ("worktreeId", "id"))
+            if not path or not worktree_id:
+                msg = "Scoped worktree creation returned no stable identity/path; no agent launched"
+                raise ValueError(msg)
+            selector = f"id:{worktree_id}"
+            try:
+                checked = self.scope_metadata(path)
+                if not checked.get("clean") or checked.get("head") != checked.get(
+                    "base"
+                ):
+                    msg = "Created worktree is not clean at origin/main"
+                    raise ValueError(msg)  # noqa: TRY301 — attach retained checkout on any launch failure
+                # Recursive call is deliberately avoided: arbitrary workspace selectors
+                # never pass scoped admission, even through generic ergo_agent_start.
+                return self._launch_agent(ctx, spec, selector, path)
+            except Exception as exc:
+                msg = f"Scoped launch failed; retained worktree {selector} ({path}) for review: {exc}"
+                raise ValueError(msg) from exc
         worktree, worktree_path = self.resolved_worktree(spec.workspace)
+        return self._launch_agent(ctx, spec, worktree, worktree_path)
+
+    def scope_metadata(self, root: str = "") -> dict:
+        """Fixed read-only checks on the execution host; no caller command input."""
+        script = Path(__file__).with_name("orca_scope.py").read_text(encoding="utf-8")
+        argv = (
+            [
+                "ssh",
+                "-o",
+                "BatchMode=yes",
+                self.files_host,
+                f"python3 - {shlex.quote(root)}",
+            ]
+            if self.files_host
+            else ["python3", "-", root]
+        )
+        proc = subprocess.run(  # noqa: S603 — fixed read-only helper
+            argv,
+            input=script,
+            capture_output=True,
+            text=True,
+            timeout=self.timeout,
+            check=False,
+            env=scrubbed_env(),
+        )
+        if proc.returncode:
+            msg = "Scoped runner metadata/checkout check failed; no agent launched"
+            raise ValueError(msg)
+        return json.loads(proc.stdout)
+
+    def _launch_agent(self, ctx, spec, worktree, worktree_path) -> dict:
+        """Create the Orca task and worker for ``spec``; the manager's handle."""
+        # Only the scoped admission path or the stock selector resolver calls this.
         args = (spec.brief, worktree, spec.agent, spec.title, spec.model, spec.effort)
         try:
             task_id, run_id, mailbox, receipt = self.dispatch(ctx, *args)
@@ -1374,7 +1469,11 @@ class OrcaPlugin(BotPlugin):
 
     @property
     def skill_requires(self) -> list[str]:
-        return ["agents"]
+        return (
+            ["agents", "workers"]
+            if self.scoped_repositories is not None
+            else ["agents"]
+        )
 
     # -- plugin hooks ------------------------------------------------------
 
@@ -1386,6 +1485,21 @@ class OrcaPlugin(BotPlugin):
     def context_sources(self, ctx: ToolContext, message: str) -> list[ContextSource]:
         if not self._applies(ctx):
             return []
+        if self.scoped_repositories is not None:
+            return [
+                TextContextSource(
+                    "Scoped Orca",
+                    "Use ergo_agent_start with workspace equal to a configured repository alias: "
+                    f"{', '.join(self.scoped_repositories)}. Each launch creates a clean origin/main "
+                    "worktree without setup hooks. Prefer tier=medium (normal subscription pace); "
+                    "only listed, priced chat models on approved coding subscriptions are admitted. "
+                    "Questions and completion return here durably. Use ergo_agent_reply, "
+                    "ergo_agent_stop and ergo_worker_list for this chat only. No raw Orca tools "
+                    "are exposed. Launch admission is not shell-level isolation: the agent runs "
+                    "with the execution host user's permissions. Launch permission does not "
+                    "authorize merge, deployment, installation, credentials, save writes or spending.",
+                )
+            ]
         where = (
             f"the {self.environment!r} environment" if self.environment else "this host"
         )
@@ -1419,6 +1533,8 @@ class OrcaPlugin(BotPlugin):
         ]
 
     def _tools(self) -> list[BotTool]:
+        if self.scoped_repositories is not None:
+            return []
         plugin = self
 
         @bot_tool(
@@ -1625,13 +1741,49 @@ class OrcaAgents(AgentManager):
     def __init__(self, plugin: OrcaPlugin):
         self.plugin = plugin
         self.agents = tuple(plugin.config.get("agents") or ("codex", "claude", "omp"))
+        if plugin.scoped_repositories is not None:
+            self.agents = ("omp",)
+            self.default_agent = "omp"
         self.requires_approval = plugin.approve_changes
         self.poll_seconds = plugin.poll_seconds
         place = plugin.environment or "this host"
         self.where = f"Orca worktrees on {place}"
+        if plugin.scoped_repositories is not None:
+            self.where += "; workspace is a repository alias: " + ", ".join(
+                plugin.scoped_repositories
+            )
 
     def available(self, ctx) -> bool:
         return self.plugin._applies(ctx)  # noqa: SLF001
+
+    def routing_providers(self, ctx, spec):
+        if self.plugin.scoped_repositories is None:
+            return super().routing_providers(ctx, spec)
+        if not self.available(ctx) or ctx.session is None:
+            msg = "Scoped agents require an authorized chat"
+            raise ValueError(msg)
+        from django_ergo.bots.model_choice import AGENT
+        from django_ergo.bots.model_choice import check
+
+        spec.model = check(ctx.bot, spec.model, AGENT)
+        if spec.workspace not in self.plugin.scoped_repositories:
+            msg = "Scoped workspace must be a configured repository alias, not a path or worktree"
+            raise ValueError(msg)
+        if spec.agent and spec.agent != "omp":
+            msg = "Scoped Orca runs only omp with pinned subscription model roles"
+            raise ValueError(msg)
+        from django_ergo.plugins.orca_scope import admitted_providers
+
+        providers, allowed = admitted_providers(
+            ctx.bot.providers, self.plugin.scope_metadata()
+        )
+        if spec.model and spec.model not in allowed:
+            msg = "Scoped model must be an enabled, listed, priced chat candidate on an allowed subscription"
+            raise ValueError(msg)
+        spec.agent = "omp"
+        if not spec.model and not spec.tier:
+            spec.tier = "medium"
+        return providers
 
     def start(self, ctx, spec: AgentSpec) -> dict:
         return self.plugin.start_agent(ctx, spec)
