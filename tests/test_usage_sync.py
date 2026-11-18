@@ -140,6 +140,28 @@ def capacity(clock=None):
     return capacity_report(found, NOW.timestamp() if clock is None else clock)
 
 
+@pytest.mark.django_db
+def test_display_overrides_preserve_synced_windows_and_other_accounts():
+    data = yaml.safe_load(PROVIDERS)
+    data["hidden_usage_windows"] = {
+        "anthropic": ["five_hour"],
+        "openai-codex": ["five_hour"],
+    }
+    found = Providers.from_dict(data)
+    codex_report = codex()
+    codex_report["limits"].append(
+        limit("openai-codex:5h", "Codex 5 Hour", "5h", 22, FIVE_HOUR_RESET)
+    )
+    sync(report(anthropic(), codex_report, grok()), found=found)
+    page = capacity_report(found, NOW.timestamp())
+    for account_id, provider in (("anthropic", "claude"), ("openai-codex", "chatgpt")):
+        card = account(page, account_id)
+        assert card["hidden_windows"] == ["five_hour"]
+        assert {"five_hour", "weekly"} <= {w["key"] for w in card["windows"]}
+        assert {"five_hour", "weekly"} <= set(windows_of(provider))
+    assert account(page, "xai-oauth")["hidden_windows"] == []
+
+
 @pytest.mark.parametrize("names", [("grok-worker",), ("xai-oauth", "grok-worker")])
 def test_subscription_targets_keep_worker_accounts_separate(names):
     found = worker_providers(*names)

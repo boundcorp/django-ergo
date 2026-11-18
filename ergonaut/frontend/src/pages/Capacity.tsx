@@ -22,7 +22,7 @@ type Row = { label: string; window: CapacityWindow | null; note: string }
 
 const PLAIN: Record<string, string> = { five_hour: '5-hour window', weekly: '7-day window' }
 
-/** One row per reported window; a 5-hour and a 7-day row are always there, so a missing one shows as unavailable. */
+/** Reported windows plus placeholders for expected, visible plain windows. */
 export function rowsFor(account: CapacityAccount): Row[] {
   const absent =
     account.status === 'error'
@@ -31,13 +31,15 @@ export function rowsFor(account: CapacityAccount): Row[] {
         ? 'No data yet'
         : 'Not reported by provider'
   const rows = (period: string, fallback: string): Row[] => {
-    const found = account.windows.filter(w => w.period === period)
+    const found = account.windows.filter(w => w.period === period && !account.hidden_windows?.includes(w.key))
     return found.length
       ? found.map(w => ({ label: PLAIN[w.key] ?? w.label, window: w, note: '' }))
-      : [{ label: fallback, window: null, note: absent }]
+      : account.hidden_windows?.includes(period === '5h' ? 'five_hour' : 'weekly')
+        ? []
+        : [{ label: fallback, window: null, note: absent }]
   }
   const other = account.windows
-    .filter(w => w.period !== '5h' && w.period !== '7d')
+    .filter(w => w.period !== '5h' && w.period !== '7d' && !account.hidden_windows?.includes(w.key))
     .map(w => ({ label: w.label, window: w, note: '' }))
   return [...rows('5h', '5-hour window'), ...rows('7d', '7-day window'), ...other]
 }
