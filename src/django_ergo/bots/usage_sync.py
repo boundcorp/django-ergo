@@ -373,6 +373,7 @@ def capacity_report(providers: Providers, clock: float | None = None) -> dict:
             {
                 "id": name,
                 "name": ACCOUNTS.get(name, (name.replace("-", " ").title(), ""))[0],
+                "hidden_windows": providers.hidden_usage_windows.get(name, []),
                 "providers": configured,
                 "status": status,
                 "error": error,

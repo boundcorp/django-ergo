@@ -112,6 +112,55 @@ describe('UsagePanel', () => {
     return renderToStaticMarkup(createElement(MemoryRouter, null, createElement(UsagePanel, { now, data })))
   }
 
+  test('hides configured windows in account and route data while keeping weekly and other accounts', () => {
+    const five = window({ used: 99 })
+    const week = window({ used: 41 })
+    const data = routing([
+      provider({ name: 'claude', windows: { five_hour: five, weekly: week } }),
+      provider({ name: 'codex', windows: { five_hour: five, weekly: week } }),
+    ])
+    const makeAccount = (id: string, name: string, route: string, hidden: boolean) => ({
+      id,
+      name,
+      providers: [route],
+      hidden_windows: hidden ? ['five_hour'] : [],
+      status: 'ok' as const,
+      error: '',
+      fetched_at: null,
+      windows: [
+        {
+          key: 'five_hour',
+          label: '5 Hour',
+          period: '5h',
+          ...five,
+          status: '',
+          model: '',
+          observed_at: now,
+          stale: false,
+        },
+        {
+          key: 'weekly',
+          label: 'Weekly',
+          period: '7d',
+          ...week,
+          status: '',
+          model: '',
+          observed_at: now,
+          stale: false,
+        },
+      ],
+    })
+    data.capacity.accounts = [
+      makeAccount('anthropic', 'Claude', 'claude', true),
+      makeAccount('openai-codex', 'Codex', 'codex', true),
+    ]
+    const hidden = render(data)
+    expect(hidden).not.toContain('5-hour')
+    expect(hidden.match(/Weekly: 41% used/g)?.length).toBeGreaterThan(0)
+    data.capacity.accounts.push(makeAccount('other', 'Other', 'other', false))
+    expect(render(data)).toContain('5-hour: 99% used')
+  })
+
   test('shows compact, accessible Claude windows without redundant explanations', () => {
     const html = render(
       routing([

@@ -84,6 +84,25 @@ describe('reset countdown', () => {
 })
 
 describe('window rows', () => {
+  test('hides only configured account windows, including an absent placeholder', () => {
+    for (const id of ['anthropic', 'openai-codex']) {
+      for (const windows of [[win(), weekly()], [weekly()]]) {
+        const html = render({ accounts: [account({ id, hidden_windows: ['five_hour'], windows })] })
+        expect(html).not.toContain('5-hour window')
+        expect(html).toContain('7-day window')
+        expect(html).toContain('52% used')
+      }
+    }
+    const other = render({ accounts: [account({ id: 'other', windows: [win(), weekly()] })] })
+    expect(other).toContain('5-hour window')
+    expect(other).toContain('7-day window')
+    const scoped = account({
+      hidden_windows: ['five_hour'],
+      windows: [win(), win({ key: 'five_hour_model', label: 'Model 5 Hour' }), weekly()],
+    })
+    expect(rowsFor(scoped).map(row => row.label)).toEqual(['Model 5 Hour', '7-day window'])
+  })
+
   test('shows 5-hour and 7-day usage with reset countdown and a meter for each', () => {
     const html = render()
     expect(html).toContain('5-hour window')

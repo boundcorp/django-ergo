@@ -570,6 +570,11 @@ unscoped devbox drafts are not migrated because their owner is unknown.
   provider refused at its limit, or that the model declined (a safety
   refusal), offers **Retry on** the tier's next model in the chat, never on
   its own.
+  To omit a window from the capacity cards and top-bar usage display for a
+  particular omp account, set `hidden_usage_windows` in `providers.yaml`, for
+  example `hidden_usage_windows: {anthropic: [five_hour], openai-codex: [five_hour]}`.
+  Keys are account IDs and stored window keys, not provider types or durations.
+  This only changes display; reported measurements and routing rules remain intact.
 
 Django's admin is at `/mgmt/`. The API is at `/api/` with docs at
 `/api/docs`.

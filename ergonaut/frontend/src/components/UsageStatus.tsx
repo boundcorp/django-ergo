@@ -52,6 +52,7 @@ function usageProviders(data: Routing): RoutingProvider[] {
     const route = routes[0]
     const windows: Record<string, RoutingWindow> = {}
     for (const w of account.windows) {
+      if (account.hidden_windows?.includes(w.key)) continue
       windows[w.key] = {
         ...w,
         limit: routes.find(p => p.windows[w.key])?.windows[w.key].limit ?? 100,
@@ -59,6 +60,7 @@ function usageProviders(data: Routing): RoutingProvider[] {
     }
     for (const p of routes) {
       for (const [key, window] of Object.entries(p.windows)) {
+        if (account.hidden_windows?.includes(key)) continue
         if (!(key in windows)) windows[key] = window
       }
     }

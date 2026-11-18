@@ -190,6 +190,8 @@ class Providers:
     routing: Routing = field(default_factory=Routing)
     # Private pools by name: never in models(), find(), tiers or the default.
     private_pools: dict[str, PrivatePool] = field(default_factory=dict)
+    # Account/window presentation overrides; never used by routing.
+    hidden_usage_windows: dict[str, list[str]] = field(default_factory=dict)
 
     def __bool__(self) -> bool:
         return bool(self.providers)
@@ -316,6 +318,16 @@ class Providers:
                 )
                 raise ProvidersError(msg)
         result = cls(providers=providers, default=str(data.get("default") or ""))
+        hidden = data.get("hidden_usage_windows") or {}
+        if not isinstance(hidden, dict) or any(
+            not isinstance(account, str)
+            or not isinstance(windows, list)
+            or any(not isinstance(window, str) for window in windows)
+            for account, windows in hidden.items()
+        ):
+            msg = "hidden_usage_windows must map account IDs to lists of window keys"
+            raise ProvidersError(msg)
+        result.hidden_usage_windows = hidden
         result.private_pools = _private_pools(data.get(PRIVATE_POOLS_KEY), providers)
         result.routing = result._routing(data)
         if result.default and not result.knows(result.default):

@@ -123,6 +123,7 @@ export type CapacityAccount = {
   status: 'ok' | 'stale' | 'error' | 'unavailable'
   error: string
   fetched_at: string | null
+  hidden_windows?: string[]
   windows: CapacityWindow[]
 }
 

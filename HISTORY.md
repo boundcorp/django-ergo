@@ -368,6 +368,12 @@ This document tracks the major milestones and evolution of the Django Ergo proje
   stay as aliases of `small` and `large`, so existing `auto/low` chats and
   providers.yaml keys keep working. Haiku 5.5 pricing is added.
 
+### Account-specific usage display
+
+- `providers.yaml` can hide selected usage-window keys for individual omp
+  accounts in Ergonaut's capacity cards and top-bar display. Measurements and
+  routing remain unchanged.
+
 ### Routing & capacity limits that stay current (October 2026)
 
 - Subscription limits were only recorded as a side effect of a Claude or Codex
