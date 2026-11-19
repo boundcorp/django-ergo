@@ -163,6 +163,9 @@ QUARANTINED_STATUS = re.compile(r"(?i)\b(?:kimi\s+k\d|fireworks|moonshot|openrou
 # omp's TUI header names the active model by display name: "π / ◑ Grok 4.7 🙈 / 📁 …".
 OMP_HEADER_MODEL = re.compile(r"π / ([^/]+?) / ")
 OMP_MODEL_CHECK_LIMIT = 2
+TRUST_PROMPT_CHECK_SECONDS = 30
+TRUST_PROMPT = re.compile(r"do you trust the files in this folder", re.I)
+SHELL_PROMPT = re.compile(r"(?:^|\n)[\w.-]+@[\w.-]+:[^\n]{0,100}[#$] ?$", re.M)
 MAX_OUTPUT_CHARS = 40_000  # about 10k tokens; a 26-worktree list is ~28k compact
 TARGET_FLAGS = ("--environment", "--pairing-code")
 ARGS_SCHEMA = {
@@ -285,6 +288,12 @@ INPUT_KEYS = (
 def _model_words(name: str) -> str:
     """A model name or id as lowercase words: "Grok 4.7 🙈" and "grok-4.7" agree."""
     return " ".join(re.findall(r"[a-z0-9]+", name.lower()))
+
+
+def claude_trust_blocked(lines: list) -> bool:
+    """A trust question or immediate shell return on the worker's terminal."""
+    output = "\n".join(ANSI.sub("", str(line)) for line in lines)
+    return bool(TRUST_PROMPT.search(output) or SHELL_PROMPT.search(output.rstrip()))
 
 
 def _tool_input(value) -> str:
@@ -950,6 +959,44 @@ class OrcaPlugin(BotPlugin):
         receipt = self.cli_json(args)
         return task_id, run_id, mailbox, receipt
 
+    def seed_claude_trust(self, worktree: str, path: str) -> None:
+        """Trust only a registered Orca repo's worktree, before interactive Claude starts."""
+        shown = self.cli_json(["worktree", "show", "--worktree", worktree])
+        info = shown.get("worktree") or shown
+        repos = self.cli_json(["repo", "list"])
+        known = {repo.get("id") for repo in repos.get("repos", [])}
+        if (
+            not info.get("repoId")
+            or info["repoId"] not in known
+            or info.get("path") != path
+        ):
+            msg = "Claude folder trust requires a known Orca worktree"
+            raise ValueError(msg)
+        script = Path(__file__).with_name("orca_trust.py").read_text(encoding="utf-8")
+        argv = (
+            [
+                "ssh",
+                "-o",
+                "BatchMode=yes",
+                self.files_host,
+                f"python3 - {shlex.quote(path)}",
+            ]
+            if self.files_host
+            else ["python3", "-", path]
+        )
+        proc = subprocess.run(  # noqa: S603 — fixed script; path passed as data
+            argv,
+            input=script,
+            capture_output=True,
+            text=True,
+            timeout=self.timeout,
+            check=False,
+            env=scrubbed_env(),
+        )
+        if proc.returncode:
+            msg = "Could not seed Claude folder trust for known Orca worktree"
+            raise ValueError(msg)
+
     def forget_mailbox(self, ctx: ToolContext) -> bool:
         """Drop the chat's saved mailbox and Run; returns whether there was one."""
         from django_ergo.conversation.models import ConversationSession
@@ -992,6 +1039,15 @@ class OrcaPlugin(BotPlugin):
         }
 
     def start_agent(self, ctx: ToolContext, spec: AgentSpec) -> dict:
+        if not spec.tier:
+            from django_ergo.bots.routing import coding_login_error
+            from django_ergo.bots.routing import coding_login_store
+
+            provider = spec.model.partition("/")[0] if spec.agent == "omp" else ""
+            store = coding_login_store(spec.agent, provider)
+            if error := coding_login_error(store):
+                msg = f"{store}: {error}"
+                raise ValueError(msg)
         if self.scoped_repositories is not None:
             self.manager.routing_providers(ctx, spec)
             if spec.agent != "omp" or not spec.model:
@@ -1068,6 +1124,11 @@ class OrcaPlugin(BotPlugin):
         """Create the Orca task and worker for ``spec``; the manager's handle."""
         # Only the scoped admission path or the stock selector resolver calls this.
         args = (spec.brief, worktree, spec.agent, spec.title, spec.model, spec.effort)
+        if spec.agent == "claude":
+            if not worktree_path:
+                msg = "Claude folder trust requires a resolved worktree path"
+                raise ValueError(msg)
+            self.seed_claude_trust(worktree, worktree_path)
         try:
             task_id, run_id, mailbox, receipt = self.dispatch(ctx, *args)
         except ValueError as exc:
@@ -1090,6 +1151,8 @@ class OrcaPlugin(BotPlugin):
             "worktree": worktree,
             "path": worktree_path or "",
             "selected_model": spec.model if spec.agent == "omp" else "",
+            "agent": spec.agent,
+            "launched_at": time.time(),
         }
 
     def capture_native_history(
@@ -1265,6 +1328,10 @@ class OrcaPlugin(BotPlugin):
         )
         lines = (read.get("terminal") or {}).get("tail") or []
         selected = handle["selected_model"].lower().split(":", 1)[0]
+        catalog_name = ctx.state.get("omp_catalog_name")
+        if not catalog_name:
+            catalog_name = self.omp_catalog_name(selected)
+            ctx.state["omp_catalog_name"] = catalog_name
         # The header is authoritative; other mentions (the brief, the agent's
         # own output) only count while no header is on screen.
         header_model = mentioned = ""
@@ -1273,8 +1340,7 @@ class OrcaPlugin(BotPlugin):
             if (header := OMP_HEADER_MODEL.search(clean)) and (
                 name := _model_words(header.group(1))
             ):
-                expected = _model_words(selected.partition("/")[2])
-                header_model = selected if name == expected else name
+                header_model = selected if name == _model_words(catalog_name) else name
             elif found := OMP_STATUS_MODEL.search(clean):
                 mentioned = found.group().lower()
             elif quarantined := QUARANTINED_STATUS.search(clean):
@@ -1299,11 +1365,76 @@ class OrcaPlugin(BotPlugin):
         msg = f"Omp launched {observed} instead of selected {selected}; worker stopped"
         raise RuntimeError(msg)
 
-    def check(self, ctx, handle: dict) -> AgentCheck:
+    def omp_catalog_name(self, selected: str) -> str:
+        """Resolve omp's display name from its own read-only model catalog."""
+        script = """import json, os, pathlib, sqlite3, sys
+directory = pathlib.Path(os.environ.get('PI_CODING_AGENT_DIR') or pathlib.Path.home() / '.omp/agent')
+db = directory / 'models.db'
+with sqlite3.connect(f'{db.as_uri()}?mode=ro', uri=True) as connection:
+    rows = connection.execute('SELECT provider_id, models FROM model_cache ORDER BY updated_at DESC').fetchall()
+matches = []
+seen = set()
+for provider, models in rows:
+    if provider not in ('anthropic', 'openai', 'openai-codex', 'xai-oauth'):
+        continue
+    if provider in seen:
+        continue
+    seen.add(provider)
+    for model in json.loads(models):
+        mid = model.get('id') or model.get('modelId')
+        name = model.get('name') or model.get('displayName')
+        if mid and name:
+            matches.append((provider, mid, name))
+print(json.dumps(matches))
+"""
+        argv = (
+            ["ssh", "-o", "BatchMode=yes", self.files_host, "python3 -"]
+            if self.files_host
+            else ["python3", "-"]
+        )
+        proc = subprocess.run(  # noqa: S603 — fixed read-only catalog query
+            argv,
+            input=script,
+            capture_output=True,
+            text=True,
+            timeout=self.timeout,
+            check=False,
+            env=scrubbed_env(),
+        )
+        if proc.returncode:
+            msg = "Could not verify omp model against its catalog"
+            raise ValueError(msg)
+        provider, _, model = selected.partition("/")
+        rows = json.loads(proc.stdout)
+        names = [name for p, mid, name in rows if p == provider and mid == model]
+        if (
+            len(names) != 1
+            or sum(_model_words(name) == _model_words(names[0]) for _, _, name in rows)
+            != 1
+        ):
+            msg = "Omp model display name is missing or ambiguous in its catalog"
+            raise ValueError(msg)
+        return names[0]
+
+    def check(self, ctx, handle: dict) -> AgentCheck:  # noqa: C901
         """One look at an Orca worker: its status, new messages, latest output and
         usage. Fails it when its agent terminal is gone (``fail_if_terminal_gone``)."""
         dispatch, run = handle["dispatch"], handle["run"]
         shown = self.cli_json(["orchestration", "worker-show", "--dispatch", dispatch])
+        if (
+            handle.get("agent") == "claude"
+            and time.time() - handle.get("launched_at", 0) < TRUST_PROMPT_CHECK_SECONDS
+        ):
+            terminal = (shown.get("worker") or {}).get("agent_terminal_handle")
+            if terminal:
+                read = self.cli_json(
+                    ["terminal", "read", "--terminal", terminal, "--limit", "100"]
+                )
+                lines = (read.get("terminal") or {}).get("tail") or []
+                if claude_trust_blocked(lines):
+                    self.end_worker(dispatch, "running")
+                    msg = "folder trust prompt blocked the worker"
+                    raise RuntimeError(msg)
         if handle.get("selected_model"):
             self.verify_omp_model(ctx, handle, shown)
         status = str((shown.get("dispatch") or {}).get("status") or "")

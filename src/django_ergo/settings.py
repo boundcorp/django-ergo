@@ -72,6 +72,8 @@ DEFAULTS = {
     # (bots.usage_sync), run by the Routing page's Refresh and the periodic sync.
     "USAGE_COMMAND": "omp usage --redact --json",
     "USAGE_TIMEOUT": 90,
+    # Login observations older than three hourly checks cannot admit workers.
+    "LOGIN_HEALTH_MAX_AGE_SECONDS": 3 * 60 * 60,
     # Callable(message_id) that delivers a bot-to-bot thread message, e.g. by
     # queueing a Celery task. None = deliver in a background thread.
     "THREAD_MESSAGE_RUNNER": None,

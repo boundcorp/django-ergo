@@ -57,6 +57,55 @@ SHORT_PACE_MARGIN = 0.10
 CODING_PROVIDERS = frozenset({"anthropic", "openai", "openai-codex", "xai-oauth"})
 
 
+def coding_login_store(agent: str, provider: str) -> str:
+    """The credential store the selected agent actually opens."""
+    if agent == "claude":
+        return "claude-cli"
+    if agent == "codex":
+        return "codex-cli"
+    return f"omp/{provider}"
+
+
+def coding_login_error(store: str) -> str:
+    """Read ergo-bots' latest login check without reading credential files."""
+    from django.db import DatabaseError
+    from django.db import connection
+    from django.utils.dateparse import parse_datetime
+
+    from django_ergo.settings import api_settings
+
+    stale = "login health is stale, run orca_refresh_limits"
+    try:
+        if "ergo_bot_devbox_accountlogin" not in connection.introspection.table_names():
+            return stale
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT state, reason, headline, fix_command, last_checked_at "
+                "FROM ergo_bot_devbox_accountlogin WHERE provider = %s",
+                [store],
+            )
+            row = cursor.fetchone()
+    except DatabaseError:
+        return stale
+    if row is None:
+        return stale
+    state, reason, headline, fix, checked = row
+    if isinstance(checked, str):
+        checked = parse_datetime(checked)
+    if (
+        checked is None
+        or time.time() - checked.timestamp() > api_settings.LOGIN_HEALTH_MAX_AGE_SECONDS
+    ):
+        return stale
+    if state != "ok":
+        return "; ".join(
+            part
+            for part in (headline or reason or state, f"run {fix}" if fix else "")
+            if part
+        )
+    return ""
+
+
 def coding_provider(provider) -> str:
     """The subscription behind a configured CLI provider alias."""
     return {
@@ -412,37 +461,36 @@ def _eligible_coding_logins(
     tier: str,
     errors_out: list[str] | None = None,
 ):
-    """Reject coding candidates with a known failed or missing account login."""
+    """Reject coding candidates with failed, missing, or stale login health."""
     from django_ergo.conversation.models import UsageSync
 
     sync = UsageSync.objects.filter(pk=1).first()
-    if sync is None:
-        msg = (
-            f"No eligible coding model for tier {tier}: no account login sync available"
-        )
-        raise ValueError(msg)
-    from django_ergo.bots.usage_sync import targets_for
-
     errors = []
     healthy = []
-    accounts = sync.accounts or {}
+    accounts = (sync.accounts if sync else None) or {}
     for candidate in candidates:
-        account = next(
-            (
-                name
-                for name in accounts
-                if candidate.provider in targets_for(providers, name)
-            ),
-            candidate.provider,
+        store = coding_login_store(
+            candidate.agent, coding_provider(providers.providers[candidate.provider])
         )
-        info = accounts.get(account) or {}
-        error = info.get("error") or (
-            "no usable login reported" if not info.get("fetched_at") else ""
-        )
-        if error:
-            errors.append(f"{account}: {error}")
-        else:
-            healthy.append(candidate)
+        if store_error := coding_login_error(store):
+            errors.append(f"{store}: {store_error}")
+            continue
+        if candidate.agent == "omp":
+            from django_ergo.settings import api_settings
+
+            account = coding_provider(providers.providers[candidate.provider])
+            info = accounts.get(account) or {}
+            fetched = info.get("fetched_at")
+            stale = not isinstance(fetched, int | float) or (
+                time.time() - fetched > api_settings.LOGIN_HEALTH_MAX_AGE_SECONDS
+            )
+            error = info.get("error") or (
+                "login health is stale, run orca_refresh_limits" if stale else ""
+            )
+            if error:
+                errors.append(f"{store}: {error}")
+                continue
+        healthy.append(candidate)
     if not healthy:
         msg = f"No eligible coding model for tier {tier}: " + "; ".join(
             dict.fromkeys(errors)

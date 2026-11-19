@@ -11,6 +11,14 @@ from tests.test_bots import make_bot
 from tests.test_bots import say
 
 
+@pytest.fixture(autouse=True)
+def _legacy_orca_worker_fixtures_have_healthy_logins(monkeypatch):
+    """Existing lifecycle fixtures omit ergo-bots' separate login table."""
+    monkeypatch.setattr(
+        "django_ergo.bots.routing.coding_login_error", lambda _store: ""
+    )
+
+
 def test_omp_launch_guard_stops_quarantined_model():
     from django_ergo.plugins.orca import OrcaPlugin
 
@@ -25,7 +33,12 @@ def test_omp_launch_guard_stops_quarantined_model():
             self.stopped.append((dispatch, status))
 
     plugin = FakePlugin()
-    ctx = SimpleNamespace(state={"dispatch_receipt": {"launch_model": None}})
+    ctx = SimpleNamespace(
+        state={
+            "dispatch_receipt": {"launch_model": None},
+            "omp_catalog_name": "Claude Sonnet 5.5",
+        }
+    )
     handle = {"dispatch": "dispatch_1", "selected_model": "anthropic/claude-sonnet-5-5"}
     shown = {"worker": {"agent_terminal_handle": "terminal_1"}}
     with pytest.raises(RuntimeError, match="Kimi K3|kimi k3"):
@@ -54,7 +67,12 @@ def test_omp_launch_guard_verifies_the_header_display_name():
 
     # The brief mentions the incident; the header is what counts.
     plugin = _HeaderPlugin([GROK_HEADER, "Kimi K3 fell back last time"])
-    ctx = SimpleNamespace(state={"dispatch_receipt": {"launch_model": None}})
+    ctx = SimpleNamespace(
+        state={
+            "dispatch_receipt": {"launch_model": None},
+            "omp_catalog_name": "Grok 4.7 🙈",
+        }
+    )
     handle = {"dispatch": "dispatch_1", "selected_model": "xai-oauth/grok-4.7:high"}
     shown = {"worker": {"agent_terminal_handle": "terminal_1"}}
     OrcaPlugin.verify_omp_model(plugin, ctx, handle, shown)
@@ -66,7 +84,7 @@ def test_omp_launch_guard_stops_a_kimi_header():
     from django_ergo.plugins.orca import OrcaPlugin
 
     plugin = _HeaderPlugin([GROK_HEADER.replace("Grok 4.7", "Kimi K3")])
-    ctx = SimpleNamespace(state={})
+    ctx = SimpleNamespace(state={"omp_catalog_name": "Grok 4.7 🙈"})
     handle = {"dispatch": "dispatch_1", "selected_model": "xai-oauth/grok-4.7"}
     shown = {"worker": {"agent_terminal_handle": "terminal_1"}}
     with pytest.raises(RuntimeError, match="kimi k3 instead of selected"):
@@ -88,7 +106,7 @@ def test_omp_launch_guard_fails_closed_without_model_status():
             self.stopped.append((dispatch, status))
 
     plugin = FakePlugin()
-    ctx = SimpleNamespace(state={})
+    ctx = SimpleNamespace(state={"omp_catalog_name": "Claude Sonnet 5.5"})
     handle = {"dispatch": "dispatch_1", "selected_model": "anthropic/claude-sonnet-5-5"}
     shown = {"worker": {"agent_terminal_handle": "terminal_1"}}
     OrcaPlugin.verify_omp_model(plugin, ctx, handle, shown)

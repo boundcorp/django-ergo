@@ -25,6 +25,7 @@ result. The ``agents`` skill holds the tools: ``ergo_agent_start``,
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from dataclasses import field
 from typing import TYPE_CHECKING
@@ -41,6 +42,7 @@ if TYPE_CHECKING:
 
 POLL_SECONDS = 120
 STATUSES = ("running", "done", "failed")
+CLAUDE_TRUST_PROBE_SECONDS = 30
 
 
 @dataclass
@@ -443,7 +445,13 @@ def watch(ctx: WorkerContext, manager: AgentManager, handle: dict):
         return check.report
     if check.status == "failed":
         raise RuntimeError(check.error or f"The {manager.name} agent failed")
-    return ctx.again(manager.poll_seconds, progress=check.progress)
+    delay = manager.poll_seconds
+    if (
+        handle.get("agent") == "claude"
+        and time.time() - handle.get("launched_at", 0) < CLAUDE_TRUST_PROBE_SECONDS
+    ):
+        delay = min(delay, 5)
+    return ctx.again(delay, progress=check.progress)
 
 
 def watcher(manager: AgentManager):
