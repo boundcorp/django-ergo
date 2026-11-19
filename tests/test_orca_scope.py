@@ -30,13 +30,28 @@ from tests.test_bots import make_bot
 
 CATALOGS = {
     "anthropic": [
-        {"id": "claude-sonnet-5-5", "kind": "chat", "cost": {"input": 1, "output": 2}},
+        {
+            "id": "claude-sonnet-5-5",
+            "name": "Claude Sonnet 5.5",
+            "kind": "chat",
+            "cost": {"input": 1, "output": 2},
+        },
     ],
     "openai-codex": [
-        {"id": "gpt-6-sol", "kind": "chat", "cost": {"input": 1, "output": 2}},
+        {
+            "id": "gpt-6-sol",
+            "name": "GPT 6 Sol",
+            "kind": "chat",
+            "cost": {"input": 1, "output": 2},
+        },
     ],
     "xai-oauth": [
-        {"id": "grok-test", "kind": "chat", "cost": {"input": 1, "output": 2}},
+        {
+            "id": "grok-test",
+            "name": "Grok Test",
+            "kind": "chat",
+            "cost": {"input": 1, "output": 2},
+        },
     ],
 }
 SUBSCRIPTIONS = ["anthropic", "openai-codex", "xai-oauth"]
@@ -90,9 +105,11 @@ def execution_host(tmp_path, monkeypatch):
     agent = home / ".omp" / "agent"
     agent.mkdir(parents=True)
     with sqlite3.connect(agent / "models.db") as db:
-        db.execute("CREATE TABLE model_cache (provider_id TEXT, models TEXT)")
+        db.execute(
+            "CREATE TABLE model_cache (provider_id TEXT, models TEXT, updated_at INTEGER)"
+        )
         db.executemany(
-            "INSERT INTO model_cache VALUES (?, ?)",
+            "INSERT INTO model_cache VALUES (?, ?, 1)",
             [(p, json.dumps(m)) for p, m in CATALOGS.items()],
         )
     with sqlite3.connect(agent / "agent.db") as db:
@@ -211,6 +228,11 @@ class Runner:
 
 @pytest.fixture
 def scoped(tmp_path, monkeypatch, execution_host, workers):  # noqa: F811
+    # These scope tests exercise catalog/routing policy; login-store admission
+    # has its own tests and ergo-bots' table is not installed in this fixture.
+    monkeypatch.setattr(
+        "django_ergo.bots.routing.coding_login_error", lambda _store: ""
+    )
     UsageSync.objects.update_or_create(
         pk=1,
         defaults={

@@ -98,11 +98,16 @@ def test_builtin_tiers_route_in_size_order(catalog):
 
 
 @pytest.mark.django_db
-def test_coding_router_excludes_broken_login_even_with_stale_pace(catalog):
+def test_coding_router_excludes_broken_login_even_with_stale_pace(catalog, monkeypatch):
     import time
 
     from django_ergo.conversation.models import ProviderUsage
     from django_ergo.conversation.models import UsageSync
+
+    login_errors = {"claude-cli": "re-login needed", "codex-cli": ""}
+    monkeypatch.setattr(
+        routing, "coding_login_error", lambda store: login_errors[store]
+    )
 
     catalog["agents"] = {
         "low": [
@@ -137,6 +142,7 @@ def test_coding_router_excludes_broken_login_even_with_stale_pace(catalog):
         ValueError, match="re-login needed.*openai-codex weekly exhausted"
     ):
         pick_agent(providers, "low")
+    login_errors["codex-cli"] = "login expired"
     UsageSync.objects.filter(pk=1).update(
         accounts={
             "anthropic": {"error": "omp disabled this login; re-login needed"},
@@ -152,7 +158,9 @@ def test_coding_router_excludes_broken_login_even_with_stale_pace(catalog):
 
 @pytest.mark.django_db
 def test_coding_router_requires_account_sync(catalog):
-    with pytest.raises(ValueError, match="no account login sync available"):
+    with pytest.raises(
+        ValueError, match="login health is stale, run orca_refresh_limits"
+    ):
         pick_agent(Providers.from_dict(catalog), "low")
 
 
