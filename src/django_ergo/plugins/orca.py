@@ -160,6 +160,8 @@ OMP_STATUS_MODEL = re.compile(
     r"(?i)\b(?:anthropic|openai-codex|openai|xai-oauth|fireworks|openrouter|kimi|moonshot)/[a-z0-9_.-]+"
 )
 QUARANTINED_STATUS = re.compile(r"(?i)\b(?:kimi\s+k\d|fireworks|moonshot|openrouter)\b")
+# omp's TUI header names the active model by display name: "π / ◑ Grok 4.7 🙈 / 📁 …".
+OMP_HEADER_MODEL = re.compile(r"π / ([^/]+?) / ")
 OMP_MODEL_CHECK_LIMIT = 2
 MAX_OUTPUT_CHARS = 40_000  # about 10k tokens; a 26-worktree list is ~28k compact
 TARGET_FLAGS = ("--environment", "--pairing-code")
@@ -278,6 +280,11 @@ INPUT_KEYS = (
     "description",
     "prompt",
 )
+
+
+def _model_words(name: str) -> str:
+    """A model name or id as lowercase words: "Grok 4.7 🙈" and "grok-4.7" agree."""
+    return " ".join(re.findall(r"[a-z0-9]+", name.lower()))
 
 
 def _tool_input(value) -> str:
@@ -1246,7 +1253,10 @@ class OrcaPlugin(BotPlugin):
         )
 
     def verify_omp_model(self, ctx, handle: dict, shown: dict) -> None:
-        """Stop an omp dispatch as soon as its terminal identifies another model."""
+        """Stop an omp dispatch as soon as its terminal identifies another model.
+
+        omp's header shows the model's display name ("Grok 4.7"), which matches
+        the selected id ("xai-oauth/grok-4.7") once both are reduced to words."""
         terminal = (shown.get("worker") or {}).get("agent_terminal_handle")
         if not terminal:
             return
@@ -1254,13 +1264,22 @@ class OrcaPlugin(BotPlugin):
             ["terminal", "read", "--terminal", terminal, "--limit", "100"]
         )
         lines = (read.get("terminal") or {}).get("tail") or []
-        observed = ""
+        selected = handle["selected_model"].lower().split(":", 1)[0]
+        # The header is authoritative; other mentions (the brief, the agent's
+        # own output) only count while no header is on screen.
+        header_model = mentioned = ""
         for line in lines:
             clean = ANSI.sub("", str(line))
-            if found := OMP_STATUS_MODEL.search(clean):
-                observed = found.group().lower()
-            elif QUARANTINED_STATUS.search(clean):
-                observed = QUARANTINED_STATUS.search(clean).group().lower()
+            if (header := OMP_HEADER_MODEL.search(clean)) and (
+                name := _model_words(header.group(1))
+            ):
+                expected = _model_words(selected.partition("/")[2])
+                header_model = selected if name == expected else name
+            elif found := OMP_STATUS_MODEL.search(clean):
+                mentioned = found.group().lower()
+            elif quarantined := QUARANTINED_STATUS.search(clean):
+                mentioned = quarantined.group().lower()
+        observed = header_model or mentioned
         if not observed:
             checks = ctx.state.get("omp_unverified_checks", 0) + 1
             ctx.state["omp_unverified_checks"] = checks
@@ -1274,7 +1293,6 @@ class OrcaPlugin(BotPlugin):
         receipt["launch_model"] = observed
         receipt["launch_model_provenance"] = "omp terminal status"
         ctx.state["dispatch_receipt"] = receipt
-        selected = handle["selected_model"].lower().split(":", 1)[0]
         if observed == selected:
             return
         self.end_worker(handle["dispatch"], "running")

@@ -34,6 +34,47 @@ def test_omp_launch_guard_stops_quarantined_model():
     assert ctx.state["dispatch_receipt"]["launch_model"] == "kimi k3"
 
 
+class _HeaderPlugin:
+    def __init__(self, tail):
+        self.tail = tail
+        self.stopped = []
+
+    def cli_json(self, _args):
+        return {"terminal": {"tail": self.tail}}
+
+    def end_worker(self, dispatch, status):
+        self.stopped.append((dispatch, status))
+
+
+GROK_HEADER = "\x1b[2m╭── π / ◑ Grok 4.7 🙈 / 📁 …vbox / ⑂ main *3 ?1 ──9%──┃──500K──╮"
+
+
+def test_omp_launch_guard_verifies_the_header_display_name():
+    from django_ergo.plugins.orca import OrcaPlugin
+
+    # The brief mentions the incident; the header is what counts.
+    plugin = _HeaderPlugin([GROK_HEADER, "Kimi K3 fell back last time"])
+    ctx = SimpleNamespace(state={"dispatch_receipt": {"launch_model": None}})
+    handle = {"dispatch": "dispatch_1", "selected_model": "xai-oauth/grok-4.7:high"}
+    shown = {"worker": {"agent_terminal_handle": "terminal_1"}}
+    OrcaPlugin.verify_omp_model(plugin, ctx, handle, shown)
+    assert plugin.stopped == []
+    assert ctx.state["dispatch_receipt"]["launch_model"] == "xai-oauth/grok-4.7"
+
+
+def test_omp_launch_guard_stops_a_kimi_header():
+    from django_ergo.plugins.orca import OrcaPlugin
+
+    plugin = _HeaderPlugin([GROK_HEADER.replace("Grok 4.7", "Kimi K3")])
+    ctx = SimpleNamespace(state={})
+    handle = {"dispatch": "dispatch_1", "selected_model": "xai-oauth/grok-4.7"}
+    shown = {"worker": {"agent_terminal_handle": "terminal_1"}}
+    with pytest.raises(RuntimeError, match="kimi k3 instead of selected"):
+        OrcaPlugin.verify_omp_model(plugin, ctx, handle, shown)
+    assert plugin.stopped == [("dispatch_1", "running")]
+    assert ctx.state["dispatch_receipt"]["launch_model"] == "kimi k3"
+
+
 def test_omp_launch_guard_fails_closed_without_model_status():
     from django_ergo.plugins.orca import OrcaPlugin
 
@@ -81,7 +122,8 @@ def open_pr():
 
 
 @bot_task
-def explode():
+def explode(ctx):
+    ctx.state["reached"] = "build"
     raise RuntimeError("the build broke")
 
 
@@ -230,6 +272,7 @@ def test_failed_and_cancelled_workers(tmp_path, workers):
     assert w.run(str(broken.pk), bot.registry) == "failed"
     broken.refresh_from_db()
     assert "the build broke" in broken.error
+    assert broken.state["reached"] == "build"  # a failed step keeps its state
     assert (
         "failed: RuntimeError: the build broke"
         in ThreadMessage.objects.get(metadata__worker=str(broken.pk)).text
