@@ -20,6 +20,7 @@ from django_ergo.bots.tools import ToolContext
 from django_ergo.bots.workers import worker_toolkit
 from django_ergo.conversation.models import ConversationSession
 from django_ergo.conversation.models import ThreadMessage
+from django_ergo.conversation.models import UsageSync
 from django_ergo.conversation.models import Worker
 from django_ergo.plugins.orca_scope import admitted_providers
 from django_ergo.plugins.orca_scope import host_check
@@ -178,6 +179,13 @@ class Runner:
         if command == ("orchestration", "worker-start"):
             self.starts += 1
             return {"dispatchId": f"dispatch-{self.starts}"}
+        if command == ("terminal", "read"):
+            import yaml
+
+            roles = yaml.safe_load((self.paths[-1] / ".omp/config.yml").read_text())[
+                "modelRoles"
+            ]
+            return {"terminal": {"tail": [roles["default"].split(":")[0]]}}
         fixed = {
             ("terminal", "create"): {"terminal": {"handle": "mailbox-1"}},
             ("terminal", "show"): {"terminal": {"connected": True, "paneRuntimeId": 7}},
@@ -203,6 +211,15 @@ class Runner:
 
 @pytest.fixture
 def scoped(tmp_path, monkeypatch, execution_host, workers):  # noqa: F811
+    UsageSync.objects.update_or_create(
+        pk=1,
+        defaults={
+            "accounts": {
+                provider: {"error": "", "fetched_at": time.time()}
+                for provider in SUBSCRIPTIONS
+            }
+        },
+    )
     bot, _, plugin = orca_bot(
         tmp_path,
         config="executable: orca-test, files_host: '', scoped_repositories: {demo: 'name:demo'}",

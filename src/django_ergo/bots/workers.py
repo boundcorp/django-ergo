@@ -484,6 +484,7 @@ def run(worker_id: str, registry=None) -> str:
     _notify(worker)
     outcome: Any = None
     error = ""
+    ctx = None
     try:
         bot = find_bot(worker.bot_name, registry)
         function = resolve(bot, worker.function)
@@ -507,6 +508,9 @@ def run(worker_id: str, registry=None) -> str:
         worker.state = ctx.state
     except Exception as exc:  # noqa: BLE001 — recorded on the worker
         error = f"{type(exc).__name__}: {exc}"
+        if ctx is not None:
+            # Keep what the failing step learned (e.g. a launch guard's receipt).
+            worker.state = ctx.state
         logger.warning(
             "Worker %s failed: %s",
             worker_id,

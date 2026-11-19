@@ -228,6 +228,16 @@ def start(ctx: ToolContext, spec: AgentSpec, manager: str = "") -> Worker:
             f" (picked for the {spec.tier} tier)" if spec.tier else ""
         )
         raise ValueError(msg)
+    if spec.agent not in {"claude", "codex", "omp"}:
+        msg = f"Coding agent {spec.agent!r} is not on the provider allowlist"
+        raise ValueError(msg)
+    if spec.agent == "omp":
+        from django_ergo.bots.routing import CODING_PROVIDERS
+
+        provider, separator, _model = spec.model.partition("/")
+        if not separator or provider not in CODING_PROVIDERS:
+            msg = "Omp coding workers require an explicit allowed provider/model"
+            raise ValueError(msg)
     spec.title = (spec.title or spec.brief.strip().splitlines()[0])[:120]
     if choice is not None:
         from django_ergo.bots.routing import record_agent_pick

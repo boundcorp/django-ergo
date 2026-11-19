@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from django_ergo.bots import routing
 from django_ergo.bots.definition import BotDefinition
 from django_ergo.bots.providers import Provider
 from django_ergo.bots.providers import Providers
@@ -48,6 +49,20 @@ def catalog(monkeypatch):
 BUILTIN = ("small", "medium", "large", "xlarge")
 
 
+@pytest.fixture(autouse=True)
+def legacy_routing_without_login_state(request, monkeypatch):
+    """Older pace tests model quota only; login admission has a dedicated test."""
+    if request.node.name not in {
+        "test_coding_router_excludes_broken_login_even_with_stale_pace",
+        "test_coding_router_requires_account_sync",
+    }:
+        monkeypatch.setattr(
+            routing,
+            "_eligible_coding_logins",
+            lambda _providers, candidates, _tier, _errors=None: candidates,
+        )
+
+
 def test_defaults_use_configured_subscription_catalog(catalog):
     providers = Providers.from_dict(catalog)
     small = ["anthropic/claude-haiku-5-5", "openai-codex/gpt-6-luna"]
@@ -80,6 +95,65 @@ def test_builtin_tiers_route_in_size_order(catalog):
     assert pick_agent(providers, "xlarge") == AgentChoice(
         "claude", "claude-fable-5-1", "anthropic", "medium"
     )
+
+
+@pytest.mark.django_db
+def test_coding_router_excludes_broken_login_even_with_stale_pace(catalog):
+    import time
+
+    from django_ergo.conversation.models import ProviderUsage
+    from django_ergo.conversation.models import UsageSync
+
+    catalog["agents"] = {
+        "low": [
+            {"agent": "claude", "model": "claude-sonnet-5-5", "provider": "anthropic"},
+            {"agent": "codex", "model": "gpt-6-luna", "provider": "openai-codex"},
+        ]
+    }
+    providers = Providers.from_dict(catalog)
+    providers.providers["fireworks"] = Provider(
+        name="fireworks", type="fireworks", transport="cli"
+    )
+    providers.routing.agents["small"].insert(
+        0, AgentChoice("omp", "fireworks/kimi-k3", "fireworks")
+    )
+    ProviderUsage.objects.create(
+        provider="anthropic",
+        windows={"weekly": {"used": 49, "observed_at": time.time() - 15 * 3600}},
+    )
+    UsageSync.objects.create(
+        pk=1,
+        accounts={
+            "anthropic": {"error": "omp disabled this login; re-login needed"},
+            "openai-codex": {"error": "", "fetched_at": time.time()},
+        },
+    )
+    assert pick_agent(providers, "low").provider == "openai-codex"
+    ProviderUsage.objects.create(
+        provider="openai-codex",
+        windows={"weekly": {"used": 100, "observed_at": time.time()}},
+    )
+    with pytest.raises(
+        ValueError, match="re-login needed.*openai-codex weekly exhausted"
+    ):
+        pick_agent(providers, "low")
+    UsageSync.objects.filter(pk=1).update(
+        accounts={
+            "anthropic": {"error": "omp disabled this login; re-login needed"},
+            "openai-codex": {"error": "login expired"},
+        }
+    )
+    with pytest.raises(
+        ValueError,
+        match="No eligible coding model for tier small:.*re-login needed.*login expired",
+    ):
+        pick_agent(providers, "low")
+
+
+@pytest.mark.django_db
+def test_coding_router_requires_account_sync(catalog):
+    with pytest.raises(ValueError, match="no account login sync available"):
+        pick_agent(Providers.from_dict(catalog), "low")
 
 
 @pytest.mark.django_db

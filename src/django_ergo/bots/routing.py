@@ -54,6 +54,16 @@ USAGE_STALE_SECONDS = 15 * 60  # three missed 5-minute syncs
 EXHAUSTED_PERCENT = 100
 WEEK_SECONDS = 7 * 24 * 3600
 SHORT_PACE_MARGIN = 0.10
+CODING_PROVIDERS = frozenset({"anthropic", "openai", "openai-codex", "xai-oauth"})
+
+
+def coding_provider(provider) -> str:
+    """The subscription behind a configured CLI provider alias."""
+    return {
+        "claude": "anthropic",
+        "openai": "openai-codex",
+        "omp": provider.account,
+    }.get(provider.type, "")
 
 
 class Limit(BaseModel):
@@ -396,6 +406,53 @@ def pick_model(providers: Providers, tier: str, current: str = "") -> str:
     return providers.check_public(picked, where=f"auto/{tier}")
 
 
+def _eligible_coding_logins(
+    providers: Providers,
+    candidates: list[AgentChoice],
+    tier: str,
+    errors_out: list[str] | None = None,
+):
+    """Reject coding candidates with a known failed or missing account login."""
+    from django_ergo.conversation.models import UsageSync
+
+    sync = UsageSync.objects.filter(pk=1).first()
+    if sync is None:
+        msg = (
+            f"No eligible coding model for tier {tier}: no account login sync available"
+        )
+        raise ValueError(msg)
+    from django_ergo.bots.usage_sync import targets_for
+
+    errors = []
+    healthy = []
+    accounts = sync.accounts or {}
+    for candidate in candidates:
+        account = next(
+            (
+                name
+                for name in accounts
+                if candidate.provider in targets_for(providers, name)
+            ),
+            candidate.provider,
+        )
+        info = accounts.get(account) or {}
+        error = info.get("error") or (
+            "no usable login reported" if not info.get("fetched_at") else ""
+        )
+        if error:
+            errors.append(f"{account}: {error}")
+        else:
+            healthy.append(candidate)
+    if not healthy:
+        msg = f"No eligible coding model for tier {tier}: " + "; ".join(
+            dict.fromkeys(errors)
+        )
+        raise ValueError(msg)
+    if errors_out is not None:
+        errors_out.extend(dict.fromkeys(errors))
+    return healthy
+
+
 def pick_agent(
     providers: Providers,
     tier: str,
@@ -415,6 +472,8 @@ def pick_agent(
         c
         for c in listed
         if (p := providers.providers.get(c.provider)) is not None
+        and coding_provider(p) in CODING_PROVIDERS
+        and ("/" not in c.model or c.model.partition("/")[0] == coding_provider(p))
         and p.transport == "cli"
         and not providers.is_private(c.model)
         and (not p.worker_only or p.available)
@@ -433,6 +492,8 @@ def pick_agent(
             )
             raise ValueError(msg)
         candidates = runnable
+    login_errors: list[str] = []
+    candidates = _eligible_coding_logins(providers, candidates, tier, login_errors)
     usage = current_usage()
     rules = active_rules(routing)
     picked = choose(
@@ -443,7 +504,12 @@ def pick_agent(
         model_of=lambda c: c.model,
     )
     if picked is None:
-        msg = f"No safe subscription in the {tier!r} agents tier"
+        reasons = login_errors + [
+            pace_block(c.provider, usage, c.model) for c in candidates
+        ]
+        msg = f"No safe subscription in the {tier!r} agents tier; " + "; ".join(
+            dict.fromkeys(reason for reason in reasons if reason)
+        )
         raise ValueError(msg)
     if receipt is not None:
         from django_ergo.settings import api_settings
