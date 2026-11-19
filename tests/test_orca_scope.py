@@ -191,6 +191,9 @@ class Runner:
             self.starts += 1
             return {"dispatchId": f"dispatch-{self.starts}"}
         if command == ("terminal", "read"):
+            launched = self.commands("orchestration", "worker-start")[-1]
+            if launched[launched.index("--agent") + 1] != "omp":
+                return {"terminal": {"tail": []}}
             import yaml
 
             roles = yaml.safe_load((self.paths[-1] / ".omp/config.yml").read_text())[
@@ -240,6 +243,8 @@ def scoped(tmp_path, monkeypatch, execution_host, workers):  # noqa: F811
         tmp_path,
         config="executable: orca-test, files_host: '', scoped_repositories: {demo: 'name:demo'}, agents: [claude, codex, omp]",
     )
+    # Test worktrees live under pytest's /tmp root, outside Orca's trusted root.
+    monkeypatch.setattr(plugin, "seed_claude_trust", lambda _worktree, _path: None)
     registry = BotRegistry()
     registry.providers = Providers.from_dict(provider_config())
     registry.add(bot)
