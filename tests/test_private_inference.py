@@ -525,7 +525,7 @@ def test_agent_tiers_skip_private_models(found, monkeypatch):
     monkeypatch.setattr(
         routing,
         "_eligible_coding_logins",
-        lambda _providers, candidates, _tier: candidates,
+        lambda _providers, candidates, _tier, _errors=None: candidates,
     )
     monkeypatch.setattr(routing, "current_usage", dict)
     monkeypatch.setattr(routing, "active_rules", lambda r: routing.RoutingRules())
@@ -1313,7 +1313,7 @@ def test_models_list_shows_a_public_bot_its_tiers_and_routing_picks(found, monke
     monkeypatch.setattr(
         routing,
         "_eligible_coding_logins",
-        lambda _providers, candidates, _tier: candidates,
+        lambda _providers, candidates, _tier, _errors=None: candidates,
     )
     monkeypatch.setattr(routing, "current_usage", dict)
     monkeypatch.setattr(routing, "active_rules", lambda r: routing.RoutingRules())

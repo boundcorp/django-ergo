@@ -30,7 +30,7 @@ def legacy_pace_tests_without_login_state(monkeypatch):
     monkeypatch.setattr(
         routing,
         "_eligible_coding_logins",
-        lambda _providers, candidates, _tier: candidates,
+        lambda _providers, candidates, _tier, _errors=None: candidates,
     )
 
 

@@ -59,7 +59,7 @@ def legacy_routing_without_login_state(request, monkeypatch):
         monkeypatch.setattr(
             routing,
             "_eligible_coding_logins",
-            lambda _providers, candidates, _tier: candidates,
+            lambda _providers, candidates, _tier, _errors=None: candidates,
         )
 
 
@@ -129,6 +129,14 @@ def test_coding_router_excludes_broken_login_even_with_stale_pace(catalog):
         },
     )
     assert pick_agent(providers, "low").provider == "openai-codex"
+    ProviderUsage.objects.create(
+        provider="openai-codex",
+        windows={"weekly": {"used": 100, "observed_at": time.time()}},
+    )
+    with pytest.raises(
+        ValueError, match="re-login needed.*openai-codex weekly exhausted"
+    ):
+        pick_agent(providers, "low")
     UsageSync.objects.filter(pk=1).update(
         accounts={
             "anthropic": {"error": "omp disabled this login; re-login needed"},

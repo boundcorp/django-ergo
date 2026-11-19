@@ -488,7 +488,7 @@ def test_orca_start_worker_watches_the_dispatch_and_reports_back(  # noqa: PLR09
         ),
         ("/home/dev/p/site", ".omp", ".gitignore", b"*\n"),
     ]
-    with pytest.raises(ValueError, match="omp takes effort only"):
+    with pytest.raises(ValueError, match="Omp coding workers require"):
         plugin.start_worker(
             ctx, "x", "id:repo::/home/dev/p/site", agent="omp", effort="high"
         )
