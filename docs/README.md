@@ -24,6 +24,8 @@
 
 ## Library
 
+- [Hindsight working memory](hindsight-memory.md): opt-in automatic memory beside the Markdown KB
+
 | Doc                                                           | Covers                                                                    |
 | ------------------------------------------------------------- | ------------------------------------------------------------------------- |
 | [Structured calls](structured-calls.md)                       | `StructuredCall`, typed responses with tools, revisions                   |

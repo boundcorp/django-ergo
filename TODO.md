@@ -10,6 +10,7 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 
 - [x] **PR #31 review and merge**: two review passes (22 findings) fixed in 2e54508/e3a2345; CI green; merged b1bd99c.
 - [x] **Bots that learn**: `ergo_kb` `write: true` gives `ergo_kb_write` (kb/*.md only, committed and pushed). Kitchen turned on in ergo-bots.
+- [x] **Optional Hindsight working memory**: plugin with asynchronous retain, bounded recall prefetch, and scoped tools; bot activation remains a separate review step.
 - [ ] **Deploy plan** for Ergonaut on the octo cluster (modeled on kitchen-mgmt's infra/octo).
 - [x] **Schedules in each bot's bot.yaml** (`schedules:`, run every minute by Celery beat; bot page lists them with the next run). PR from `claude/bot-schedules`.
 - [x] **Auditable schedule workflows**: trusted Python steps, named JSON context, safe conditions, message-only prompts, fixed timezones, silent no-op runs and failure notices.
