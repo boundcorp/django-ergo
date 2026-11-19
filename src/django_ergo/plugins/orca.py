@@ -1050,9 +1050,11 @@ class OrcaPlugin(BotPlugin):
                 raise ValueError(msg)
         if self.scoped_repositories is not None:
             self.manager.routing_providers(ctx, spec)
-            if spec.agent != "omp" or not spec.model:
-                msg = "Scoped launch requires a selected omp subscription model"
+            if spec.agent not in self.manager.agents or not spec.model:
+                msg = "Scoped launch requires an allowed agent and admitted subscription model"
                 raise ValueError(msg)
+            if spec.agent in {"claude", "codex"}:
+                spec.model = spec.model.partition("/")[2] or spec.model
             import uuid
 
             created = self.cli_json(
@@ -1940,8 +1942,11 @@ class OrcaAgents(AgentManager):
         self.plugin = plugin
         self.agents = tuple(plugin.config.get("agents") or ("codex", "claude", "omp"))
         if plugin.scoped_repositories is not None:
-            self.agents = ("omp",)
-            self.default_agent = "omp"
+            self.agents = tuple(plugin.config.get("agents") or ("omp",))
+            if not set(self.agents) <= {"claude", "codex", "omp"}:
+                msg = "Scoped agents must be claude, codex or omp"
+                raise ValueError(msg)
+            self.default_agent = self.agents[0]
         self.requires_approval = plugin.approve_changes
         self.poll_seconds = plugin.poll_seconds
         place = plugin.environment or "this host"
@@ -1967,18 +1972,61 @@ class OrcaAgents(AgentManager):
         if spec.workspace not in self.plugin.scoped_repositories:
             msg = "Scoped workspace must be a configured repository alias, not a path or worktree"
             raise ValueError(msg)
-        if spec.agent and spec.agent != "omp":
-            msg = "Scoped Orca runs only omp with pinned subscription model roles"
+        if spec.agent and spec.agent not in self.agents:
+            msg = f"Scoped Orca permits {', '.join(self.agents)}, not {spec.agent!r}"
             raise ValueError(msg)
         from django_ergo.plugins.orca_scope import admitted_providers
 
         providers, allowed = admitted_providers(
             ctx.bot.providers, self.plugin.scope_metadata()
         )
-        if spec.model and spec.model not in allowed:
+        from dataclasses import replace
+
+        providers = replace(
+            providers,
+            routing=replace(
+                providers.routing,
+                agents={
+                    tier: [choice for choice in choices if choice.agent in self.agents]
+                    for tier, choices in providers.routing.agents.items()
+                },
+            ),
+        )
+        if (
+            spec.tier
+            and spec.tier in providers.routing.agents
+            and not providers.routing.agents[spec.tier]
+        ):
+            configured = ctx.bot.providers.routing.agents[spec.tier]
+            configured_agents = ", ".join(
+                sorted({choice.agent for choice in configured})
+            )
+            msg = (
+                f"The {spec.tier!r} agents tier exists but has no choices admitted "
+                f"for this scoped runner: tier agents [{configured_agents}], "
+                f"scope permits [{', '.join(self.agents)}]; choices must have an active "
+                "OAuth subscription and an enabled, listed, priced chat model "
+                "on its native CLI (or omp for providers without one)"
+            )
+            raise ValueError(msg)
+        tier_choice = spec.tier and any(
+            choice.agent == spec.agent and choice.model == spec.model
+            for choice in providers.routing.agents.get(spec.tier, [])
+        )
+        if spec.model and spec.model not in allowed and not tier_choice:
             msg = "Scoped model must be an enabled, listed, priced chat candidate on an allowed subscription"
             raise ValueError(msg)
-        spec.agent = "omp"
+        if spec.model and not tier_choice:
+            namespace, _, _ = spec.model.partition("/")
+            required_agent = {"anthropic": "claude", "openai-codex": "codex"}.get(
+                namespace, "omp"
+            )
+            if required_agent not in self.agents or (
+                spec.agent and spec.agent != required_agent
+            ):
+                msg = f"Scoped model {spec.model!r} requires allowed agent {required_agent}"
+                raise ValueError(msg)
+            spec.agent = required_agent
         if not spec.model and not spec.tier:
             spec.tier = "medium"
         return providers

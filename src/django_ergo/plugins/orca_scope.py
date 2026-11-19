@@ -64,7 +64,24 @@ def host_check(root: str = "") -> dict:
     }
 
 
-def admitted_providers(providers, metadata: dict):  # noqa: C901 — one admission/filtering pass
+def _chat_cache_record(raw: dict) -> dict:
+    """Add explicit chat evidence for omp cache rows without a `kind` field."""
+    max_tokens = raw.get("maxTokens")
+    if (
+        "kind" not in raw
+        and isinstance(raw.get("api"), str)
+        and raw["api"]
+        in {"anthropic-messages", "openai-codex-responses", "openai-responses"}
+        and isinstance(raw.get("input"), list)
+        and "text" in raw["input"]
+        and isinstance(max_tokens, int | float)
+        and max_tokens > 0
+    ):
+        return {**raw, "kind": "chat"}
+    return raw
+
+
+def admitted_providers(providers, metadata: dict):  # noqa: C901, PLR0912 — one admission/filtering pass
     """A filtered copy: listed, priced chat models on coding subscriptions only.
 
     Reuse discovery's eligibility rules; never fetch models, compile routing,
@@ -78,6 +95,7 @@ def admitted_providers(providers, metadata: dict):  # noqa: C901 — one admissi
         msg = "Scoped Orca runner requires omp on the execution host"
         raise ValueError(msg)
     allowed = {}
+    native_agents = {"anthropic": "claude", "openai-codex": "codex"}
     for alias, provider in providers.providers.items():
         canonical = (
             provider.account
@@ -106,7 +124,9 @@ def admitted_providers(providers, metadata: dict):  # noqa: C901 — one admissi
         for raw in metadata.get("catalogs", {}).get(canonical, []):
             if raw.get("enabled") is False:
                 continue
-            record = _normalize(source, raw, "omp_cache", providers, ())
+            record = _normalize(
+                source, _chat_cache_record(raw), "omp_cache", providers, ()
+            )
             if record and record["routable"]:
                 # A provider's configured chat list is an additional allowlist.
                 if not provider.worker_only and record["id"] not in provider.models:
@@ -130,8 +150,16 @@ def admitted_providers(providers, metadata: dict):  # noqa: C901 — one admissi
                 choice.provider,
                 (selector or "").partition("/")[0],
             }
-            if choice.agent == "omp" and selector and valid_namespace:
-                tiers[tier].append(replace(choice, model=selector))
+            if not selector or not valid_namespace:
+                continue
+            expected_agent = native_agents.get(selector.partition("/")[0], "omp")
+            if choice.agent == expected_agent:
+                # Orca's native CLIs take bare model IDs; omp takes its namespace.
+                tiers[tier].append(
+                    replace(
+                        choice, model=model if expected_agent != "omp" else selector
+                    )
+                )
     return replace(providers, routing=replace(providers.routing, agents=tiers)), set(
         allowed.values()
     )
