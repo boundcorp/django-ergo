@@ -156,6 +156,11 @@ OMP_MODEL_ROLES = (
     "widget",
 )
 OMP_EFFORT_ROLES = {"default", "slow", "plan", "task", "advisor"}
+OMP_STATUS_MODEL = re.compile(
+    r"(?i)\b(?:anthropic|openai-codex|openai|xai-oauth|fireworks|openrouter|kimi|moonshot)/[a-z0-9_.-]+"
+)
+QUARANTINED_STATUS = re.compile(r"(?i)\b(?:kimi\s+k\d|fireworks|moonshot|openrouter)\b")
+OMP_MODEL_CHECK_LIMIT = 2
 MAX_OUTPUT_CHARS = 40_000  # about 10k tokens; a 26-worktree list is ~28k compact
 TARGET_FLAGS = ("--environment", "--pairing-code")
 ARGS_SCHEMA = {
@@ -871,7 +876,12 @@ class OrcaPlugin(BotPlugin):
         itself, so the setting never shows up in git."""
         root = self.worktree_path(worktree)
         selector = f"{model}:{effort}" if effort else model
-        config = "modelRoles:\n" + "".join(
+        config = (
+            "retry:\n  modelFallback: false\n"
+            "prewalk:\n  enabled: false\n"
+            "advisor:\n  enabled: false\n"
+            "modelRoles:\n"
+        ) + "".join(
             f"  {role}: {json.dumps(selector if role in OMP_EFFORT_ROLES else model)}\n"
             for role in OMP_MODEL_ROLES
         )
@@ -1072,6 +1082,7 @@ class OrcaPlugin(BotPlugin):
             "task": task_id,
             "worktree": worktree,
             "path": worktree_path or "",
+            "selected_model": spec.model if spec.agent == "omp" else "",
         }
 
     def capture_native_history(
@@ -1234,11 +1245,49 @@ class OrcaPlugin(BotPlugin):
             ctx, self.manager, {"dispatch": dispatch, "run": run, "task": task}
         )
 
+    def verify_omp_model(self, ctx, handle: dict, shown: dict) -> None:
+        """Stop an omp dispatch as soon as its terminal identifies another model."""
+        terminal = (shown.get("worker") or {}).get("agent_terminal_handle")
+        if not terminal:
+            return
+        read = self.cli_json(
+            ["terminal", "read", "--terminal", terminal, "--limit", "100"]
+        )
+        lines = (read.get("terminal") or {}).get("tail") or []
+        observed = ""
+        for line in lines:
+            clean = ANSI.sub("", str(line))
+            if found := OMP_STATUS_MODEL.search(clean):
+                observed = found.group().lower()
+            elif QUARANTINED_STATUS.search(clean):
+                observed = QUARANTINED_STATUS.search(clean).group().lower()
+        if not observed:
+            checks = ctx.state.get("omp_unverified_checks", 0) + 1
+            ctx.state["omp_unverified_checks"] = checks
+            if checks >= OMP_MODEL_CHECK_LIMIT:
+                self.end_worker(handle["dispatch"], "running")
+                msg = "Omp did not report its launch model; worker stopped"
+                raise RuntimeError(msg)
+            return
+        ctx.state.pop("omp_unverified_checks", None)
+        receipt = dict(ctx.state.get("dispatch_receipt") or {})
+        receipt["launch_model"] = observed
+        receipt["launch_model_provenance"] = "omp terminal status"
+        ctx.state["dispatch_receipt"] = receipt
+        selected = handle["selected_model"].lower().split(":", 1)[0]
+        if observed == selected:
+            return
+        self.end_worker(handle["dispatch"], "running")
+        msg = f"Omp launched {observed} instead of selected {selected}; worker stopped"
+        raise RuntimeError(msg)
+
     def check(self, ctx, handle: dict) -> AgentCheck:
         """One look at an Orca worker: its status, new messages, latest output and
         usage. Fails it when its agent terminal is gone (``fail_if_terminal_gone``)."""
         dispatch, run = handle["dispatch"], handle["run"]
         shown = self.cli_json(["orchestration", "worker-show", "--dispatch", dispatch])
+        if handle.get("selected_model"):
+            self.verify_omp_model(ctx, handle, shown)
         status = str((shown.get("dispatch") or {}).get("status") or "")
         state = str((shown.get("worker") or {}).get("state") or "")
         liveness = str((shown.get("observation") or {}).get("status") or "")

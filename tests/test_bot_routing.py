@@ -22,6 +22,18 @@ from django_ergo.bots.runtime import Bot
 from django_ergo.conversation.models import RoutingPolicy
 
 SH = shutil.which("sh") or "sh"
+
+
+@pytest.fixture(autouse=True)
+def legacy_pace_tests_without_login_state(monkeypatch):
+    """These tests exercise pace scoring independently of account admission."""
+    monkeypatch.setattr(
+        routing,
+        "_eligible_coding_logins",
+        lambda _providers, candidates, _tier: candidates,
+    )
+
+
 PROVIDERS = f"""
 default: auto/medium
 providers:

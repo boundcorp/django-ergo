@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 from asgiref.sync import async_to_sync
@@ -8,6 +9,52 @@ from django.contrib.auth import get_user_model
 
 from tests.test_bots import make_bot
 from tests.test_bots import say
+
+
+def test_omp_launch_guard_stops_quarantined_model():
+    from django_ergo.plugins.orca import OrcaPlugin
+
+    class FakePlugin:
+        stopped = []
+
+        def cli_json(self, args):
+            assert args[:2] == ["terminal", "read"]
+            return {"terminal": {"tail": ["Kimi K3"]}}
+
+        def end_worker(self, dispatch, status):
+            self.stopped.append((dispatch, status))
+
+    plugin = FakePlugin()
+    ctx = SimpleNamespace(state={"dispatch_receipt": {"launch_model": None}})
+    handle = {"dispatch": "dispatch_1", "selected_model": "anthropic/claude-sonnet-5-5"}
+    shown = {"worker": {"agent_terminal_handle": "terminal_1"}}
+    with pytest.raises(RuntimeError, match="Kimi K3|kimi k3"):
+        OrcaPlugin.verify_omp_model(plugin, ctx, handle, shown)
+    assert plugin.stopped == [("dispatch_1", "running")]
+    assert ctx.state["dispatch_receipt"]["launch_model"] == "kimi k3"
+
+
+def test_omp_launch_guard_fails_closed_without_model_status():
+    from django_ergo.plugins.orca import OrcaPlugin
+
+    class FakePlugin:
+        stopped = []
+
+        def cli_json(self, _args):
+            return {"terminal": {"tail": []}}
+
+        def end_worker(self, dispatch, status):
+            self.stopped.append((dispatch, status))
+
+    plugin = FakePlugin()
+    ctx = SimpleNamespace(state={})
+    handle = {"dispatch": "dispatch_1", "selected_model": "anthropic/claude-sonnet-5-5"}
+    shown = {"worker": {"agent_terminal_handle": "terminal_1"}}
+    OrcaPlugin.verify_omp_model(plugin, ctx, handle, shown)
+    with pytest.raises(RuntimeError, match="did not report its launch model"):
+        OrcaPlugin.verify_omp_model(plugin, ctx, handle, shown)
+    assert plugin.stopped == [("dispatch_1", "running")]
+
 
 TOOLS = """
 from django_ergo.bots import bot_task, bot_tool
@@ -426,7 +473,7 @@ def test_orca_start_worker_watches_the_dispatch_and_reports_back(  # noqa: PLR09
             "/home/dev/p/site",
             ".omp",
             "config.yml",
-            b"modelRoles:\n"
+            b"retry:\n  modelFallback: false\nprewalk:\n  enabled: false\nadvisor:\n  enabled: false\nmodelRoles:\n"
             b'  default: "anthropic/claude-sonnet-5-5:high"\n'
             b'  smol: "anthropic/claude-sonnet-5-5"\n'
             b'  slow: "anthropic/claude-sonnet-5-5:high"\n'

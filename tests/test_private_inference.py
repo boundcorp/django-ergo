@@ -522,6 +522,11 @@ def test_retry_and_reroute_never_offer_a_private_model(found, monkeypatch):
 
 
 def test_agent_tiers_skip_private_models(found, monkeypatch):
+    monkeypatch.setattr(
+        routing,
+        "_eligible_coding_logins",
+        lambda _providers, candidates, _tier: candidates,
+    )
     monkeypatch.setattr(routing, "current_usage", dict)
     monkeypatch.setattr(routing, "active_rules", lambda r: routing.RoutingRules())
     found.routing.agents["small"] = [
@@ -1305,6 +1310,11 @@ async def test_any_pool_name_keeps_its_allowed_bots_private(monkeypatch, firewor
 
 
 def test_models_list_shows_a_public_bot_its_tiers_and_routing_picks(found, monkeypatch):
+    monkeypatch.setattr(
+        routing,
+        "_eligible_coding_logins",
+        lambda _providers, candidates, _tier: candidates,
+    )
     monkeypatch.setattr(routing, "current_usage", dict)
     monkeypatch.setattr(routing, "active_rules", lambda r: routing.RoutingRules())
     found.routing.agents["small"] = [
