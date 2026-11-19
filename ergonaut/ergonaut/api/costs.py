@@ -202,13 +202,15 @@ class PrivateSpendOut(Schema):
 class UsageHour(Schema):
     start: str  # ISO time the hour starts; it ends at the next one's start (or ``until``)
     thread_tokens: int  # the chat's own calls: turns, compaction, titles
-    agent_tokens: int  # coding agents run by the chat's workers
+    agent_tokens: int  # coding agents run by the chat's workers (includes the estimated part)
+    agent_tokens_estimated: int = 0  # the part derived from Orca session-file scans
 
 
 class AgentUsageCoverage(Schema):
     # A zero recorded total does not establish that no agent tokens were used.
     status: str = "partial"
-    excluded: list[str] = ["orca", "native_session", "legacy"]
+    excluded: list[str] = ["native_session", "legacy"]
+    estimated: list[str] = ["orca"]
     collection: str = "periodic"
     zero_is_conclusive: bool = False
 
@@ -218,6 +220,7 @@ class SessionUsageOut(Schema):
     hours: list[UsageHour]
     thread_tokens: int
     agent_tokens: int
+    agent_tokens_estimated: int = 0
     agent_usage_complete: bool = False
     agent_usage_coverage: AgentUsageCoverage = AgentUsageCoverage()
 
@@ -232,18 +235,21 @@ class UsageTokenParts(Schema):
 class UsageHistoryTotals(Schema):
     thread: UsageTokenParts
     agents: UsageTokenParts
+    agents_estimated: UsageTokenParts
 
 
 class UsageDay(Schema):
     date: str
     thread_tokens: int
     agent_tokens: int
+    agent_tokens_estimated: int = 0
 
 
 class UsageModel(Schema):
     model: str
     thread_tokens: int
     agent_tokens: int
+    agent_tokens_estimated: int = 0
 
 
 class SessionUsageHistoryOut(Schema):
@@ -742,6 +748,9 @@ def _estimate(calls: list[StructuredCall], usages: list[AgentUsage], since) -> d
     }
 
 
+LOCAL_SHELL_SOURCE = "local_shell_run_v1"
+ORCA_SOURCE = "orca"
+AGENT_SOURCES = (LOCAL_SHELL_SOURCE, ORCA_SOURCE)
 AGENT_FIELDS = tuple(f"{part}_tokens" for part in AGENT_PARTS)
 
 
@@ -765,6 +774,7 @@ def _spread(bins: list[int], since, hour: timedelta, first, last, tokens: int) -
 def session_usage(request, session_id: str, hours: int = 6):
     """Direct chat calls and provenance-marked worker-run totals over rolling hours.
 
+    Orca-derived worker totals are included as estimates (``agent_tokens_estimated``).
     Agent history is incomplete; native-session events and legacy aggregates have
     no reliable thread ownership and are deliberately excluded.
     """
@@ -777,6 +787,7 @@ def session_usage(request, session_id: str, hours: int = 6):
     since = until - hours * hour
     thread = [0] * hours
     agents = [0] * hours
+    estimated = [0] * hours
 
     def slot(at) -> int:
         return min(hours - 1, int((at - since) / hour))
@@ -786,19 +797,27 @@ def session_usage(request, session_id: str, hours: int = 6):
     for row in own.filter(created_at__gte=since, created_at__lte=until).values_list("created_at", *fields):
         thread[slot(row[0])] += sum(n or 0 for n in row[1:])
 
-    totals = AgentUsage.objects.filter(session=session, source="local_shell_run_v1", last_at__gte=since)
+    totals = AgentUsage.objects.filter(session=session, source__in=AGENT_SOURCES, last_at__gte=since)
     for usage in totals:
         tokens = sum(getattr(usage, field) for field in AGENT_FIELDS)
-        _spread(agents, since, hour, usage.first_at, min(usage.last_at, until), tokens)
+        # Orca rows are cwd/time scans of session files: placement and totals are estimates.
+        bins = estimated if usage.source == ORCA_SOURCE else agents
+        _spread(bins, since, hour, usage.first_at, min(usage.last_at, until), tokens)
 
     return {
         "until": until.isoformat(),
         "hours": [
-            {"start": (since + index * hour).isoformat(), "thread_tokens": thread[index], "agent_tokens": agents[index]}
+            {
+                "start": (since + index * hour).isoformat(),
+                "thread_tokens": thread[index],
+                "agent_tokens": agents[index] + estimated[index],
+                "agent_tokens_estimated": estimated[index],
+            }
             for index in range(hours)
         ],
         "thread_tokens": sum(thread),
-        "agent_tokens": sum(agents),
+        "agent_tokens": sum(agents) + sum(estimated),
+        "agent_tokens_estimated": sum(estimated),
     }
 
 
@@ -806,9 +825,9 @@ def session_usage(request, session_id: str, hours: int = 6):
 def session_usage_history(request, session_id: str):
     """Seven UTC calendar days and all-time recorded totals for a chat.
 
-    Only explicitly owned local-shell run aggregates contribute agent tokens.
-    Native events and legacy aggregates are excluded, never combined with these
-    estimates. Agent history remains incomplete, including for deleted workers.
+    Local-shell run aggregates and Orca-derived estimates contribute agent tokens;
+    the Orca part is reported separately. Native events and legacy aggregates are
+    excluded. Agent history remains incomplete, including for deleted workers.
     """
     session = visible_sessions(request.auth).filter(id=uuid_or_404(session_id)).first()
     if session is None:
@@ -818,27 +837,41 @@ def session_usage_history(request, session_id: str):
     since = datetime.combine(today - timedelta(days=6), time.min, tzinfo=UTC)
     day = timedelta(days=1)
     days = [
-        {"date": (since + index * day).date().isoformat(), "thread_tokens": 0, "agent_tokens": 0} for index in range(7)
+        {
+            "date": (since + index * day).date().isoformat(),
+            "thread_tokens": 0,
+            "agent_tokens": 0,
+            "agent_tokens_estimated": 0,
+        }
+        for index in range(7)
     ]
-    models = defaultdict(lambda: {"thread_tokens": 0, "agent_tokens": 0})
-    all_time = {scope: {field: 0 for field in AGENT_FIELDS} for scope in ("thread", "agents")}
+    models = defaultdict(lambda: {"thread_tokens": 0, "agent_tokens": 0, "agent_tokens_estimated": 0})
+    all_time = {scope: {field: 0 for field in AGENT_FIELDS} for scope in ("thread", "agents", "agents_estimated")}
     own = _of_chats(_for_chat(StructuredCall.objects.all()), ConversationSession.objects.filter(pk=session.pk))
     # The versioned source marks totals collected only from explicitly owned run
     # transcripts. The session FK survives worker deletion. Never infer event
     # ownership from thread links, cwd, or the mutable legacy run_session field.
-    totals = AgentUsage.objects.filter(session=session, source="local_shell_run_v1")
+    totals = AgentUsage.objects.filter(session=session, source=LOCAL_SHELL_SOURCE)
+    orca = AgentUsage.objects.filter(session=session, source=ORCA_SOURCE)
     call_fields = [field for _, field, _ in PARTS]
 
     def grouped(query, model_field, fields, scope):
+        key = {"thread": "thread_tokens", "agents": "agent_tokens", "agents_estimated": "agent_tokens_estimated"}[scope]
         sums = {f"sum_{index}": Sum(field) for index, field in enumerate(fields)}
         for row in query.values(model_field).annotate(**sums):
             counts = [row[f"sum_{index}"] or 0 for index in range(len(fields))]
             for part, value in zip((part for part, _, _ in PARTS), counts):
                 all_time[scope][f"{part}_tokens"] += value
-            models[row[model_field] or ""][f"{scope if scope == 'thread' else 'agent'}_tokens"] += sum(counts)
+            bucket = models[row[model_field] or ""]
+            bucket[key] += sum(counts)
+            if scope == "agents_estimated":  # estimates are part of the agent total
+                bucket["agent_tokens"] += sum(counts)
+                for part, value in zip(AGENT_FIELDS, counts):
+                    all_time["agents"][part] += value
 
     grouped(own, "model_name", call_fields, "thread")
     grouped(totals, "model", AGENT_FIELDS, "agents")
+    grouped(orca, "model", AGENT_FIELDS, "agents_estimated")
 
     def daily(query, date_field, fields, key):
         sums = {f"sum_{index}": Sum(field) for index, field in enumerate(fields)}
@@ -853,13 +886,16 @@ def session_usage_history(request, session_id: str):
             days[index][key] += sum(row[f"sum_{i}"] or 0 for i in range(len(fields)))
 
     daily(own, "created_at", call_fields, "thread_tokens")
-    bins = [0] * 7
-    active = totals.filter(last_at__gte=since).filter(Q(first_at__lte=until) | Q(first_at__isnull=True))
+    bins = {False: [0] * 7, True: [0] * 7}
+    active = AgentUsage.objects.filter(session=session, source__in=AGENT_SOURCES, last_at__gte=since).filter(
+        Q(first_at__lte=until) | Q(first_at__isnull=True)
+    )
     for usage in active:
         tokens = sum(getattr(usage, field) for field in AGENT_FIELDS)
-        _spread(bins, since, day, usage.first_at, min(usage.last_at, until), tokens)
-    for index, tokens in enumerate(bins):
-        days[index]["agent_tokens"] += tokens
+        _spread(bins[usage.source == ORCA_SOURCE], since, day, usage.first_at, min(usage.last_at, until), tokens)
+    for index in range(7):
+        days[index]["agent_tokens"] += bins[False][index] + bins[True][index]
+        days[index]["agent_tokens_estimated"] += bins[True][index]
     return {
         "until": until.isoformat(),
         "timezone": "UTC",

@@ -15,7 +15,8 @@ const usage = (hours: [number, number][]): SessionUsage => ({
   agent_usage_complete: false,
   agent_usage_coverage: {
     status: 'partial',
-    excluded: ['orca', 'native_session', 'legacy'],
+    excluded: ['native_session', 'legacy'],
+    estimated: ['orca'],
     collection: 'periodic',
     zero_is_conclusive: false,
   },
@@ -50,6 +51,18 @@ describe('UsageSparkline', () => {
     expect(barTitle({ start: '', thread_tokens: 900, agent_tokens: 1_500_000 }, 5, 6)).toBe(
       'Last hour: 900 thread · 1.5M agents',
     )
+  })
+
+  test('labels Orca-derived agent tokens as estimates and drops the unknown wording', () => {
+    expect(
+      barTitle({ start: '', thread_tokens: 900, agent_tokens: 1_500_000, agent_tokens_estimated: 1_500_000 }, 5, 6),
+    ).toBe('Last hour: 900 thread · ~1.5M agents (est.)')
+    const u = usage([[100, 2000]])
+    u.agent_tokens_estimated = 2000
+    act(() => root.render(createElement(UsageBars, { usage: u })))
+    expect(container.textContent).toContain('~2k agents (est.)')
+    expect(container.textContent).not.toContain('agent usage unknown')
+    expect(container.querySelector('[role="img"]')?.getAttribute('aria-label')).toContain('estimated')
   })
 
   test('does not present an empty snapshot as zero agent usage', () => {

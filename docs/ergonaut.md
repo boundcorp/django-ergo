@@ -418,17 +418,19 @@ unscoped devbox drafts are not migrated because their owner is unknown.
   and model breakdowns for that thread. Focus, hover, or select a chart bar
   for its thread and estimated known-agent counts; daily dates are UTC.
   Direct thread calls use recorded request times. **Agent history is incomplete:**
-  only local-shell aggregates collected from explicitly owned run transcripts
-  (`source=local_shell_run_v1`) are included. Their thread FK survives worker
-  deletion; hourly and daily placement is estimated across the worker's active
-  span. Native-session events, Orca scans, and legacy local-shell aggregates are
-  excluded, never added to these estimates. Matching worktrees, session links,
-  and legacy `run_session` IDs cannot prove event ownership; missing historical
-  attribution is not reconstructed. Zero recorded agent tokens does not mean no agent
-  usage; collection is periodic, so recent local-shell usage may be delayed.
+  local-shell aggregates from explicitly owned run transcripts
+  (`source=local_shell_run_v1`) are included as recorded figures, and Orca
+  watcher scans (`source=orca`, cwd/time matches of agent session files) are
+  included as **estimates**, reported separately as `agent_tokens_estimated`
+  (`agent_tokens` is the total; history has `all_time.agents_estimated`). The
+  UI marks them "~"/"est.". Estimates can double count when workers share a
+  worktree and overlap in time; `AgentUsage` stores no cwd, so overlap is not
+  flagged. Hourly and daily placement is spread across the worker's active
+  span. Native-session events and legacy aggregates are excluded. Zero agent
+  tokens does not mean no agent usage; collection is periodic.
   Both usage APIs return `agent_usage_complete: false` and an
-  `agent_usage_coverage` object identifying excluded sources, periodic collection
-  and inconclusive zero; the sparkline and dialog make the unknown coverage visible.
+  `agent_usage_coverage` object (`excluded`, `estimated`, periodic collection,
+  inconclusive zero).
   Undated attributable totals appear only in all-time results.
   These are recorded tokens, not costs or a claim of complete all-token usage. History reads
   `GET /api/sessions/{id}/usage/history` with the same session visibility rules.

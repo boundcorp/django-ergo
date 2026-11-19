@@ -296,10 +296,12 @@ export type CostBucket = {
 }
 
 // GET /api/sessions/{id}/usage: one chat's tokens per hour, its own calls and its workers' agents.
-export type UsageHour = { start: string; thread_tokens: number; agent_tokens: number }
+// agent_tokens includes agent_tokens_estimated, the part derived from Orca session-file scans.
+export type UsageHour = { start: string; thread_tokens: number; agent_tokens: number; agent_tokens_estimated?: number }
 export type AgentUsageCoverage = {
   status: 'partial'
   excluded: string[]
+  estimated?: string[]
   collection: 'periodic'
   zero_is_conclusive: boolean
 }
@@ -308,6 +310,7 @@ export type SessionUsage = {
   hours: UsageHour[]
   thread_tokens: number
   agent_tokens: number
+  agent_tokens_estimated?: number
   agent_usage_complete: boolean
   agent_usage_coverage: AgentUsageCoverage
 }
@@ -323,9 +326,9 @@ export type SessionUsageHistory = {
   timezone: 'UTC'
   agent_usage_complete: boolean
   agent_usage_coverage: AgentUsageCoverage
-  days: { date: string; thread_tokens: number; agent_tokens: number }[]
-  all_time: { thread: UsageTokenParts; agents: UsageTokenParts }
-  models: { model: string; thread_tokens: number; agent_tokens: number }[]
+  days: { date: string; thread_tokens: number; agent_tokens: number; agent_tokens_estimated?: number }[]
+  all_time: { thread: UsageTokenParts; agents: UsageTokenParts; agents_estimated?: UsageTokenParts }
+  models: { model: string; thread_tokens: number; agent_tokens: number; agent_tokens_estimated?: number }[]
 }
 
 // List-price-equivalent view of one population; not an invoice and not subscription quota.
