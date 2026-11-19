@@ -13,13 +13,15 @@ let container: HTMLDivElement
 const original = api.sessionUsageHistory
 const usage: SessionUsage = {
   until: '2026-10-29T16:00:00Z',
-  hours: [{ start: '2026-10-29T15:00:00Z', thread_tokens: 123, agent_tokens: 45 }],
+  hours: [{ start: '2026-10-29T15:00:00Z', thread_tokens: 123, agent_tokens: 45, agent_tokens_estimated: 30 }],
   thread_tokens: 123,
   agent_tokens: 45,
+  agent_tokens_estimated: 30,
   agent_usage_complete: false,
   agent_usage_coverage: {
     status: 'partial',
-    excluded: ['orca', 'native_session', 'legacy'],
+    excluded: ['native_session', 'legacy'],
+    estimated: ['orca'],
     collection: 'periodic',
     zero_is_conclusive: false,
   },
@@ -30,7 +32,8 @@ const history: SessionUsageHistory = {
   agent_usage_complete: false,
   agent_usage_coverage: {
     status: 'partial',
-    excluded: ['orca', 'native_session', 'legacy'],
+    excluded: ['native_session', 'legacy'],
+    estimated: ['orca'],
     collection: 'periodic',
     zero_is_conclusive: false,
   },
@@ -90,9 +93,11 @@ describe('UsageHistory', () => {
     expect(dialog().open).toBe(true)
     expect(requested).toBe('thread-1')
     expect(dialog().textContent).toContain('Loading usage history')
-    expect(dialog().textContent).toContain('Orca worker usage is unavailable')
+    expect(dialog().textContent).toContain('estimates from Orca worker session files')
+    expect(dialog().textContent).toContain('double count')
+    expect(dialog().textContent).toContain('30 est. from Orca')
     expect(dialog().textContent).toContain('recent usage may be delayed')
-    expect(dialog().textContent).toContain('Zero recorded agent tokens does not mean no agent usage')
+    expect(dialog().textContent).not.toContain('Zero recorded agent tokens')
     expect(dialog().textContent).toContain('123')
     await act(async () => resolve(history))
     expect(dialog().textContent).toContain('2026-10-29')

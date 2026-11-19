@@ -22,7 +22,7 @@ function UsageChart({ rows }: { rows: UsageRow[] }) {
       <div className="flex justify-between text-xs text-muted">
         <span>{peak.toLocaleString()} tokens</span>
         <span>
-          <span className="text-accent">●</span> Thread　<span className="text-mint">●</span> Known agents
+          <span className="text-accent">●</span> Thread　<span className="text-mint">●</span> Agents (some estimated)
         </span>
       </div>
       <div className="mt-2 flex h-36 items-end gap-1 border-b border-stroke sm:gap-3">
@@ -99,6 +99,8 @@ export function UsageHistory({ sessionId, usage }: { sessionId: string; usage: S
   const [open, setOpen] = useState(false)
   const [history, setHistory] = useState<SessionUsageHistory | null>(null)
   const [error, setError] = useState(false)
+  const estimatedTotal = usage.agent_tokens_estimated ?? 0
+  const hasAgentRows = usage.agent_tokens > 0
   const [attempt, setAttempt] = useState(0)
 
   useEffect(() => {
@@ -131,7 +133,7 @@ export function UsageHistory({ sessionId, usage }: { sessionId: string; usage: S
         ref={opener}
         type="button"
         aria-haspopup="dialog"
-        aria-label={`Open thread usage history: ${usage.thread_tokens.toLocaleString()} thread tokens and ${usage.agent_tokens.toLocaleString()} known agent tokens in the last ${usage.hours.length} hours; agent history incomplete`}
+        aria-label={`Open thread usage history: ${usage.thread_tokens.toLocaleString()} thread tokens and ${usage.agent_tokens.toLocaleString()} agent tokens${estimatedTotal ? ' (estimated)' : ''} in the last ${usage.hours.length} hours; agent history incomplete`}
         onClick={() => {
           dialog.current?.showModal()
           setOpen(true)
@@ -175,10 +177,16 @@ export function UsageHistory({ sessionId, usage }: { sessionId: string; usage: S
           </div>
           <div className="space-y-5 p-4">
             <p className="rounded-control border border-stroke p-3 text-sm">
-              Agent usage is incomplete or unknown. Orca worker usage is unavailable here because ownership cannot be
-              proven; native-session events and legacy estimates are also excluded. Only explicitly owned local-shell
-              run transcripts are included, and collection is periodic, so recent usage may be delayed. Zero recorded
-              agent tokens does not mean no agent usage. Hourly and daily agent placement is estimated.
+              {estimatedTotal > 0 && (
+                <>
+                  Agent tokens marked “est.” (~) are estimates from Orca worker session files (matched by working
+                  directory and time); they can double count when workers overlap in one worktree.{' '}
+                </>
+              )}
+              Agent usage is incomplete: native-session events and legacy estimates are excluded, and collection is
+              periodic, so recent usage may be delayed.
+              {!hasAgentRows && ' Zero recorded agent tokens does not mean no agent usage.'} Hourly and daily agent
+              placement is estimated.
             </p>
             <section aria-label="Recent six hours">
               <h3 className="font-semibold">Recent {usage.hours.length} hours</h3>
@@ -191,8 +199,16 @@ export function UsageHistory({ sessionId, usage }: { sessionId: string; usage: S
                   <p className="font-display text-xl font-bold tabular-nums">{usage.thread_tokens.toLocaleString()}</p>
                 </div>
                 <div className="rounded-card border border-stroke bg-raised p-3">
-                  <p className="text-xs text-muted">Known agent tokens · partial</p>
-                  <p className="font-display text-xl font-bold tabular-nums">{usage.agent_tokens.toLocaleString()}</p>
+                  <p className="text-xs text-muted">
+                    {estimatedTotal > 0 ? 'Agent tokens · incl. estimated' : 'Known agent tokens · partial'}
+                  </p>
+                  <p className="font-display text-xl font-bold tabular-nums">
+                    {estimatedTotal > 0 && '~'}
+                    {usage.agent_tokens.toLocaleString()}
+                  </p>
+                  {estimatedTotal > 0 && (
+                    <p className="text-xs text-muted">{estimatedTotal.toLocaleString()} est. from Orca</p>
+                  )}
                 </div>
               </div>
               {usage.hours.length ? (
@@ -245,7 +261,11 @@ export function UsageHistory({ sessionId, usage }: { sessionId: string; usage: S
                   <h3 className="font-semibold">All-time token breakdown</h3>
                   <p className="mt-1 text-sm text-muted">
                     Thread: {parts.reduce((sum, [key]) => sum + history.all_time.thread[key], 0).toLocaleString()} ·
-                    Known agents: {parts.reduce((sum, [key]) => sum + history.all_time.agents[key], 0).toLocaleString()}
+                    Agents: {parts.reduce((sum, [key]) => sum + history.all_time.agents[key], 0).toLocaleString()}
+                    {(() => {
+                      const est = parts.reduce((sum, [key]) => sum + (history.all_time.agents_estimated?.[key] ?? 0), 0)
+                      return est ? ` (${est.toLocaleString()} est. from Orca)` : ''
+                    })()}
                   </p>
                   <Composition
                     rows={parts.map(([key, label]) => ({

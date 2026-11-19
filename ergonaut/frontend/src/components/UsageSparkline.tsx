@@ -18,17 +18,23 @@ export function hourLabel(index: number, count: number): string {
 
 export function barTitle(hour: UsageHour, index: number, count: number): string {
   const parts = [`${tokens(hour.thread_tokens)} thread`]
-  if (hour.agent_tokens) parts.push(`${tokens(hour.agent_tokens)} agents`)
+  if (hour.agent_tokens) {
+    const est = hour.agent_tokens_estimated ?? 0
+    parts.push(`${est ? '~' : ''}${tokens(hour.agent_tokens)} agents${est ? ' (est.)' : ''}`)
+  }
   return `${hourLabel(index, count)}: ${parts.join(' · ')}`
 }
 
 export function UsageBars({ usage }: { usage: SessionUsage }) {
   const peak = Math.max(1, ...usage.hours.map(h => h.thread_tokens + h.agent_tokens))
   const total = usage.thread_tokens + usage.agent_tokens
+  const estimated = (usage.agent_tokens_estimated ?? 0) > 0
   const summary =
     `${tokens(total)} recorded tokens in the last ${usage.hours.length}h` +
-    (usage.agent_tokens ? ` (${tokens(usage.thread_tokens)} thread, ${tokens(usage.agent_tokens)} known agents)` : '') +
-    (usage.agent_usage_complete ? '' : '; agent usage unknown or incomplete')
+    (usage.agent_tokens
+      ? ` (${tokens(usage.thread_tokens)} thread, ${estimated ? '~' : ''}${tokens(usage.agent_tokens)} agents${estimated ? ', estimated' : ''})`
+      : '') +
+    (usage.agent_tokens ? '; agent usage incomplete' : '; agent usage unknown or incomplete')
   return (
     <div className="usage-sparkline flex items-end gap-2" title={summary}>
       <div role="img" aria-label={summary} className="flex items-end gap-[3px]" style={{ height: BAR_HEIGHT }}>
@@ -58,7 +64,7 @@ export function UsageBars({ usage }: { usage: SessionUsage }) {
       <div className="text-[11px] leading-tight text-muted tabular-nums">
         <div>
           <span className="font-semibold text-ink">{tokens(total)}</span> recorded · {usage.hours.length}h
-          {!usage.agent_usage_complete && ' · agent usage unknown'}
+          {!usage.agent_tokens && ' · agent usage unknown'}
         </div>
         <div className="flex items-center gap-2">
           <span className="flex items-center gap-1">
@@ -68,7 +74,8 @@ export function UsageBars({ usage }: { usage: SessionUsage }) {
           {usage.agent_tokens > 0 && (
             <span className="flex items-center gap-1">
               <span className="inline-block size-1.5 rounded-full bg-mint" />
-              {tokens(usage.agent_tokens)} agents
+              {estimated ? '~' : ''}
+              {tokens(usage.agent_tokens)} agents{estimated ? ' (est.)' : ''}
             </span>
           )}
         </div>

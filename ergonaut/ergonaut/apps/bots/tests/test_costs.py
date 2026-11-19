@@ -440,6 +440,7 @@ def test_session_usage_by_hour_splits_the_chat_from_its_agents(client, lee):
         session=native, source_event_key="a", occurred_at=now - timedelta(minutes=20), input_tokens=30, output_tokens=10
     )
     AgentUsage.objects.create(
+        source="legacy",
         worker=captured,
         session=chat,
         bot_name="devbox",
@@ -475,38 +476,68 @@ def test_session_usage_by_hour_splits_the_chat_from_its_agents(client, lee):
 
 
 @pytest.mark.django_db
-def test_thread_usage_reports_orca_and_delayed_collection_as_unknown(client, lee):
+def test_thread_usage_counts_orca_as_estimate_and_keeps_exclusions(client, lee):
     chat = ConversationSession.objects.create(user=lee, bot_name="devbox")
+    other = ConversationSession.objects.create(user=lee, bot_name="devbox")
     worker = Worker.objects.create(session=chat, bot_name="devbox", title="agent", function="orca:watch")
     now = timezone.now()
     expected = {
         "status": "partial",
-        "excluded": ["orca", "native_session", "legacy"],
+        "excluded": ["native_session", "legacy"],
+        "estimated": ["orca"],
         "collection": "periodic",
         "zero_is_conclusive": False,
     }
-    # No scan yet is not evidence of zero usage. Nor is a legacy scan safe to
-    # attribute to this worker when multiple runs can overlap.
-    for snapshot in (False, True):
-        if snapshot:
-            AgentUsage.objects.create(
-                worker=worker,
-                session=chat,
-                bot_name="devbox",
-                source="orca",
-                agent="omp",
-                model="m",
-                input_tokens=321,
-                first_at=now,
-                last_at=now,
-            )
-        recent = client.get(f"/api/sessions/{chat.id}/usage").json()
-        history = client.get(f"/api/sessions/{chat.id}/usage/history").json()
-        assert recent["agent_tokens"] == 0
-        assert sum(history["all_time"]["agents"].values()) == 0
-        for data in (recent, history):
-            assert data["agent_usage_complete"] is False
-            assert data["agent_usage_coverage"] == expected
+
+    def usage(session, source, tokens, model="m"):
+        return AgentUsage.objects.create(
+            worker=Worker.objects.create(session=session, bot_name="devbox", function="orca:watch"),
+            session=session,
+            bot_name="devbox",
+            source=source,
+            agent="omp",
+            model=model,
+            input_tokens=tokens,
+            first_at=now,
+            last_at=now,
+        )
+
+    # No scan yet: nothing counted, zero is still not conclusive.
+    empty = client.get(f"/api/sessions/{chat.id}/usage").json()
+    assert empty["agent_tokens"] == 0 and empty["agent_tokens_estimated"] == 0
+    assert empty["agent_usage_coverage"] == expected
+
+    AgentUsage.objects.create(
+        worker=worker,
+        session=chat,
+        bot_name="devbox",
+        source="orca",
+        agent="omp",
+        model="m",
+        input_tokens=321,
+        first_at=now,
+        last_at=now,
+    )
+    usage(chat, "local_shell_run_v1", 100, model="n")
+    usage(chat, "native_session", 7000)
+    usage(chat, "legacy", 9000)
+    usage(other, "orca", 5000)
+
+    recent = client.get(f"/api/sessions/{chat.id}/usage").json()
+    history = client.get(f"/api/sessions/{chat.id}/usage/history").json()
+    assert recent["agent_tokens"] == 421
+    assert recent["agent_tokens_estimated"] == 321
+    assert sum(h["agent_tokens_estimated"] for h in recent["hours"]) == 321
+    assert sum(history["all_time"]["agents"].values()) == 421
+    assert sum(history["all_time"]["agents_estimated"].values()) == 321
+    assert sum(d["agent_tokens"] for d in history["days"]) == 421
+    assert sum(d["agent_tokens_estimated"] for d in history["days"]) == 321
+    by_model = {m["model"]: m for m in history["models"]}
+    assert by_model["m"]["agent_tokens"] == by_model["m"]["agent_tokens_estimated"] == 321
+    assert by_model["n"]["agent_tokens"] == 100 and by_model["n"]["agent_tokens_estimated"] == 0
+    for data in (recent, history):
+        assert data["agent_usage_complete"] is False
+        assert data["agent_usage_coverage"] == expected
 
 
 @pytest.mark.django_db
@@ -570,6 +601,7 @@ def test_session_usage_history_utc_days_and_attributable_run_totals(client, lee,
         cache_read_tokens=4,
     )
     AgentUsage.objects.create(
+        source="legacy",
         worker=captured,
         session=chat,
         bot_name="devbox",
@@ -591,6 +623,7 @@ def test_session_usage_history_utc_days_and_attributable_run_totals(client, lee,
         last_at=start + timedelta(days=2),
     )
     AgentUsage.objects.create(
+        source="legacy",
         session=chat,
         bot_name="devbox",
         agent="omp",
@@ -616,10 +649,11 @@ def test_session_usage_history_utc_days_and_attributable_run_totals(client, lee,
     assert data["all_time"] == {
         "thread": {"input_tokens": 10, "output_tokens": 7, "cache_write_tokens": 2, "cache_read_tokens": 3},
         "agents": {"input_tokens": 0, "output_tokens": 48, "cache_write_tokens": 0, "cache_read_tokens": 0},
+        "agents_estimated": {"input_tokens": 0, "output_tokens": 0, "cache_write_tokens": 0, "cache_read_tokens": 0},
     }
     assert data["models"] == [
-        {"model": "agent-model", "thread_tokens": 0, "agent_tokens": 48},
-        {"model": "chat-model", "thread_tokens": 22, "agent_tokens": 0},
+        {"model": "agent-model", "thread_tokens": 0, "agent_tokens": 48, "agent_tokens_estimated": 0},
+        {"model": "chat-model", "thread_tokens": 22, "agent_tokens": 0, "agent_tokens_estimated": 0},
     ]
 
     assert data["agent_usage_complete"] is False
@@ -645,6 +679,7 @@ def test_thread_usage_rejects_shared_native_events_despite_run_reassignment_and_
             )
         )
         AgentUsage.objects.create(
+            source="legacy",
             worker=worker,
             session=worker.session,
             bot_name="devbox",
