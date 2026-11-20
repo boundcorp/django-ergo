@@ -1,0 +1,9 @@
+  note, then reporting.
+  Ran 1 shell command
+● Writing the report and sending worker_done.
+● Running 1 shell command…
+✶ Skedaddling… (13m 48s · ↓ 31.9k tokens)
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · esc to interrupt
