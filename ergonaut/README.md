@@ -73,6 +73,10 @@ Put the key id and secret in `infra/dev/.env`.
 ## Telemetry
 
 Prometheus metrics are at `/metrics/` (`TELEMETRY_METRICS_ENABLED`,
-`TELEMETRY_METRICS_PATH`, `TELEMETRY_NAMESPACE`): HTTP request counts and
-durations, and Celery task starts, successes, failures and latency.
-Grafana dashboards are in `docs/dashboards/`.
+`TELEMETRY_METRICS_PATH`, `TELEMETRY_NAMESPACE`) and, with
+`TELEMETRY_EXPORTER_PORT`, on a separate per-pod port for in-cluster scraping:
+HTTP requests, Celery tasks, bot turns, model tokens and cost, tool calls,
+workers and coding agents, wakes, schedules and async messages. See
+"Metrics" in `../docs/ergonaut.md`. Grafana dashboards are in
+`docs/dashboards/`; `.github/workflows/sync-grafana-dashboards.yml` installs
+them.

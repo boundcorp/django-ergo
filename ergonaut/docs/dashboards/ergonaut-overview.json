@@ -1,4 +1,32 @@
 {
+  "uid": "ergonaut-overview",
+  "title": "Ergonaut",
+  "description": "Ergonaut bots: turns, tokens and cost, tools, coding agents and workers, async work and Celery, HTTP. Managed in boundcorp/django-ergo ergonaut/docs/dashboards.",
+  "tags": [
+    "ergonaut",
+    "json-managed",
+    "octo"
+  ],
+  "editable": false,
+  "graphTooltip": 1,
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "fiscalYearStartMonth": 0,
+  "liveNow": false,
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "timepicker": {
+    "refresh_intervals": [
+      "10s",
+      "30s",
+      "1m",
+      "5m",
+      "15m"
+    ]
+  },
+  "timezone": "browser",
   "annotations": {
     "list": [
       {
@@ -12,65 +40,366 @@
         "iconColor": "rgba(0, 211, 255, 1)",
         "name": "Annotations & Alerts",
         "type": "dashboard"
+      },
+      {
+        "datasource": {
+          "type": "prometheus",
+          "uid": "__PROMETHEUS_DS_UID__"
+        },
+        "enable": true,
+        "expr": "changes(kube_pod_container_status_restarts_total{namespace=\"ergonaut\"}[2m]) > 0",
+        "iconColor": "#FF9830",
+        "name": "Pod starts / restarts",
+        "titleFormat": "{{pod}}",
+        "step": "1m"
       }
     ]
   },
-  "editable": false,
-  "fiscalYearStartMonth": 0,
-  "graphTooltip": 0,
-  "id": null,
-  "links": [],
+  "links": [
+    {
+      "title": "Ergonaut",
+      "type": "link",
+      "url": "https://ergo.octo.boundcorp.net",
+      "targetBlank": true,
+      "icon": "external link"
+    }
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "bot",
+        "label": "Bot",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "__PROMETHEUS_DS_UID__"
+        },
+        "query": {
+          "query": "label_values(ergonaut_llm_calls_total, bot)",
+          "refId": "bot-var",
+          "qryType": 1
+        },
+        "definition": "label_values(ergonaut_llm_calls_total, bot)",
+        "refresh": 2,
+        "sort": 1,
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": [],
+        "regex": "",
+        "hide": 0
+      },
+      {
+        "name": "model",
+        "label": "Model",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "__PROMETHEUS_DS_UID__"
+        },
+        "query": {
+          "query": "label_values(ergonaut_llm_tokens_total, model)",
+          "refId": "model-var",
+          "qryType": 1
+        },
+        "definition": "label_values(ergonaut_llm_tokens_total, model)",
+        "refresh": 2,
+        "sort": 1,
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": [],
+        "regex": "",
+        "hide": 0
+      },
+      {
+        "name": "role",
+        "label": "Role",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "__PROMETHEUS_DS_UID__"
+        },
+        "query": {
+          "query": "label_values(up{namespace=\"ergonaut\"}, role)",
+          "refId": "role-var",
+          "qryType": 1
+        },
+        "definition": "label_values(up{namespace=\"ergonaut\"}, role)",
+        "refresh": 2,
+        "sort": 1,
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": [],
+        "regex": "",
+        "hide": 0
+      }
+    ]
+  },
   "panels": [
     {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "__PROMETHEUS_DS_UID__"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "unit": "reqps"
-        },
-        "overrides": []
-      },
+      "type": "row",
+      "title": "Overview",
+      "collapsed": false,
+      "id": 1,
       "gridPos": {
-        "h": 8,
-        "w": 12,
+        "h": 1,
+        "w": 24,
         "x": 0,
         "y": 0
       },
-      "id": 1,
-      "options": {
-        "legend": {
-          "calcs": [],
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "expr": "sum by (host, method) (rate(ergonaut_http_requests_total{method=~\"GET|POST|PUT|PATCH|DELETE\"}[5m]))",
-          "legendFormat": "{{host}} {{method}}",
-          "refId": "A"
-        }
-      ],
-      "title": "Requests by Host and Method",
-      "type": "timeseries"
+      "panels": []
     },
     {
+      "type": "stat",
+      "title": "Turns",
+      "description": "Structured call runs (bot turns, resumed approvals, standalone calls) in the time range.",
+      "id": 2,
       "datasource": {
         "type": "prometheus",
         "uid": "__PROMETHEUS_DS_UID__"
       },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 1
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__PROMETHEUS_DS_UID__"
+          },
+          "expr": "sum(increase(ergonaut_llm_calls_total{bot=~\"$bot\"}[$__range]))",
+          "legendFormat": "",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        }
+      ],
       "fieldConfig": {
         "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#5794F2",
+                "value": null
+              }
+            ]
+          },
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "wideLayout": true,
+        "showPercentChange": false
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Model tokens",
+      "description": "Input + output + cache read/write tokens in the time range (reasoning is part of output).",
+      "id": 3,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "__PROMETHEUS_DS_UID__"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 1
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__PROMETHEUS_DS_UID__"
+          },
+          "expr": "sum(increase(ergonaut_llm_tokens_total{bot=~\"$bot\",model=~\"$model\",type!=\"reasoning\"}[$__range]))",
+          "legendFormat": "",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#B877D9",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "wideLayout": true,
+        "showPercentChange": false
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Est. model cost",
+      "description": "From list prices per request; unpriced models count as nothing.",
+      "id": 4,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "__PROMETHEUS_DS_UID__"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 8,
+        "y": 1
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__PROMETHEUS_DS_UID__"
+          },
+          "expr": "sum(increase(ergonaut_llm_cost_usd_total{bot=~\"$bot\",model=~\"$model\"}[$__range]))",
+          "legendFormat": "",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#FF9830",
+                "value": null
+              }
+            ]
+          },
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "wideLayout": true,
+        "showPercentChange": false
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Turn failure rate",
+      "description": "",
+      "id": 5,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "__PROMETHEUS_DS_UID__"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 12,
+        "y": 1
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__PROMETHEUS_DS_UID__"
+          },
+          "expr": "sum(increase(ergonaut_llm_calls_total{bot=~\"$bot\",status=\"failed\"}[$__range])) / clamp_min(sum(increase(ergonaut_llm_calls_total{bot=~\"$bot\"}[$__range])), 1)",
+          "legendFormat": "",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
           "color": {
             "mode": "thresholds"
           },
@@ -83,163 +412,3641 @@
               },
               {
                 "color": "orange",
-                "value": 0.5
+                "value": 0.05
               },
               {
                 "color": "red",
-                "value": 1
+                "value": 0.15
               }
             ]
           },
-          "unit": "s"
+          "decimals": 1
         },
         "overrides": []
       },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 0
-      },
-      "id": 2,
       "options": {
-        "legend": {
-          "calcs": [],
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
         },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "expr": "histogram_quantile(0.95, sum by (le, route) (rate(ergonaut_http_request_duration_seconds_bucket[5m])))",
-          "legendFormat": "{{route}}",
-          "refId": "A"
-        }
-      ],
-      "title": "P95 Request Latency by Route",
-      "type": "timeseries"
+        "colorMode": "background_solid",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "wideLayout": true,
+        "showPercentChange": false
+      }
     },
     {
+      "type": "stat",
+      "title": "Workers running",
+      "description": "Orca / local-shell coding agents and task workers running now (from the database).",
+      "id": 6,
       "datasource": {
         "type": "prometheus",
         "uid": "__PROMETHEUS_DS_UID__"
       },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 16,
+        "y": 1
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__PROMETHEUS_DS_UID__"
+          },
+          "expr": "sum(max by (bot, function, status) (ergonaut_workers{bot=~\"$bot\",status=\"running\"}))",
+          "legendFormat": "",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        }
+      ],
       "fieldConfig": {
         "defaults": {
+          "unit": "short",
           "color": {
-            "mode": "palette-classic"
+            "mode": "thresholds"
           },
-          "unit": "reqps"
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#73BF69",
+                "value": null
+              }
+            ]
+          },
+          "decimals": 0
         },
         "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "wideLayout": true,
+        "showPercentChange": false
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Celery backlog",
+      "description": "Messages waiting in the Redis broker across Ergonaut queues.",
+      "id": 7,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "__PROMETHEUS_DS_UID__"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 20,
+        "y": 1
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__PROMETHEUS_DS_UID__"
+          },
+          "expr": "sum(max by (queue) (ergonaut_celery_queue_length))",
+          "legendFormat": "",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 10
+              },
+              {
+                "color": "red",
+                "value": 100
+              }
+            ]
+          },
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background_solid",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "wideLayout": true,
+        "showPercentChange": false
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Turns in progress",
+      "description": "",
+      "id": 8,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "__PROMETHEUS_DS_UID__"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 5
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__PROMETHEUS_DS_UID__"
+          },
+          "expr": "sum(ergonaut_llm_calls_in_progress{bot=~\"$bot\"})",
+          "legendFormat": "",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#8AB8FF",
+                "value": null
+              }
+            ]
+          },
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "wideLayout": true,
+        "showPercentChange": false
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Agent tokens",
+      "description": "Tokens Orca / local-shell coding agents reported from their own session files.",
+      "id": 9,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "__PROMETHEUS_DS_UID__"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 5
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__PROMETHEUS_DS_UID__"
+          },
+          "expr": "sum(increase(ergonaut_agent_tokens_total{bot=~\"$bot\",type!=\"reasoning\"}[$__range]))",
+          "legendFormat": "",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#CA95E5",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "wideLayout": true,
+        "showPercentChange": false
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Tool calls",
+      "description": "",
+      "id": 10,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "__PROMETHEUS_DS_UID__"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 8,
+        "y": 5
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__PROMETHEUS_DS_UID__"
+          },
+          "expr": "sum(increase(ergonaut_tool_calls_total[$__range]))",
+          "legendFormat": "",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#FADE2A",
+                "value": null
+              }
+            ]
+          },
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "wideLayout": true,
+        "showPercentChange": false
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Open thread messages",
+      "description": "Async bot-to-bot / wake / worker messages not yet answered.",
+      "id": 11,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "__PROMETHEUS_DS_UID__"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 12,
+        "y": 5
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__PROMETHEUS_DS_UID__"
+          },
+          "expr": "sum(max by (bot, status) (ergonaut_thread_messages_open{bot=~\"$bot\"}))",
+          "legendFormat": "",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#FFB357",
+                "value": null
+              }
+            ]
+          },
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "wideLayout": true,
+        "showPercentChange": false
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Pending wakes",
+      "description": "One-off self-wakes bots have scheduled and not yet fired.",
+      "id": 12,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "__PROMETHEUS_DS_UID__"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 16,
+        "y": 5
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__PROMETHEUS_DS_UID__"
+          },
+          "expr": "sum(max by (bot) (ergonaut_wakes_pending{bot=~\"$bot\"}))",
+          "legendFormat": "",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#56A64B",
+                "value": null
+              }
+            ]
+          },
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "wideLayout": true,
+        "showPercentChange": false
+      }
+    },
+    {
+      "type": "stat",
+      "title": "HTTP 5xx rate",
+      "description": "",
+      "id": 13,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "__PROMETHEUS_DS_UID__"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 20,
+        "y": 5
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__PROMETHEUS_DS_UID__"
+          },
+          "expr": "sum(rate(ergonaut_http_requests_total{role=~\"$role\",status_code=~\"5..\"}[$__rate_interval])) / clamp_min(sum(rate(ergonaut_http_requests_total{role=~\"$role\"}[$__rate_interval])), 1e-9)",
+          "legendFormat": "",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.01
+              },
+              {
+                "color": "red",
+                "value": 0.05
+              }
+            ]
+          },
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background_solid",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "wideLayout": true,
+        "showPercentChange": false
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Turns by bot",
+      "description": "Structured call runs per minute.",
+      "id": 14,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "__PROMETHEUS_DS_UID__"
       },
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 8
+        "y": 9
       },
-      "id": 3,
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__PROMETHEUS_DS_UID__"
+          },
+          "expr": "sum by (bot) (rate(ergonaut_llm_calls_total{bot=~\"$bot\"}[$__rate_interval])) * 60",
+          "legendFormat": "{{bot}}",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 18,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": true,
+            "lineInterpolation": "smooth",
+            "axisBorderShow": false,
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
       "options": {
         "legend": {
-          "calcs": [],
           "displayMode": "table",
           "placement": "right",
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "sortBy": "Mean",
+          "sortDesc": true,
           "showLegend": true
         },
         "tooltip": {
           "mode": "multi",
           "sort": "desc"
         }
-      },
-      "targets": [
-        {
-          "expr": "sum by (host, status_code) (rate(ergonaut_http_requests_total{status_code=~\"5..|4..\"}[5m]))",
-          "legendFormat": "{{host}} {{status_code}}",
-          "refId": "A"
-        }
-      ],
-      "title": "Error Responses",
-      "type": "timeseries"
+      }
     },
     {
+      "type": "timeseries",
+      "title": "Tokens per minute by type",
+      "description": "",
+      "id": 15,
       "datasource": {
         "type": "prometheus",
         "uid": "__PROMETHEUS_DS_UID__"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "unit": "ops"
-        },
-        "overrides": []
       },
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 8
+        "y": 9
       },
-      "id": 4,
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__PROMETHEUS_DS_UID__"
+          },
+          "expr": "sum by (type) (rate(ergonaut_llm_tokens_total{bot=~\"$bot\",model=~\"$model\"}[$__rate_interval])) * 60",
+          "legendFormat": "{{type}}",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 18,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": true,
+            "lineInterpolation": "smooth",
+            "axisBorderShow": false,
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "input"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#5794F2"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "output"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#B877D9"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "cache_read"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#73BF69"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "cache_write"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#FF9830"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "reasoning"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#F2495C"
+                }
+              }
+            ]
+          }
+        ]
+      },
       "options": {
         "legend": {
-          "calcs": [],
-          "displayMode": "list",
-          "placement": "bottom",
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "sortBy": "Mean",
+          "sortDesc": true,
           "showLegend": true
         },
         "tooltip": {
           "mode": "multi",
           "sort": "desc"
         }
+      }
+    },
+    {
+      "type": "row",
+      "title": "Tokens & cost",
+      "collapsed": false,
+      "id": 16,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 17
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Token throughput by model",
+      "description": "All non-reasoning token types per minute.",
+      "id": 17,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "__PROMETHEUS_DS_UID__"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 18
       },
       "targets": [
         {
-          "expr": "sum by (task_name) (rate(ergonaut_celery_task_succeeded_total[5m]))",
-          "legendFormat": "{{task_name}} success",
-          "refId": "A"
-        },
-        {
-          "expr": "sum by (task_name) (rate(ergonaut_celery_task_failures_total[5m]))",
-          "legendFormat": "{{task_name}} failure",
-          "refId": "B"
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__PROMETHEUS_DS_UID__"
+          },
+          "expr": "sum by (model) (rate(ergonaut_llm_tokens_total{bot=~\"$bot\",model=~\"$model\",type!=\"reasoning\"}[$__rate_interval])) * 60",
+          "legendFormat": "{{model}}",
+          "refId": "A",
+          "range": true,
+          "instant": false
         }
       ],
-      "title": "Celery Task Outcomes",
-      "type": "timeseries"
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 18,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": true,
+            "lineInterpolation": "smooth",
+            "axisBorderShow": false,
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "sortBy": "Mean",
+          "sortDesc": true,
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Estimated cost per hour by bot",
+      "description": "",
+      "id": 18,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "__PROMETHEUS_DS_UID__"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 18
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__PROMETHEUS_DS_UID__"
+          },
+          "expr": "sum by (bot) (rate(ergonaut_llm_cost_usd_total{bot=~\"$bot\",model=~\"$model\"}[$__rate_interval])) * 3600",
+          "legendFormat": "{{bot}}",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 18,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": true,
+            "lineInterpolation": "smooth",
+            "axisBorderShow": false,
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "sortBy": "Mean",
+          "sortDesc": true,
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Cost by model (range)",
+      "description": "",
+      "id": 19,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "__PROMETHEUS_DS_UID__"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 26
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__PROMETHEUS_DS_UID__"
+          },
+          "expr": "sort_desc(sum by (model) (increase(ergonaut_llm_cost_usd_total{bot=~\"$bot\",model=~\"$model\"}[$__range])))",
+          "legendFormat": "{{model}}",
+          "refId": "A",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "color": {
+            "mode": "continuous-BlPu"
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "valueMode": "color",
+        "showUnfilled": true,
+        "namePlacement": "left",
+        "sizing": "manual",
+        "minVizHeight": 18,
+        "maxVizHeight": 24,
+        "minVizWidth": 8,
+        "text": {
+          "titleSize": 12,
+          "valueSize": 14
+        },
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Tokens by bot (range)",
+      "description": "",
+      "id": 20,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "__PROMETHEUS_DS_UID__"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 26
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__PROMETHEUS_DS_UID__"
+          },
+          "expr": "sort_desc(sum by (bot) (increase(ergonaut_llm_tokens_total{bot=~\"$bot\",model=~\"$model\",type!=\"reasoning\"}[$__range])))",
+          "legendFormat": "{{bot}}",
+          "refId": "A",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "continuous-BlPu"
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "valueMode": "color",
+        "showUnfilled": true,
+        "namePlacement": "left",
+        "sizing": "manual",
+        "minVizHeight": 18,
+        "maxVizHeight": 24,
+        "minVizWidth": 8,
+        "text": {
+          "titleSize": 12,
+          "valueSize": 14
+        },
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Prompt cache hit ratio by model",
+      "description": "Share of prompt tokens served from the provider's cache.",
+      "id": 21,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "__PROMETHEUS_DS_UID__"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 26
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__PROMETHEUS_DS_UID__"
+          },
+          "expr": "sum by (model) (rate(ergonaut_llm_tokens_total{bot=~\"$bot\",model=~\"$model\",type=\"cache_read\"}[$__rate_interval])) / clamp_min(sum by (model) (rate(ergonaut_llm_tokens_total{bot=~\"$bot\",model=~\"$model\",type=~\"input|cache_read|cache_write\"}[$__rate_interval])), 1e-9)",
+          "legendFormat": "{{model}}",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 18,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": true,
+            "lineInterpolation": "smooth",
+            "axisBorderShow": false,
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [],
+          "sortBy": null,
+          "sortDesc": true,
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Coding agent tokens per minute (Orca, local shell)",
+      "description": "From the agents' own session files, read by the worker watchers every few minutes, so it arrives in steps.",
+      "id": 22,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "__PROMETHEUS_DS_UID__"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 34
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__PROMETHEUS_DS_UID__"
+          },
+          "expr": "sum by (agent, model) (rate(ergonaut_agent_tokens_total{bot=~\"$bot\",type!=\"reasoning\"}[$__rate_interval])) * 60",
+          "legendFormat": "{{agent}} \u00b7 {{model}}",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 18,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": true,
+            "lineInterpolation": "smooth",
+            "axisBorderShow": false,
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "sortBy": "Mean",
+          "sortDesc": true,
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Model requests per minute",
+      "description": "",
+      "id": 23,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "__PROMETHEUS_DS_UID__"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 34
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__PROMETHEUS_DS_UID__"
+          },
+          "expr": "sum by (model) (rate(ergonaut_llm_requests_total{bot=~\"$bot\",model=~\"$model\"}[$__rate_interval])) * 60",
+          "legendFormat": "{{model}} (assistant)",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__PROMETHEUS_DS_UID__"
+          },
+          "expr": "sum by (model) (rate(ergonaut_agent_requests_total{bot=~\"$bot\"}[$__rate_interval])) * 60",
+          "legendFormat": "{{model}} (agent)",
+          "refId": "B",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 18,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": true,
+            "lineInterpolation": "smooth",
+            "axisBorderShow": false,
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "sortBy": "Mean",
+          "sortDesc": true,
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "Assistants & turns",
+      "collapsed": false,
+      "id": 24,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 42
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Turn outcomes",
+      "description": "",
+      "id": 25,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "__PROMETHEUS_DS_UID__"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 43
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__PROMETHEUS_DS_UID__"
+          },
+          "expr": "sum by (status) (rate(ergonaut_llm_calls_total{bot=~\"$bot\",model=~\"$model\"}[$__rate_interval])) * 60",
+          "legendFormat": "{{status}}",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 2,
+            "fillOpacity": 70,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": true,
+            "lineInterpolation": "smooth",
+            "axisBorderShow": false,
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "completed|ok|fired|success"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "failed|error"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "turn_limited|budget|stopped|cancelled"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "awaiting_approval|waiting"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "purple"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [],
+          "sortBy": null,
+          "sortDesc": true,
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Turn duration p50 / p95",
+      "description": "",
+      "id": 26,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "__PROMETHEUS_DS_UID__"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 43
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__PROMETHEUS_DS_UID__"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le, bot) (rate(ergonaut_llm_call_duration_seconds_bucket{bot=~\"$bot\"}[$__rate_interval])))",
+          "legendFormat": "p95 {{bot}}",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__PROMETHEUS_DS_UID__"
+          },
+          "expr": "histogram_quantile(0.5, sum by (le, bot) (rate(ergonaut_llm_call_duration_seconds_bucket{bot=~\"$bot\"}[$__rate_interval])))",
+          "legendFormat": "p50 {{bot}}",
+          "refId": "B",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": true,
+            "lineInterpolation": "smooth",
+            "axisBorderShow": false,
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [],
+          "sortBy": null,
+          "sortDesc": true,
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Turn failures by category",
+      "description": "",
+      "id": 27,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "__PROMETHEUS_DS_UID__"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 43
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__PROMETHEUS_DS_UID__"
+          },
+          "expr": "sum by (category) (increase(ergonaut_llm_call_errors_total{bot=~\"$bot\",model=~\"$model\"}[$__rate_interval]))",
+          "legendFormat": "{{category}}",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 2,
+            "fillOpacity": 70,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": true,
+            "lineInterpolation": "smooth",
+            "axisBorderShow": false,
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [],
+          "sortBy": null,
+          "sortDesc": true,
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Turns in progress by bot",
+      "description": "",
+      "id": 28,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "__PROMETHEUS_DS_UID__"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 51
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__PROMETHEUS_DS_UID__"
+          },
+          "expr": "sum by (bot) (ergonaut_llm_calls_in_progress{bot=~\"$bot\"})",
+          "legendFormat": "{{bot}}",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 18,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": true,
+            "lineInterpolation": "smooth",
+            "axisBorderShow": false,
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [],
+          "sortBy": null,
+          "sortDesc": true,
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Tool calls per minute (top 10)",
+      "description": "",
+      "id": 29,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "__PROMETHEUS_DS_UID__"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 16,
+        "x": 8,
+        "y": 51
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__PROMETHEUS_DS_UID__"
+          },
+          "expr": "topk(10, sum by (tool) (rate(ergonaut_tool_calls_total[$__rate_interval]))) * 60",
+          "legendFormat": "{{tool}}",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 18,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": true,
+            "lineInterpolation": "smooth",
+            "axisBorderShow": false,
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "sortBy": "Mean",
+          "sortDesc": true,
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Tool error ratio (range, top 15)",
+      "description": "",
+      "id": 30,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "__PROMETHEUS_DS_UID__"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 59
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__PROMETHEUS_DS_UID__"
+          },
+          "expr": "topk(15, sum by (tool) (increase(ergonaut_tool_calls_total{outcome=\"error\"}[$__range])) / clamp_min(sum by (tool) (increase(ergonaut_tool_calls_total[$__range])), 1))",
+          "legendFormat": "{{tool}}",
+          "refId": "A",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "color": {
+            "mode": "continuous-BlPu"
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "valueMode": "color",
+        "showUnfilled": true,
+        "namePlacement": "left",
+        "sizing": "manual",
+        "minVizHeight": 18,
+        "maxVizHeight": 24,
+        "minVizWidth": 8,
+        "text": {
+          "titleSize": 12,
+          "valueSize": 14
+        },
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Slowest tools p95 (range, top 15)",
+      "description": "",
+      "id": 31,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "__PROMETHEUS_DS_UID__"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 59
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__PROMETHEUS_DS_UID__"
+          },
+          "expr": "topk(15, histogram_quantile(0.95, sum by (le, tool) (increase(ergonaut_tool_call_duration_seconds_bucket[$__range]))))",
+          "legendFormat": "{{tool}}",
+          "refId": "A",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "color": {
+            "mode": "continuous-BlPu"
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "valueMode": "color",
+        "showUnfilled": true,
+        "namePlacement": "left",
+        "sizing": "manual",
+        "minVizHeight": 18,
+        "maxVizHeight": 24,
+        "minVizWidth": 8,
+        "text": {
+          "titleSize": 12,
+          "valueSize": 14
+        },
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "Agents & workers",
+      "collapsed": false,
+      "id": 32,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 68
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Workers active by function",
+      "description": "Queued and running workers from the database: agent:orca / agent:local_shell coding agents, task:<name> bot tasks.",
+      "id": 33,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "__PROMETHEUS_DS_UID__"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 69
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__PROMETHEUS_DS_UID__"
+          },
+          "expr": "sum by (function, status) (max by (bot, function, status) (ergonaut_workers{bot=~\"$bot\"}))",
+          "legendFormat": "{{function}} {{status}}",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 18,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": true,
+            "lineInterpolation": "smooth",
+            "axisBorderShow": false,
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "sortBy": "Mean",
+          "sortDesc": true,
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Workers started vs finished",
+      "description": "",
+      "id": 34,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "__PROMETHEUS_DS_UID__"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 69
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__PROMETHEUS_DS_UID__"
+          },
+          "expr": "sum by (function) (increase(ergonaut_workers_started_total{bot=~\"$bot\"}[$__rate_interval]))",
+          "legendFormat": "started {{function}}",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__PROMETHEUS_DS_UID__"
+          },
+          "expr": "sum by (function, status) (increase(ergonaut_workers_finished_total{bot=~\"$bot\"}[$__rate_interval]))",
+          "legendFormat": "{{status}} {{function}}",
+          "refId": "B",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 2,
+            "fillOpacity": 70,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": true,
+            "lineInterpolation": "smooth",
+            "axisBorderShow": false,
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "completed|ok|fired|success"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "failed|error"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "turn_limited|budget|stopped|cancelled"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "awaiting_approval|waiting"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "purple"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "sortBy": "Mean",
+          "sortDesc": true,
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "piechart",
+      "title": "Worker outcomes (range)",
+      "description": "",
+      "id": 35,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "__PROMETHEUS_DS_UID__"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 0,
+        "y": 77
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__PROMETHEUS_DS_UID__"
+          },
+          "expr": "sum by (status) (increase(ergonaut_workers_finished_total{bot=~\"$bot\"}[$__range]))",
+          "legendFormat": "{{status}}",
+          "refId": "A",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "pieType": "donut",
+        "displayLabels": [
+          "percent"
+        ],
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "values": [
+            "value",
+            "percent"
+          ],
+          "showLegend": true
+        },
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      }
+    },
+    {
+      "type": "piechart",
+      "title": "Agents started by model (range)",
+      "description": "",
+      "id": 36,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "__PROMETHEUS_DS_UID__"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 6,
+        "y": 77
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__PROMETHEUS_DS_UID__"
+          },
+          "expr": "sum by (agent, model) (increase(ergonaut_workers_started_total{bot=~\"$bot\",function=~\"agent:.*\"}[$__range]))",
+          "legendFormat": "{{agent}} \u00b7 {{model}}",
+          "refId": "A",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "pieType": "donut",
+        "displayLabels": [
+          "percent"
+        ],
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "values": [
+            "value",
+            "percent"
+          ],
+          "showLegend": true
+        },
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Worker duration p50 / p95 by function",
+      "description": "",
+      "id": 37,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "__PROMETHEUS_DS_UID__"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 77
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__PROMETHEUS_DS_UID__"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le, function) (rate(ergonaut_worker_duration_seconds_bucket{bot=~\"$bot\"}[$__rate_interval])))",
+          "legendFormat": "p95 {{function}}",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__PROMETHEUS_DS_UID__"
+          },
+          "expr": "histogram_quantile(0.5, sum by (le, function) (rate(ergonaut_worker_duration_seconds_bucket{bot=~\"$bot\"}[$__rate_interval])))",
+          "legendFormat": "p50 {{function}}",
+          "refId": "B",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 6,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": true,
+            "lineInterpolation": "smooth",
+            "axisBorderShow": false,
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "sortBy": "Mean",
+          "sortDesc": true,
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Watcher polls per minute",
+      "description": "",
+      "id": 38,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "__PROMETHEUS_DS_UID__"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 85
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__PROMETHEUS_DS_UID__"
+          },
+          "expr": "sum by (function) (rate(ergonaut_worker_polls_total{bot=~\"$bot\"}[$__rate_interval])) * 60",
+          "legendFormat": "{{function}}",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 18,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": true,
+            "lineInterpolation": "smooth",
+            "axisBorderShow": false,
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [],
+          "sortBy": null,
+          "sortDesc": true,
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Agent tokens by agent \u00b7 model (range)",
+      "description": "",
+      "id": 39,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "__PROMETHEUS_DS_UID__"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 85
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__PROMETHEUS_DS_UID__"
+          },
+          "expr": "sort_desc(sum by (agent, model) (increase(ergonaut_agent_tokens_total{bot=~\"$bot\",type!=\"reasoning\"}[$__range])))",
+          "legendFormat": "{{agent}} \u00b7 {{model}}",
+          "refId": "A",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "continuous-BlPu"
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "valueMode": "color",
+        "showUnfilled": true,
+        "namePlacement": "left",
+        "sizing": "manual",
+        "minVizHeight": 18,
+        "maxVizHeight": 24,
+        "minVizWidth": 8,
+        "text": {
+          "titleSize": 12,
+          "valueSize": 14
+        },
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "Async & Celery",
+      "collapsed": false,
+      "id": 40,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 93
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Celery tasks started per minute",
+      "description": "",
+      "id": 41,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "__PROMETHEUS_DS_UID__"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 94
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__PROMETHEUS_DS_UID__"
+          },
+          "expr": "sum by (task_name) (rate(ergonaut_celery_task_started_total{role=~\"$role\"}[$__rate_interval])) * 60",
+          "legendFormat": "{{task_name}}",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 18,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": true,
+            "lineInterpolation": "smooth",
+            "axisBorderShow": false,
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "sortBy": "Mean",
+          "sortDesc": true,
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Celery failures & retries",
+      "description": "",
+      "id": 42,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "__PROMETHEUS_DS_UID__"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 94
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__PROMETHEUS_DS_UID__"
+          },
+          "expr": "sum by (task_name) (increase(ergonaut_celery_task_failures_total{role=~\"$role\"}[$__rate_interval]))",
+          "legendFormat": "failed {{task_name}}",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__PROMETHEUS_DS_UID__"
+          },
+          "expr": "sum by (task_name) (increase(ergonaut_celery_task_retries_total{role=~\"$role\"}[$__rate_interval]))",
+          "legendFormat": "retry {{task_name}}",
+          "refId": "B",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 2,
+            "fillOpacity": 70,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": true,
+            "lineInterpolation": "smooth",
+            "axisBorderShow": false,
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "failed.*"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "retry.*"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "sortBy": "Mean",
+          "sortDesc": true,
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Celery task p95 runtime (top 10)",
+      "description": "",
+      "id": 43,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "__PROMETHEUS_DS_UID__"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 102
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__PROMETHEUS_DS_UID__"
+          },
+          "expr": "topk(10, histogram_quantile(0.95, sum by (le, task_name) (rate(ergonaut_celery_task_latency_seconds_bucket{role=~\"$role\"}[$__rate_interval]))))",
+          "legendFormat": "{{task_name}}",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 4,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": true,
+            "lineInterpolation": "smooth",
+            "axisBorderShow": false,
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "sortBy": "Mean",
+          "sortDesc": true,
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Celery queue length",
+      "description": "",
+      "id": 44,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "__PROMETHEUS_DS_UID__"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 12,
+        "y": 102
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__PROMETHEUS_DS_UID__"
+          },
+          "expr": "max by (queue) (ergonaut_celery_queue_length)",
+          "legendFormat": "{{queue}}",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 18,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": true,
+            "lineInterpolation": "smooth",
+            "axisBorderShow": false,
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [],
+          "sortBy": null,
+          "sortDesc": true,
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Beat: tasks sent",
+      "description": "Periodic tasks celery beat sent to the broker.",
+      "id": 45,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "__PROMETHEUS_DS_UID__"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 18,
+        "y": 102
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__PROMETHEUS_DS_UID__"
+          },
+          "expr": "sum by (task_name) (increase(ergonaut_celery_task_published_total{role=\"beat\"}[$__rate_interval]))",
+          "legendFormat": "{{task_name}}",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 2,
+            "fillOpacity": 70,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": true,
+            "lineInterpolation": "smooth",
+            "axisBorderShow": false,
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [],
+          "sortBy": null,
+          "sortDesc": true,
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Thread messages queued by source",
+      "description": "Per minute: messages from people, other bots, replies, self-wakes, recurring wakes and finished workers.",
+      "id": 46,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "__PROMETHEUS_DS_UID__"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 110
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__PROMETHEUS_DS_UID__"
+          },
+          "expr": "sum by (source) (rate(ergonaut_thread_messages_total[$__rate_interval])) * 60",
+          "legendFormat": "{{source}}",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 18,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": true,
+            "lineInterpolation": "smooth",
+            "axisBorderShow": false,
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [],
+          "sortBy": null,
+          "sortDesc": true,
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Open thread messages",
+      "description": "",
+      "id": 47,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "__PROMETHEUS_DS_UID__"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 110
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__PROMETHEUS_DS_UID__"
+          },
+          "expr": "sum by (status) (max by (bot, status) (ergonaut_thread_messages_open{bot=~\"$bot\"}))",
+          "legendFormat": "{{status}}",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 18,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": true,
+            "lineInterpolation": "smooth",
+            "axisBorderShow": false,
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "completed|ok|fired|success"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "failed|error"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "turn_limited|budget|stopped|cancelled"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "awaiting_approval|waiting"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "purple"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [],
+          "sortBy": null,
+          "sortDesc": true,
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Wakes & schedules",
+      "description": "",
+      "id": 48,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "__PROMETHEUS_DS_UID__"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 110
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__PROMETHEUS_DS_UID__"
+          },
+          "expr": "sum(increase(ergonaut_wakes_scheduled_total{bot=~\"$bot\"}[$__rate_interval]))",
+          "legendFormat": "wake scheduled",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__PROMETHEUS_DS_UID__"
+          },
+          "expr": "sum by (status) (increase(ergonaut_wakes_fired_total{bot=~\"$bot\"}[$__rate_interval]))",
+          "legendFormat": "wake {{status}}",
+          "refId": "B",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__PROMETHEUS_DS_UID__"
+          },
+          "expr": "sum(increase(ergonaut_recurring_wake_occurrences_total{bot=~\"$bot\"}[$__rate_interval]))",
+          "legendFormat": "recurring wake",
+          "refId": "C",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__PROMETHEUS_DS_UID__"
+          },
+          "expr": "sum by (schedule) (increase(ergonaut_schedule_runs_total{bot=~\"$bot\"}[$__rate_interval]))",
+          "legendFormat": "schedule {{schedule}}",
+          "refId": "D",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 2,
+            "fillOpacity": 70,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": true,
+            "lineInterpolation": "smooth",
+            "axisBorderShow": false,
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [],
+          "sortBy": null,
+          "sortDesc": true,
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "HTTP & process",
+      "collapsed": false,
+      "id": 49,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 118
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Requests per second by status",
+      "description": "",
+      "id": 50,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "__PROMETHEUS_DS_UID__"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 119
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__PROMETHEUS_DS_UID__"
+          },
+          "expr": "sum by (status_code) (rate(ergonaut_http_requests_total{role=~\"$role\"}[$__rate_interval]))",
+          "legendFormat": "{{status_code}}",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 18,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": true,
+            "lineInterpolation": "smooth",
+            "axisBorderShow": false,
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "5.."
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "4.."
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "2.."
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "3.."
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "blue"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [],
+          "sortBy": null,
+          "sortDesc": true,
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "p95 latency by route (top 10)",
+      "description": "",
+      "id": 51,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "__PROMETHEUS_DS_UID__"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 16,
+        "x": 8,
+        "y": 119
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__PROMETHEUS_DS_UID__"
+          },
+          "expr": "topk(10, histogram_quantile(0.95, sum by (le, route) (rate(ergonaut_http_request_duration_seconds_bucket{role=~\"$role\"}[$__rate_interval]))))",
+          "legendFormat": "{{route}}",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 4,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": true,
+            "lineInterpolation": "smooth",
+            "axisBorderShow": false,
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "sortBy": "Mean",
+          "sortDesc": true,
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "DB queries per request p95 (top 10 routes)",
+      "description": "",
+      "id": 52,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "__PROMETHEUS_DS_UID__"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 127
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__PROMETHEUS_DS_UID__"
+          },
+          "expr": "topk(10, histogram_quantile(0.95, sum by (le, route) (rate(ergonaut_http_request_db_queries_bucket{role=~\"$role\"}[$__rate_interval]))))",
+          "legendFormat": "{{route}}",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 4,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": true,
+            "lineInterpolation": "smooth",
+            "axisBorderShow": false,
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "sortBy": "Mean",
+          "sortDesc": true,
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "5xx by route",
+      "description": "",
+      "id": 53,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "__PROMETHEUS_DS_UID__"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 127
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__PROMETHEUS_DS_UID__"
+          },
+          "expr": "sum by (route) (increase(ergonaut_http_requests_total{role=~\"$role\",status_code=~\"5..\"}[$__rate_interval]))",
+          "legendFormat": "{{route}}",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 2,
+            "fillOpacity": 70,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": true,
+            "lineInterpolation": "smooth",
+            "axisBorderShow": false,
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [],
+          "sortBy": null,
+          "sortDesc": true,
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "CPU by role",
+      "description": "Cores, from the kubelet (cAdvisor).",
+      "id": 54,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "__PROMETHEUS_DS_UID__"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 135
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__PROMETHEUS_DS_UID__"
+          },
+          "expr": "sum by (container) (rate(container_cpu_usage_seconds_total{namespace=\"ergonaut\", container!=\"\", container!=\"POD\"}[$__rate_interval]))",
+          "legendFormat": "{{container}}",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 18,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": true,
+            "lineInterpolation": "smooth",
+            "axisBorderShow": false,
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [],
+          "sortBy": null,
+          "sortDesc": true,
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Memory working set by role",
+      "description": "",
+      "id": 55,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "__PROMETHEUS_DS_UID__"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 135
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__PROMETHEUS_DS_UID__"
+          },
+          "expr": "sum by (container) (container_memory_working_set_bytes{namespace=\"ergonaut\", container!=\"\", container!=\"POD\"})",
+          "legendFormat": "{{container}}",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 18,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": true,
+            "lineInterpolation": "smooth",
+            "axisBorderShow": false,
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [],
+          "sortBy": null,
+          "sortDesc": true,
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Scrape health & restarts",
+      "description": "",
+      "id": 56,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "__PROMETHEUS_DS_UID__"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 135
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__PROMETHEUS_DS_UID__"
+          },
+          "expr": "sum by (role) (up{namespace=\"ergonaut\", job=~\".*ergonaut.*\"})",
+          "legendFormat": "up {{role}}",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__PROMETHEUS_DS_UID__"
+          },
+          "expr": "sum by (container) (increase(kube_pod_container_status_restarts_total{namespace=\"ergonaut\"}[$__rate_interval]))",
+          "legendFormat": "restarts {{container}}",
+          "refId": "B",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__PROMETHEUS_DS_UID__"
+          },
+          "expr": "max(ergonaut_state_up)",
+          "legendFormat": "state collector",
+          "refId": "C",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 18,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": true,
+            "lineInterpolation": "smooth",
+            "axisBorderShow": false,
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [],
+          "sortBy": null,
+          "sortDesc": true,
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
     }
   ],
-  "refresh": "30s",
-  "schemaVersion": 41,
-  "tags": [
-    "json-managed",
-    "ergonaut"
-  ],
-  "templating": {
-    "list": []
-  },
-  "time": {
-    "from": "now-6h",
-    "to": "now"
-  },
-  "timepicker": {
-    "refresh_intervals": [
-      "10s",
-      "30s",
-      "1m",
-      "5m",
-      "15m"
-    ]
-  },
-  "timezone": "browser",
-  "title": "ergonaut Overview",
-  "uid": "ergonaut-overview",
   "version": 1
 }

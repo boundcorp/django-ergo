@@ -71,10 +71,12 @@ again.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import copy
 import hashlib
 import json
 import logging
+import time
 import uuid
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -133,6 +135,8 @@ from django_ergo.conversation.toolkit import approval_pending_digest
 from django_ergo.conversation.toolkit import authenticated_approval_batch
 from django_ergo.conversation.toolkit import auto_approved
 from django_ergo.pricing import add_request_cost
+from django_ergo.signals import structured_call_finished
+from django_ergo.signals import structured_call_started
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -1026,8 +1030,60 @@ def _lifecycle_thread_turn(call, stage):
         log.debug("Could not record thread turn lifecycle")
 
 
+_TOKEN_FIELDS = {
+    "input": "input_tokens",
+    "output": "output_tokens",
+    "cache_write": "cache_creation_input_tokens",
+    "cache_read": "cache_read_input_tokens",
+    "reasoning": "reasoning_tokens",
+}
+
+
+def _call_bot_name(call: StructuredCall) -> str:
+    """The session's bot, without a query (this runs on the event loop)."""
+    if call.session_id is None or not StructuredCall.session.is_cached(call):
+        return ""
+    return call.session.bot_name or ""
+
+
+@contextlib.contextmanager
+def _observed(call: StructuredCall):
+    """Tell observers (Ergonaut's metrics) what this run of the loop used."""
+    bot_name = _call_bot_name(call)
+    before = {key: getattr(call, field) or 0 for key, field in _TOKEN_FIELDS.items()}
+    cost_before = call.cost_usd
+    turns_before = call.turns_used
+    start = time.monotonic()
+    structured_call_started.send_robust(
+        sender=StructuredCall, call=call, bot_name=bot_name
+    )
+    try:
+        yield
+    finally:
+        cost = None
+        if call.cost_usd is not None:
+            cost = float(call.cost_usd - (cost_before or 0))
+        structured_call_finished.send_robust(
+            sender=StructuredCall,
+            call=call,
+            bot_name=bot_name,
+            duration=time.monotonic() - start,
+            tokens={
+                key: max(0, (getattr(call, field) or 0) - before[key])
+                for key, field in _TOKEN_FIELDS.items()
+            },
+            cost_usd=cost,
+            requests=max(0, call.turns_used - turns_before),
+        )
+
+
 async def _loop(run: _Run) -> StructuredCallResult:
     """Run the call to its end; a crash marks it FAILED instead of leaving it in progress."""
+    with _observed(run.call):
+        return await _loop_inner(run)
+
+
+async def _loop_inner(run: _Run) -> StructuredCallResult:
     token = current_call.set(run.call)
     retry_token = automatic_request_retries.set(
         automatic_request_retries.get()

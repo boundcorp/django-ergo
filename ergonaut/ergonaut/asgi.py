@@ -20,3 +20,8 @@ if settings.SECRET_KEY == "secret" and not settings.DEBUG and os.environ.get("ER
 from ergonaut.apps.bots.reloading import start_pulling  # noqa: E402
 
 start_pulling()
+
+# Metrics on their own port (TELEMETRY_EXPORTER_PORT), for the in-cluster scrape.
+from ergonaut.observability.exporter import start_exporter  # noqa: E402
+
+start_exporter("web")

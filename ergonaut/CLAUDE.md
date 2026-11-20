@@ -50,7 +50,7 @@ Use `@shared_task` from celery. Tasks are autodiscovered from `tasks.py` in any 
 
 ### Telemetry
 
-Prometheus metrics are exposed at `/metrics/`. The template already instruments HTTP requests and Celery task execution via `observability/`.
+Prometheus metrics are exposed at `/metrics/` and, with `TELEMETRY_EXPORTER_PORT`, on a per-pod port (`observability/exporter.py`, multi-process via `PROMETHEUS_MULTIPROC_DIR`). `observability/` instruments HTTP, Celery, and (in `ergo.py`, from `django_ergo.signals` and `post_save`) turns, tokens, tools, workers and async work; `collector.py` serves cached DB gauges from the web role. Keep labels low-cardinality: never chat/thread/user/worker IDs.
 
 Managed Grafana dashboard JSON lives in `docs/dashboards/`, and GitHub Actions syncs it with `scripts/sync_grafana_dashboards.py`. Keep dashboards `editable=false`, tagged `json-managed`, and on a `30s` refresh interval.
 

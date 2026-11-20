@@ -4,12 +4,14 @@ from django.core.management.base import BaseCommand
 from django_ergo.bots import webhooks
 
 from ergonaut.apps.bots.loading import find_setup, load_registry, sync_people
+from ergonaut.observability.exporter import start_exporter
 
 
 class Command(BaseCommand):
     help = "Run every bot's long-running plugins (Telegram polling, webhook setup)."
 
     def handle(self, *args, **options):
+        start_exporter("bots")
         setup = find_setup()
         sync_people(setup)
         registry = load_registry(setup)

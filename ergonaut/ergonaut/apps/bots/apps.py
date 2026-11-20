@@ -69,3 +69,8 @@ class BotsConfig(AppConfig):
             notify_table(bot_name, table)
 
         table_changed.connect(publish_table, dispatch_uid="ergonaut-live-tables")
+
+        # Prometheus metrics for turns, tokens, tools, workers and async work.
+        from ergonaut.observability import ergo as ergo_metrics
+
+        ergo_metrics.connect()
