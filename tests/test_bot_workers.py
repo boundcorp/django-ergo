@@ -512,6 +512,7 @@ def test_orca_start_worker_watches_the_dispatch_and_reports_back(  # noqa: PLR09
         ("orchestration", "worker-start"): {"dispatchId": "ctx_1", "taskId": "task_1"},
         ("terminal", "send"): {"send": {"accepted": True}},
         ("terminal", "show"): {"terminal": {"connected": True, "paneRuntimeId": 7}},
+        ("terminal", "read"): {"terminal": {"tail": ["Working", "> "]}},
         ("orchestration", "reply"): {"sent": True},
         ("orchestration", "worker-release"): {"released": True},
     }
@@ -943,6 +944,7 @@ def test_orca_watch_fails_a_worker_whose_agent_terminal_is_gone(
         ("orchestration", "task-create"): {"task": {"id": "task_1"}},
         ("orchestration", "worker-start"): {"dispatchId": "ctx_1", "taskId": "task_1"},
         ("orchestration", "inbox"): {"messages": []},
+        ("terminal", "read"): {"terminal": {"tail": ["Working", "> "]}},
         ("terminal", "send"): {"send": {"accepted": True}},
         ("orchestration", "worker-show"): {
             "dispatch": {"status": "dispatched", "last_heartbeat_at": "x"},

@@ -650,7 +650,12 @@ workers; if Orca no longer knows them (their worktree was removed, Orca was
 reset), starting an agent makes new ones and tries once more. If a worker's agent
 terminal exits or vanishes without a `worker_done` (Orca keeps such a dispatch
 "dispatched"), the watcher fails the worker after five minutes and tells the
-chat why. When a worker settles, the watcher closes its agent terminal
+chat why. The watcher also fails a worker as soon as its agent can't be
+working, for any agent. Either its terminal's last line is a bare shell
+prompt (the agent CLI exited and the shell came back), or a folder-trust
+dialog is on screen and the agent never checked in. It checks every
+few seconds for the first half minute after launch, then at the normal
+interval. When a worker settles, the watcher closes its agent terminal
 (`orchestration worker-release`, or `worker-stop` if Orca hasn't settled the
 dispatch yet), and `ergo_agent_stop` runs `worker-stop`, so finished workers
 don't leave idle agent CLIs holding memory on the Orca host.
