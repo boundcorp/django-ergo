@@ -10,9 +10,10 @@ Each model call sends the newest ``DJANGO_ERGO["OLD_TURNS_IN_FULL"]`` turns
 (default 3) as stored. In older turns:
 
 - a message from another chat (its row has a provenance origin, so a
-  report, reply or forward; never the user's own words) longer than
+  report, reply or forward; never the user's own words) or an automated
+  event (a worker's result, a page action) longer than
   ``DJANGO_ERGO["OLD_MESSAGE_CHARS"]`` (default 1,500) keeps its start and
-  ends with a note naming the chat that has the rest;
+  ends with a note naming where the rest is;
 - a tool call's long string arguments (a brief to ``ergo_thread_send``,
   say) are cut the same way.
 
@@ -131,9 +132,13 @@ def _has_tool_calls(message: dict) -> bool:
 
 
 def _origin(row) -> str:
-    origin = (getattr(row, "provenance", None) or {}).get("origin") or {}
+    """Where the rest of a cut message is: the chat it came from, or this chat's
+    history for an automated event (a worker's result, say). Empty for the
+    user's own words, which are never cut."""
+    provenance = getattr(row, "provenance", None) or {}
+    origin = provenance.get("origin") or {}
     if not origin:
-        return ""
+        return "this chat's history" if provenance.get("kind") == "event" else ""
     label = origin.get("label") or "another chat"
     thread = origin.get("session_id")
     return f"{label} (thread {thread})" if thread else label

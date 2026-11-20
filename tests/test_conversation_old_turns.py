@@ -152,3 +152,17 @@ def test_none_turns_cutting_off(settings):
     history = [m for n in range(4) for m in claude_turn(REPORT, reply="short", n=n)]
     rows = rows_for(history, relayed_indexes=[0])
     assert trim_old_turns(history, rows) is history
+
+
+def test_old_automated_events_are_cut_too():
+    """A worker's "finished" event has no origin chat; older ones are cut and
+    point at this chat's history."""
+    history = [m for n in range(4) for m in claude_turn(REPORT, n=n)]
+    event = SimpleNamespace(provenance={"kind": "event"})
+    rows = {id(history[i]): event for i in (0, 18)}
+    sent = trim_old_turns(history, rows, keep_turns=3, max_chars=100)
+
+    first = sent[0]["content"][0]["text"]
+    assert len(first) < 300
+    assert "the full message is in this chat's history" in first
+    assert sent[18]["content"][0]["text"] == REPORT  # a newest turn, as stored

@@ -998,3 +998,24 @@ def test_a_running_job_records_usage_as_it_goes(tmp_path, monkeypatch):
         assert not AgentUsage.objects.exists()
     finally:
         plugin.stop(handle)
+
+
+def test_jobs_lists_the_newest_first_and_counts_the_rest(tmp_path):
+    from django_ergo.plugins.local_shell import LocalShellPlugin
+
+    plugin = LocalShellPlugin(None, {"root": str(tmp_path)})
+    plugin.on_load()
+    for n in range(5):
+        (tmp_path / f"job-{n}").mkdir()
+    plugin.runs = lambda folder: [1]
+    plugin.run_state = lambda folder, number: {
+        "alive": False,
+        "exit": {"code": 0},
+        "spec": {"agent": "claude", "started_at": 1_700_000_000 + int(folder.name[-1])},
+    }
+
+    listed = plugin.jobs(limit=2)
+    assert [job.get("job") for job in listed[:2]] == ["job-4", "job-3"]
+    assert listed[2] == {"more": "3 older jobs not listed; pass limit=0 to list all"}
+    assert len(plugin.jobs(limit=0)) == 5
+    assert len(plugin.jobs()) == 5  # under the default cap

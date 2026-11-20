@@ -72,9 +72,10 @@ call, as well as once on the session's first turn.
 
 Between compactions, each model call sends the newest three turns
 (`DJANGO_ERGO["OLD_TURNS_IN_FULL"]`) as stored. In older turns, a message
-from another chat (a report, reply or forward, never the user's own words)
-over 1,500 characters (`DJANGO_ERGO["OLD_MESSAGE_CHARS"]`) keeps its start
-and a note naming the chat with the rest, and long tool call arguments
+from another chat (a report, reply or forward, never the user's own words) or
+an automated event (a worker's result, say) over 1,500 characters
+(`DJANGO_ERGO["OLD_MESSAGE_CHARS"]`) keeps its start and a note naming where
+the rest is (the other chat, or this chat's history), and long tool call arguments
 (briefs sent with `ergo_thread_send`, say) are cut the same way. In any
 finished turn, a `send_reply` argument that the turn's final text repeats is
 sent once. Stored history keeps everything in full

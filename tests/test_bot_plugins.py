@@ -3580,6 +3580,29 @@ def test_attachments_archive_and_unarchive(tmp_path, settings):
         plugin.unarchive(ctx, [])
 
 
+@pytest.mark.django_db
+def test_files_in_this_chat_lists_only_the_newest(tmp_path, settings):
+    from django_ergo.bots.tools import ToolContext
+    from django_ergo.conversation.attachments import save_session_file
+    from django_ergo.plugins.attachments import CONTEXT_LISTED
+
+    settings.MEDIA_ROOT = str(tmp_path / "media")
+    bot, _, plugin = files_bot(tmp_path)
+    lee = User.objects.create(username="lee-many-files")
+    mine = ConversationSession.objects.create(user=lee, bot_name="filer")
+    ctx = ToolContext(bot=bot, session=mine, user=lee)
+    for n in range(CONTEXT_LISTED + 5):
+        save_session_file(mine, f"f{n:02}.txt", b"x" * 1500)
+
+    text = plugin.context_sources(ctx, "hi")[0].text()
+    assert text.count("\n- ") == CONTEXT_LISTED
+    assert f"f{CONTEXT_LISTED + 4:02}.txt (text/plain, 1,500 bytes) id=" in text
+    assert "f00.txt" not in text
+    assert "5 older files not listed; ergo_attachments_list shows them" in text
+    # The tool still lists them all.
+    assert len(plugin.list_files(ctx)) == CONTEXT_LISTED + 5
+
+
 @pytest.mark.django_db(transaction=True)
 async def test_bot_archives_its_files(tmp_path, settings):
     from asgiref.sync import sync_to_async

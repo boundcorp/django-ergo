@@ -113,6 +113,9 @@ DEFAULT_TOOLS = ("Read", "Write", "Edit", "Glob", "Grep", "Bash")
 MAX_ATTACH_BYTES = 50_000_000  # a job file attached to the chat
 MAX_UPLOAD_BYTES = 200_000_000  # a chat file copied into a job (streamed)
 MAX_OUTPUTS = 200
+# Job folders local_shell_jobs lists by default, newest first. A busy bot keeps
+# hundreds and the listing stays in the chat's history.
+JOBS_LISTED = 30
 ACTIVITY_ENTRIES = 8
 MAX_LISTED = 10
 CLIP = 300
@@ -1037,7 +1040,9 @@ class LocalShellPlugin(BotPlugin):
             raise LocalShellError(msg)
         return target
 
-    def jobs(self) -> list[dict]:
+    def jobs(self, limit: int = JOBS_LISTED) -> list[dict]:
+        """Job folders, newest first: at most ``limit`` (0 for all), and a
+        last entry counting the rest."""
         if not self.root.is_dir():
             return []
         found = []
@@ -1061,6 +1066,13 @@ class LocalShellPlugin(BotPlugin):
                     else None,
                 }
             )
+        found.sort(key=lambda job: job["started_at"] or "", reverse=True)
+        if limit and limit > 0 and len(found) > limit:
+            more = len(found) - limit
+            found = [
+                *found[:limit],
+                {"more": f"{more} older jobs not listed; pass limit=0 to list all"},
+            ]
         return found
 
     def attach(self, ctx: ToolContext, job: str, path: str) -> dict:
@@ -1209,10 +1221,20 @@ class LocalShellPlugin(BotPlugin):
 
         @bot_tool(
             name="local_shell_jobs",
-            description="List job folders and whether each is running.",
+            description=(
+                f"List job folders, newest first, and whether each is running "
+                f"(the newest {JOBS_LISTED} unless limit says otherwise)."
+            ),
+            parameters={
+                "limit": {
+                    "type": "integer",
+                    "description": f"How many to list (default {JOBS_LISTED}; 0 for all)",
+                },
+            },
+            required=[],
         )
-        def jobs() -> list[dict]:
-            return plugin.jobs()
+        def jobs(limit: int = JOBS_LISTED) -> list[dict]:
+            return plugin.jobs(limit)
 
         @bot_tool(
             name="local_shell_attach",

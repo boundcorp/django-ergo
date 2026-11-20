@@ -616,6 +616,9 @@ def deploy(ctx, release: str) -> str:
 - Functions are the bot's `@bot_task`s (`task:<name>`), plugin worker
   functions (`<plugin>:<name>`, from `BotPlugin.worker_functions()`) and
   agent watchers (`agent:<manager>`, see [Agents](#agents)).
+- When a worker finishes, its chat gets an event with the result (up to 6,000
+  characters). An agent job report's `outputs` show as `path (size)` for the
+  first 20 files, without hashes; `ergo_worker_list` returns the full result.
 - Every chat has the `workers` skill: `ergo_worker_list`, `ergo_worker_cancel`
   (which also stops a coding agent the worker watches), and `ergo_worker_start`
   for the bot's `@bot_task`s.
@@ -1927,7 +1930,7 @@ restart ends them: `ergonaut manage wait_idle` (and the upgrader) wait for
 running `local_shell` jobs even with `--ignore-workers` /
 `ERGONAUT_UPGRADE_WAIT_FOR_WORKERS=0`. Runs time out after
 `timeout_minutes` and at most `max_concurrent` jobs run under `root`.
-`local_shell_jobs` lists jobs, `local_shell_upload` copies chat files into a
+`local_shell_jobs` lists the newest 30 jobs (`limit=0` for all), `local_shell_upload` copies chat files into a
 job folder and `local_shell_attach` copies a job's file into the chat
 (paths stay inside the job, `.ergo/` and secret-looking names are refused);
 none of them asks first.

@@ -81,6 +81,10 @@ if TYPE_CHECKING:
     from django_ergo.conversation.toolkit import Toolkit
 
 MAX_LISTED = 50
+# Files named in the turn's "Files in this chat" block. Long chats collect
+# hundreds of files and the block is sent on every turn, so it names only the
+# newest few and counts the rest; ergo_attachments_list shows them all.
+CONTEXT_LISTED = 20
 # Frames per ergo_attachments_frames call: the newest round of tool results
 # carries at most this many images (images.ROUND_IMAGES_MAX).
 MAX_FRAMES = 8
@@ -581,14 +585,21 @@ class AttachmentsPlugin(BotPlugin):
         def listing() -> str:
             files = ctx.session.attachments
             active = files.filter(archived_at__isnull=True).order_by("-updated_at")
-            rows = list(active[:MAX_LISTED])
+            rows = list(active[:CONTEXT_LISTED])
             archived = files.filter(archived_at__isnull=False).count()
             if not rows and not archived:
                 return ""
             lines = [
-                f"- {r.filename} ({r.media_type}, {r.size or 0} bytes, {r.source}) id={r.id}"
+                f"- {r.filename} ({r.media_type}, {r.size or 0:,} bytes) id={r.id}"
                 for r in rows
             ]
+            more = active.count() - len(rows) if len(rows) == CONTEXT_LISTED else 0
+            if more:
+                lines.append(
+                    f"({more} older file{'s' if more != 1 else ''} not listed; "
+                    "ergo_attachments_list shows them, ergo_attachments_archive "
+                    "clears old ones out)"
+                )
             if archived:
                 lines.append(
                     f"({archived} archived file{'s' if archived != 1 else ''} not "
