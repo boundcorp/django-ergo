@@ -647,6 +647,12 @@ admin cookie. Neither enabled metrics nor a healthy scrape proves that pages
 are fast or usable. Browser Network timing separates TTFB, transfer and client
 rendering; `Server-Timing` explains the server portion.
 
+## Re-login of CLI logins
+
+Staff can redo a broken CLI login (omp providers, the Claude CLI, the Codex CLI) from
+`/relogin/?bot=<bot>&store=<key>`, with no ssh and nothing pasted into chat. The commands come
+from a fixed allow-list. See [relogin.md](relogin.md).
+
 ## API keys
 
 Scripts and agents use the API with a key instead of a login:

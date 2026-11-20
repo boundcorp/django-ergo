@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="referrer" content="no-referrer">
+        <title>
+            {% block title %}Re-login{% endblock %}
+        · Ergonaut</title>
+        <style>
+:root{--fg:#18181b;--muted:#71717a;--bg:#fafafa;--card:#fff;--line:#e4e4e7;--accent:#2563eb;--bad:#b91c1c;--good:#15803d}
+@media (prefers-color-scheme: dark){:root{--fg:#f4f4f5;--muted:#a1a1aa;--bg:#09090b;--card:#18181b;--line:#3f3f46;--accent:#60a5fa;--bad:#f87171;--good:#4ade80}}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 system-ui,sans-serif}
+main{max-width:640px;margin:0 auto;padding:24px 16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px;margin:16px 0}
+.muted{color:var(--muted)} .bad{color:var(--bad)} .good{color:var(--good)}
+button,.button{font:inherit;padding:8px 16px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--fg);cursor:pointer;text-decoration:none;display:inline-block}
+button.primary,.button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+input[type=text]{font:inherit;width:100%;box-sizing:border-box;padding:8px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--fg)}
+code{font-family:ui-monospace,monospace}
+.code{font:700 2.2rem ui-monospace,monospace;letter-spacing:.12em;margin:12px 0}
+table{border-collapse:collapse;width:100%} td,th{text-align:left;padding:4px 8px;border-bottom:1px solid var(--line);font-size:14px}
+        </style>
+    </head>
+    <body>
+        <main>
+            {% block content %}{% endblock %}
+        </main>
+    </body>
+</html>
