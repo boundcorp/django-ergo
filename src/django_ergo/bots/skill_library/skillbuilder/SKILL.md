@@ -282,11 +282,33 @@ total="sum:amount") %} {{ row.category }}: {{ row.total | money }}<br />
   `ergo.ask(text, {chat})` to hand a request to the bot; the reply belongs in
   that chat, not the page.
 
+## Token budget: keep always-loaded text small
+
+`agents.md` and the `instructions:` in `bot.yaml` are loaded on every turn, so
+every character costs tokens on every message, whatever the task.
+
+- Keep `agents.md` and each chat's `bot.yaml` instructions under about 8k
+  characters each. Check the size before you publish.
+- Put procedures and reference material in skills (`skills/<name>.md` or
+  `skills/<name>/SKILL.md`) and docs (`docs/*.md` in the bot folder, read with
+  `ergo_self_read`). In the core, leave a one-line pointer that says when to
+  read each, with its exact path: "Before any paid image generation: read
+  `docs/paid-media.md`."
+- Hard gates stay in the core as one-line rules: spend and budget caps,
+  consent, irreversible or external actions (merge, deploy, delete, publish,
+  purchases), credentials, protected deployments, provider restrictions. Keep
+  every number, date and condition, and add "read <doc> before acting" where
+  the detail moved.
+- Never paste large blocks (schemas, worked examples, history, per-project
+  detail) into always-loaded text. Link them.
+
 ## Before you publish
 
 - Every new tool file is listed under `tools:` (skill-folder `tools.py`
   files load on their own), every table file under `tables:`.
 - New skills, tables, schedules and pins are explained in the PR body,
   with any secrets someone must set.
+- `agents.md` and each chat's instructions are still under the token budget
+  above.
 - Re-read the diff as a reviewer would: no secrets, no debugging leftovers,
   docstrings that tell the model when to use each tool.
