@@ -42,9 +42,14 @@ the command line. Shown links must be on `claude.ai`, `claude.com`, `auth.openai
    store, then queues Celery task `ergonaut.relogin` with the session id only. Only one session
    can be active per store, and one per callback port; database constraints enforce both. A
    session lasts the store's `max_seconds`, 10 minutes at most.
-2. **The worker** opens `ssh -tt` to the login host. It uses `-F /dev/null`, BatchMode, a
-   known_hosts file that pins `host_key`, and no agent or port forwarding. It runs the fixed
-   command in a 2000-column PTY, with `NO_COLOR`, `FORCE_HYPERLINK=0` and `BROWSER=false`.
+2. **The worker** claims the session (a repeated task does nothing), then opens `ssh -T` to the
+   login host. It uses `-F /dev/null`, BatchMode, a known_hosts file that pins `host_key`, and
+   no agent or port forwarding. No remote tty: devbox's login shell would attach a tty session
+   to the shared tmux. Instead a small fixed Python relay (`runner.RELAY`) on the host runs
+   the command in its own 2000-column PTY, under `env -i` with only `HOME`, `USER`, `PATH`,
+   `TERM`, `NO_COLOR`, `FORCE_HYPERLINK=0` and `BROWSER=false`. The relay kills the CLI's
+   process group when ssh's stdin closes, or at its own deadline (the session's end plus
+   30 s), so a lost connection can't leave a login running.
    The output stays in memory (64 KB at most). Then:
    - The worker reads the sign-in link from the output, and the code too for a device flow. If
      either isn't there within 45 s, or a `paste_redirect` link doesn't redirect to
@@ -72,7 +77,8 @@ The audit row keeps the store, user, start and end times, outcome (`ok`, `failed
 `cancelled`), CLI exit code, the post-check result and same/different account. It never keeps
 the sign-in link, codes, pasted values or CLI output. Logs carry only the session id and our
 own wording. The user's main chat gets one event message, "Re-login of <store> completed /
-failed", with no link. A session whose worker died is marked `expired` 90 s after its end time.
+failed", with no link. A session no worker picked up is marked `expired` 90 s after its end time, and a claimed
+one whose worker died 15 minutes after it.
 
 Re-login needs Redis (`REDIS_URL`) and a Celery broker. Without them the page says so and
 starts nothing.
