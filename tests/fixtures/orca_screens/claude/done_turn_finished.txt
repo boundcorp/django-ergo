@@ -1,0 +1,9 @@
+● Monitor event: [Monitor expired after 30m with 5 events delivered. Re-arm it if you still need the watch.]
+● The benchmark watcher timed out after the run had already finished, so there's nothing left to watch. The task is
+  complete and I've reported back to the coordinator.
+✻ Sautéed for 3s · done 3:31 PM
+                                                                                ✔ Update installed · /restart to apply
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ how's the benchmark looking?
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle)

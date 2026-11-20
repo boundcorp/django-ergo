@@ -1,0 +1,4 @@
+## Risks
+- A Plus CTA that cannot complete is a 2.1 risk. Hide or disable it until the store package loads.
+# dev@devbox-dbd868579-jjdt9: ~/orca/workspaces/holyword/holyword-ios-android-test-1102 <leewardbound/holyword-ios-android-test-1102 > (15:29:24)
+(python) »                                                                                               [home:default]

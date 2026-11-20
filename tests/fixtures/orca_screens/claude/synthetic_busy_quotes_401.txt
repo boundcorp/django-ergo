@@ -1,0 +1,7 @@
+● The webhook returns 401 Unauthorized when the secret is empty; please log in to the dashboard to rotate it.
+  Ran 1 shell command
+✢ Simmering… (6m 43s · ↓ 8.1k tokens)
+────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on · 2 shells · esc to interrupt · ↓ to manage

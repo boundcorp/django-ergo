@@ -633,8 +633,16 @@ reads the agent's latest output (`orchestration worker-read`: its transcript,
 or its terminal) into the worker's activity (`WorkerContext.activity`), with
 the time it last did something: the newest transcript time or heartbeat, or
 the check that first saw new output. A running worker quiet for
-`stall_minutes` (default 10) shows as stalled, unless Orca says it's waiting
-on a person. `BotPlugin.worker_log` reads a worker's full recent output on
+`stall_minutes` (default 8) shows as stalled, unless Orca says it's waiting
+on a person. Each check also reads the agent's terminal screen and labels it
+per CLI (`claude`, `codex`, `omp`; `plugins/orca_screen.py`, regex tables from
+real devbox screens): busy, waiting on a prompt, stalled, exited, error loop or
+done. On top of the trust-dialog and shell-prompt checks below, an agent whose
+CLI printed its exit message or its own usage-limit or login error is stopped
+at once and the worker fails with the screen line that shows it. A prompt it is blocked on, generic error text or a retry loop, and a screen
+unchanged for `stall_minutes` (a frozen spinner counts; idle with its own
+background shells or monitors running doesn't) each reach the chat once as an
+escalation with that line. Busy stays quiet. `BotPlugin.worker_log` reads a worker's full recent output on
 demand (Orca: up to 50 transcript messages or 400 screen lines). `model` and `effort` go to Orca's
 `--model`/`--effort`, except for `agent: omp`, which Orca can't give a model
 at launch: the plugin writes the worktree's `.omp/config.yml`

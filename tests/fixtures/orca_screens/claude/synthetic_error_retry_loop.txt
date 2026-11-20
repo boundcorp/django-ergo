@@ -1,0 +1,7 @@
+● Reading src/app.py
+  ⎿  API Error (529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}) · Retrying in 16 seconds… (attempt 5/10)
+✶ Skedaddling… (3m 2s · ↓ 1.2k tokens)
+────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · esc to interrupt

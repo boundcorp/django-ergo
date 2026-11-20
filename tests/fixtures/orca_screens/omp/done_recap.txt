@@ -1,0 +1,7 @@
+ Core #340 and video #261 are merged and deployed; live health and the manifest migration were verified. Image #262
+ remains a green-CI draft pending the budget dependency and verified spend authorization; no paid call was made.
+ ※ recap: Recover Storytime episode consent safely: core and video changes are deployed, while the image queue remains
+ a draft with no paid calls made. Next, resolve the budget-service CI and verify enrollment and remaining spend
+ authorization before proceeding.
+╭── π / ◒ GPT-6.1 Terra 👁 / 🌳 …very / ⑂ leewardbound/storytime-episode-consent-recovery ?14 / ⤴ #261 ─────58%╎┃500K───╮
+╰─                                                                                                                    ─╯
