@@ -139,6 +139,20 @@ TELEMETRY_METRICS_ENABLED = env_variable_truthy("TELEMETRY_METRICS_ENABLED", "tr
 TELEMETRY_METRICS_PATH = os.environ.get("TELEMETRY_METRICS_PATH", "metrics").strip("/") or "metrics"
 # Outside DEBUG, metrics need this bearer token (or an admin's session).
 TELEMETRY_METRICS_TOKEN = os.environ.get("TELEMETRY_METRICS_TOKEN", "")
+# A separate metrics port per pod (0: off), scraped in-cluster by a PodMonitor and
+# never routed by the Service or Ingress. See ergonaut/observability/exporter.py.
+TELEMETRY_EXPORTER_PORT = int(os.environ.get("TELEMETRY_EXPORTER_PORT", "0") or 0)
+# DB-derived gauges (workers, wakes, queues, agent tokens): "auto" serves them from web only.
+TELEMETRY_STATE_COLLECTOR = os.environ.get("TELEMETRY_STATE_COLLECTOR", "auto").strip().lower()
+TELEMETRY_STATE_TTL_SECONDS = float(os.environ.get("TELEMETRY_STATE_TTL_SECONDS", "30"))
+TELEMETRY_CELERY_QUEUES = [
+    queue.strip()
+    for queue in os.environ.get("TELEMETRY_CELERY_QUEUES", "celery,bot_tasks,runpod_maintenance").split(",")
+    if queue.strip()
+]
+# Multi-process metrics (Celery prefork children): the client needs the directory to exist.
+if os.environ.get("PROMETHEUS_MULTIPROC_DIR"):
+    os.makedirs(os.environ["PROMETHEUS_MULTIPROC_DIR"], exist_ok=True)
 
 INSTALLED_APPS = [
     "django.contrib.auth",

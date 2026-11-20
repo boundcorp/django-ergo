@@ -315,6 +315,11 @@ Data lives under `DATA_DIR` (default `~/.ergonaut`, `/data` in the image).
 | `ERGONAUT_ALLOWED_HOSTS` | any host | comma-separated host names the web answers to (localhost always) |
 | `ERGONAUT_CSRF_TRUSTED_ORIGINS` | `BASE_URL` | extra origins (comma-separated) allowed to send writes, outside `DEBUG` |
 | `TELEMETRY_METRICS_TOKEN` | unset | outside `DEBUG`, `/metrics/` answers only with `Authorization: Bearer <token>` or an admin's session |
+| `TELEMETRY_EXPORTER_PORT` | unset (off) | each role serves its metrics on this port for an in-cluster scrape; see [Metrics](#metrics) |
+| `PROMETHEUS_MULTIPROC_DIR` | unset | a directory inside the container for multi-process metrics; needed so Celery's prefork children are counted |
+| `TELEMETRY_STATE_COLLECTOR` | `auto` | database gauges (workers, wakes, open messages, queue lengths, agent tokens): `auto` serves them from the web role only, `on`/`off` force it |
+| `TELEMETRY_STATE_TTL_SECONDS` | `30` | how long one database snapshot is reused between scrapes |
+| `TELEMETRY_CELERY_QUEUES` | `celery,bot_tasks,runpod_maintenance` | Redis queues whose length is reported |
 | `SENTRY_BACKEND_URL` | unset | Sentry DSN |
 | `ERGONAUT_UPGRADER`, `ERGONAUT_AUTO_UPGRADE_SECONDS` | unset | how and how often to upgrade to new releases; see [Upgrading](#upgrading) |
 
@@ -646,6 +651,69 @@ token through the deployment's secret/GitOps workflow rather than an expiring
 admin cookie. Neither enabled metrics nor a healthy scrape proves that pages
 are fast or usable. Browser Network timing separates TTFB, transfer and client
 rendering; `Server-Timing` explains the server portion.
+
+### Metrics
+
+Every role can serve Prometheus metrics on its own port: set
+`TELEMETRY_EXPORTER_PORT` (Octo uses 9464) and the web (uvicorn), the Celery
+worker and beat parents and `ergonaut bots` each start a small HTTP server on
+it at startup. The port is not the web port, so neither the Service nor the
+Ingress reaches it; scrape the pods directly (Octo: a `PodMonitor` in
+`boundcorp/infra-octo` `kubernetes/apps/ergonaut/app/podmonitor.yaml`, which
+also adds a `role` label from the pod's `app.kubernetes.io/component`). The
+public `/metrics/` route keeps its token rule.
+
+With `PROMETHEUS_MULTIPROC_DIR` set, every process writes its metrics to that
+directory and the exporter sums them, so the Celery prefork children count.
+When a child exits (`--max-tasks-per-child`), its counters and histograms are
+folded into `*_archive.db` files, so the directory stays small. Keep the
+directory in the container's own filesystem (not a volume), so a restart
+starts it empty.
+
+What's measured (prefix `ergonaut_`; labels never include chat, thread, user
+or worker IDs, or any text):
+
+| Metric | Labels | What |
+|---|---|---|
+| `llm_calls_total` | bot, kind, engine, model, status | structured call runs (bot turns; a resumed approval is a second run) |
+| `llm_call_errors_total` | bot, engine, model, category | failed runs by error category |
+| `llm_call_duration_seconds` | bot, kind, status | run wall time, tools included |
+| `llm_calls_in_progress` | bot, kind | runs executing now |
+| `llm_requests_total` | bot, engine, model | model responses |
+| `llm_tokens_total` | bot, engine, model, type | `input`, `output`, `cache_write`, `cache_read`, `reasoning` (part of output) |
+| `llm_cost_usd_total` | bot, engine, model | estimated cost from list prices |
+| `tool_calls_total`, `tool_call_duration_seconds` | tool, outcome | every tool dispatch (`unknown` for a tool no toolkit has) |
+| `workers_started_total`, `workers_finished_total` | bot, function, agent, model (, status) | workers: `agent:orca`, `agent:local_shell`, `task:<name>` |
+| `worker_duration_seconds`, `worker_polls_total` | bot, function (, status) | lifetime and watcher steps |
+| `thread_messages_total` | source | async messages queued: person, bot, reply, wake, recurring_wake, worker, event |
+| `wakes_scheduled_total`, `wakes_fired_total`, `recurring_wake_occurrences_total` | bot (, status) | self-wakes |
+| `schedule_runs_total`, `schedule_runs_finished_total` | bot, schedule (, status) | bot.yaml schedules |
+| `celery_task_{started,succeeded,failures,retries}_total`, `celery_task_latency_seconds` | task_name | Celery tasks |
+| `celery_task_published_total` | task_name | tasks this process sent (in beat: periodic tasks fired) |
+| `http_*` | see [Request performance](#request-performance) | web requests |
+
+From the database, cached for `TELEMETRY_STATE_TTL_SECONDS` and served by the
+web role only (so two web replicas report the same values: aggregate with
+`max by (...)`): `workers{bot,function,status}` (queued/running),
+`wakes_pending{bot}`, `recurring_wakes{bot,status}`,
+`thread_messages_open{bot,status}`, `celery_queue_length{queue}`,
+`agent_tokens_total{bot,source,agent,model,type}` and
+`agent_requests_total` (coding agents' own session files, as the worker
+watchers record them), plus `state_up` and `state_read_seconds`.
+
+Turns, tools and workers are observed through `django_ergo.signals`
+(`structured_call_started`, `structured_call_finished`, `tool_call_finished`)
+and `post_save` on the library's models; any host can connect to the same
+signals.
+
+The Grafana dashboard is `ergonaut/docs/dashboards/ergonaut-overview.json`
+(rows: Overview, Tokens & cost, Assistants & turns, Agents & workers, Async &
+Celery, HTTP & process; variables bot, model and role). The
+`Sync Grafana Dashboards` workflow upserts it into Grafana on every push to
+`main` that changes it, as in the BoundCorp cookiecutter; it needs the repo
+secrets `GRAFANA_URL`, `GRAFANA_SA_TOKEN` and
+`GRAFANA_PROMETHEUS_DATASOURCE_UID` (optionally `GRAFANA_FOLDER_UID`, or the
+`GRAFANA_FOLDER_TITLE` variable, default "Ergonaut").
 
 ## Re-login of CLI logins
 

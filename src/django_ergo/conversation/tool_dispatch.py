@@ -10,11 +10,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from contextvars import ContextVar
 from typing import TYPE_CHECKING
 from typing import Any
 
 from asgiref.sync import sync_to_async
+
+from django_ergo.signals import tool_call_finished
 
 if TYPE_CHECKING:
     from django_ergo.conversation.models import ConversationSession
@@ -65,13 +68,27 @@ def dispatch_tool(name: str, args: dict, toolkits: list[Toolkit]) -> tuple[Any, 
     """Run one tool call. Returns (result, is_error); never raises for tool failures."""
     toolkit = find_toolkit(toolkits, name)
     if toolkit is None:
+        _tool_finished("unknown", is_error=True, duration=0.0)
         return f"Unknown tool: {name}", True
+    start = time.perf_counter()
+    result, is_error = _execute(toolkit, name, args)
+    _tool_finished(name, is_error=is_error, duration=time.perf_counter() - start)
+    return result, is_error
+
+
+def _execute(toolkit: Toolkit, name: str, args: dict) -> tuple[Any, bool]:
     try:
         return toolkit.execute_tool(name, args), False
     except ToolError as e:
         return json.dumps({"error": str(e), **e.fields}, ensure_ascii=False), True
     except Exception as e:  # noqa: BLE001 — any tool failure goes back to the model
         return str(e), True
+
+
+def _tool_finished(name: str, *, is_error: bool, duration: float) -> None:
+    tool_call_finished.send_robust(
+        sender=None, tool=name, is_error=is_error, duration=duration
+    )
 
 
 def dispatch_tool_once(
