@@ -13,7 +13,7 @@ from django_ergo.bots.routing import coding_login_error
 from django_ergo.bots.routing import coding_login_store
 from django_ergo.bots.routing import pick_agent
 from django_ergo.plugins.orca import OrcaPlugin
-from django_ergo.plugins.orca import claude_trust_blocked
+from django_ergo.plugins.orca import agent_blocked
 from django_ergo.plugins.orca_trust import seed_trust
 
 
@@ -254,22 +254,131 @@ def test_claude_trust_seed_preserves_settings_and_rejects_outside_path(tmp_path)
     assert json.loads(target.read_text()) == saved
 
 
+CLAUDE_TRUST = [
+    " Quick safety check: Is this a project you created or one you trust?",
+    " \u276f 1. Yes, I trust this folder",
+    "   2. No, exit",
+    " Enter to confirm \u00b7 Esc to cancel",
+]
+# A real devbox terminal after the agent exited (zsh with a right prompt).
+DEVBOX_SHELL = [
+    "\x1b[34m~/orca/workspaces/holyword/tiktok-sdk-plan\x1b[0m <leewardbound/tiktok-sdk-plan > (16:41:07)",
+    "(python) \u00bb                                                  [home:default]",
+    "",
+]
+# A working Claude Code TUI: its footer, not a prompt, is the last line.
+CLAUDE_WORKING = [
+    "  \u23bf  Updated tests/test_launch_guard_gaps.py",
+    "\u273b Shenaniganing\u2026 (4m 30s \u00b7 \u2193 11.9k tokens)",
+    "\u2500" * 40,
+    "\u276f",
+    "\u2500" * 40,
+    "  \u23f5\u23f5 bypass permissions on \u00b7 1 shell \u00b7 esc to interrupt",
+]
+LONG_AGO = 1.0  # launched long before the start grace
+
+
 @pytest.mark.parametrize(
-    ("lines", "blocked"),
+    ("lines", "checked_in", "launched_at", "reason"),
     [
-        (["Do you trust the files in this folder?"], True),
-        # Claude Code 2.1.x's dialog.
-        (
-            [
-                " Quick safety check: Is this a project you created or one you trust?",
-                " \u276f 1. Yes, I trust this folder",
-                "   2. No, exit",
-            ],
-            True,
-        ),
-        (["claude exited", "dev@devbox:~/worktree$ "], True),
-        (["Claude Code", "Thinking about the task"], False),
+        (CLAUDE_TRUST, False, None, "folder trust prompt"),
+        (["Do you trust the files in this folder?"], False, None, "folder trust"),
+        (["> Do you trust the contents of this directory?"], False, None, "trust"),
+        # An agent that checked in is past the dialog, even if it quotes it.
+        (CLAUDE_TRUST + CLAUDE_WORKING, True, LONG_AGO, ""),
+        (DEVBOX_SHELL, True, LONG_AGO, "exited to a shell prompt ((python) \u00bb"),
+        (DEVBOX_SHELL, False, None, "exited to a shell prompt"),
+        (["claude exited", "dev@devbox:~/worktree$ "], True, LONG_AGO, "shell"),
+        # The shell typing the agent's command, and a bare prompt right at launch.
+        (["(python) \u00bb claude --resume  [home:default]"], False, LONG_AGO, ""),
+        (DEVBOX_SHELL, False, "now", ""),
+        (CLAUDE_WORKING, True, LONG_AGO, ""),
+        (["omp \u2502 45%", "\u03c0 / Grok 4.7 / \u2026 \u2502 $"], True, LONG_AGO, ""),
     ],
 )
-def test_claude_trust_prompt_and_shell_return_detection(lines, blocked):
-    assert claude_trust_blocked(lines) is blocked
+def test_agent_blocked_by_trust_prompt_or_exit_to_shell(
+    lines, checked_in, launched_at, reason
+):
+    import time
+
+    if launched_at == "now":
+        launched_at = time.time()
+    found = agent_blocked(lines, checked_in=checked_in, launched_at=launched_at)
+    assert (reason in found) if reason else found == ""
+    assert bool(found) is bool(reason)
+
+
+class _BlockedPlugin(OrcaPlugin):
+    """check()'s Orca calls for one unsettled worker with this terminal tail."""
+
+    def __init__(self, tail, dispatch):
+        self.tail = tail
+        self.dispatch_row = dispatch
+        self.calls = []
+        self.scoped_repositories = None
+
+    def cli_json(self, args):
+        self.calls.append(args[:2])
+        if args[:2] == ["orchestration", "worker-show"]:
+            return {
+                "dispatch": self.dispatch_row,
+                "worker": {"agent_terminal_handle": "term_1", "state": "ready"},
+                "observation": {"status": "running"},
+            }
+        if args[:2] == ["terminal", "read"]:
+            return {"terminal": {"tail": self.tail}}
+        if args[:2] == ["orchestration", "inbox"]:
+            return {"messages": []}
+        if args[:2] == ["terminal", "show"]:
+            return {"terminal": {"connected": True, "paneRuntimeId": 3}}
+        return {}
+
+    def record_activity(self, *_args):
+        pass
+
+    def scan_usage(self, *_args, **_kwargs):
+        pass
+
+
+@pytest.mark.parametrize("agent", ["claude", "codex", "omp"])
+@pytest.mark.parametrize(
+    ("tail", "dispatch", "error"),
+    [
+        (DEVBOX_SHELL, {"status": "dispatched", "last_heartbeat_at": "x"}, "shell"),
+        (CLAUDE_TRUST, {"status": "dispatched"}, "folder trust prompt"),
+    ],
+)
+def test_check_fails_a_dead_or_trust_blocked_worker_for_every_agent(
+    monkeypatch, agent, tail, dispatch, error
+):
+    from types import SimpleNamespace
+
+    from django_ergo.plugins import orca
+
+    monkeypatch.setattr(orca.instruction_protocol, "reconcile", lambda *a: None)
+    plugin = _BlockedPlugin(tail, dispatch)
+    ctx = SimpleNamespace(state={}, stopping=False, progress=lambda *_: None)
+    handle = {"dispatch": "ctx_1", "run": "run_1", "agent": agent, "launched_at": 1.0}
+    with pytest.raises(RuntimeError, match=f"The {agent} agent stopped .*{error}"):
+        plugin.check(ctx, handle)
+    assert ["orchestration", "worker-stop"] in plugin.calls
+
+
+def test_check_keeps_a_working_worker_running(monkeypatch):
+    from types import SimpleNamespace
+
+    from django_ergo.plugins import orca
+
+    monkeypatch.setattr(orca.instruction_protocol, "reconcile", lambda *a: None)
+    plugin = _BlockedPlugin(
+        CLAUDE_WORKING, {"status": "dispatched", "last_heartbeat_at": "x"}
+    )
+    ctx = SimpleNamespace(state={}, stopping=False, progress=lambda *_: None)
+    handle = {
+        "dispatch": "ctx_1",
+        "run": "run_1",
+        "agent": "claude",
+        "launched_at": 1.0,
+    }
+    assert plugin.check(ctx, handle).status == "running"
+    assert ["orchestration", "worker-stop"] not in plugin.calls

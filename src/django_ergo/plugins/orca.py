@@ -166,15 +166,24 @@ OMP_MODEL_CHECK_LIMIT = 2
 # How long an omp worker may run before its session log names provider/model.
 OMP_MODEL_PROOF_SECONDS = 300
 OMP_SESSION_CLOCK_SLACK = 10
-TRUST_PROMPT_CHECK_SECONDS = 30
-# Claude Code's folder-trust dialog, current ("Quick safety check: is this a
-# project you created or one you trust?" / "Yes, I trust this folder") and older.
+# A coding agent's folder-trust dialog: Claude Code 2.x ("Quick safety check:
+# is this a project you created or one you trust?" / "Yes, I trust this
+# folder"), older Claude Code, and Codex.
 TRUST_PROMPT = re.compile(
     r"project you created or one you trust|yes, i trust this folder"
-    r"|do you trust the files in this folder",
+    r"|do you trust the files in this folder"
+    r"|do you trust the contents of this directory",
     re.I,
 )
-SHELL_PROMPT = re.compile(r"(?:^|\n)[\w.-]+@[\w.-]+:[^\n]{0,100}[#$] ?$", re.M)
+# A blocking dialog sits at the bottom of the screen.
+TRUST_PROMPT_LINES = 15
+# A bare shell prompt as the terminal's last line: the agent CLI has exited.
+# devbox's zsh draws "(python) »   [home:default]"; bash "dev@devbox:~/w$ ".
+SHELL_PROMPT = re.compile(
+    r"^(?:\([\w.-]+\)\s+)?(?:[\w.-]+@[\w.-]+:\S*\s*)?[»$#%]\s*(?:\[[^\]]*\])?$"
+)
+# How long after launch a bare prompt may still be the shell starting the agent.
+AGENT_START_GRACE_SECONDS = 20
 MAX_OUTPUT_CHARS = 40_000  # about 10k tokens; a 26-worktree list is ~28k compact
 TARGET_FLAGS = ("--environment", "--pairing-code")
 ARGS_SCHEMA = {
@@ -328,10 +337,21 @@ def _set_launch_model(ctx, model: str, provenance: str) -> None:
     ctx.state["dispatch_receipt"] = receipt
 
 
-def claude_trust_blocked(lines: list) -> bool:
-    """A trust question or immediate shell return on the worker's terminal."""
-    output = "\n".join(ANSI.sub("", str(line)) for line in lines)
-    return bool(TRUST_PROMPT.search(output) or SHELL_PROMPT.search(output.rstrip()))
+def agent_blocked(lines: list, *, checked_in: bool, launched_at: float | None) -> str:
+    """Why the agent in this terminal can't be working, or "".
+
+    - A trust dialog at the bottom of the screen while the agent has never
+      checked in (an agent that has is past it, even if it quotes the text).
+    - A bare shell prompt as the last line once the agent had time to start:
+      the agent CLI exited and the shell came back."""
+    clean = [ANSI.sub("", str(line)).rstrip() for line in lines]
+    clean = [line for line in clean if line.strip()]
+    if not checked_in and TRUST_PROMPT.search("\n".join(clean[-TRUST_PROMPT_LINES:])):
+        return "a folder trust prompt blocked it"
+    started = not launched_at or time.time() - launched_at >= AGENT_START_GRACE_SECONDS
+    if clean and started and SHELL_PROMPT.match(clean[-1].strip()):
+        return f"the agent exited to a shell prompt ({clean[-1].strip()[:80]})"
+    return ""
 
 
 def _tool_input(value) -> str:
@@ -1438,25 +1458,11 @@ class OrcaPlugin(BotPlugin):
             raise ValueError(msg)
         return json.loads(proc.stdout)
 
-    def check(self, ctx, handle: dict) -> AgentCheck:  # noqa: C901
+    def check(self, ctx, handle: dict) -> AgentCheck:
         """One look at an Orca worker: its status, new messages, latest output and
         usage. Fails it when its agent terminal is gone (``fail_if_terminal_gone``)."""
         dispatch, run = handle["dispatch"], handle["run"]
         shown = self.cli_json(["orchestration", "worker-show", "--dispatch", dispatch])
-        if (
-            handle.get("agent") == "claude"
-            and time.time() - handle.get("launched_at", 0) < TRUST_PROMPT_CHECK_SECONDS
-        ):
-            terminal = (shown.get("worker") or {}).get("agent_terminal_handle")
-            if terminal:
-                read = self.cli_json(
-                    ["terminal", "read", "--terminal", terminal, "--limit", "100"]
-                )
-                lines = (read.get("terminal") or {}).get("tail") or []
-                if claude_trust_blocked(lines):
-                    self.end_worker(dispatch, "running")
-                    msg = "folder trust prompt blocked the worker"
-                    raise RuntimeError(msg)
         if handle.get("selected_model"):
             self.verify_omp_model(ctx, handle, shown)
         status = str((shown.get("dispatch") or {}).get("status") or "")
@@ -1510,6 +1516,7 @@ class OrcaPlugin(BotPlugin):
                 },
             )
         if not ctx.stopping:
+            self.fail_if_agent_blocked(handle, shown, status)
             self.fail_if_terminal_gone(ctx, shown)
             self.submit_brief_once(ctx, shown, status)
         progress = state or status or "starting"
@@ -1550,6 +1557,38 @@ class OrcaPlugin(BotPlugin):
         if info.get("connected") is False and info.get("paneRuntimeId") == -1:
             return "exited", preview
         return "live", preview
+
+    def fail_if_agent_blocked(self, handle: dict, shown: dict, status: str) -> None:
+        """Fail an unsettled worker whose agent can't be working: stuck at a
+        folder-trust dialog, or exited back to the shell (``agent_blocked``).
+        Any agent; the shell stays open, so ``fail_if_terminal_gone`` can't see it."""
+        terminal = (shown.get("worker") or {}).get("agent_terminal_handle")
+        if not terminal:
+            return
+        try:
+            read = self.cli_json(
+                ["terminal", "read", "--terminal", terminal, "--limit", "100"]
+            )
+        except (ValueError, OSError, subprocess.SubprocessError):
+            return  # best effort; fail_if_terminal_gone handles a vanished terminal
+        lines = (read.get("terminal") or {}).get("tail") or []
+        dispatch = shown.get("dispatch") or {}
+        checked_in = bool(dispatch.get("last_heartbeat_at")) or status not in (
+            "",
+            "dispatched",
+        )
+        reason = agent_blocked(
+            lines, checked_in=checked_in, launched_at=handle.get("launched_at")
+        )
+        if not reason:
+            return
+        agent = handle.get("agent") or "coding"
+        self.end_worker(handle["dispatch"], status)
+        msg = (
+            f"The {agent} agent stopped without reporting done: {reason}. "
+            "Start it again with ergo_agent_start if the task still needs doing."
+        )
+        raise RuntimeError(msg)
 
     def fail_if_terminal_gone(self, ctx, shown: dict) -> None:
         """Fail the worker when its agent terminal exited or vanished without a

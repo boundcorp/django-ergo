@@ -42,7 +42,9 @@ if TYPE_CHECKING:
 
 POLL_SECONDS = 120
 STATUSES = ("running", "done", "failed")
-CLAUDE_TRUST_PROBE_SECONDS = 30
+# Look sooner right after launch, so an agent stuck at a trust dialog or one that
+# exited at once fails within seconds (``AgentManager.check`` decides).
+START_PROBE_SECONDS = 30
 
 
 @dataclass
@@ -446,10 +448,7 @@ def watch(ctx: WorkerContext, manager: AgentManager, handle: dict):
     if check.status == "failed":
         raise RuntimeError(check.error or f"The {manager.name} agent failed")
     delay = manager.poll_seconds
-    if (
-        handle.get("agent") == "claude"
-        and time.time() - handle.get("launched_at", 0) < CLAUDE_TRUST_PROBE_SECONDS
-    ):
+    if time.time() - handle.get("launched_at", 0) < START_PROBE_SECONDS:
         delay = min(delay, 5)
     return ctx.again(delay, progress=check.progress)
 
