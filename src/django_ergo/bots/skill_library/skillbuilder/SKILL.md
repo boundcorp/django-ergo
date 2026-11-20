@@ -68,6 +68,15 @@ to use the skill. A skill with tools must also be loadable: don't put
 everything in `always_load`; list it in `chats.<chat>.skills` only when that
 chat uses it on most turns.
 
+## Token budget
+
+`agents.md`, bot.yaml instructions, `always_load` skills and skill
+descriptions are paid on every turn. Keep `agents.md` near 8k characters:
+identity, hard gates as one-line rules, and an index of when to read each doc
+or skill. Procedures go in skills, reference material in the bot's `docs/` or
+`kb/` (read with `ergo_self_read` or `ergo_kb_search`). Never paste logs,
+schemas, history or examples into always-loaded text; point to them.
+
 ## Writing a tool file
 
 ```python

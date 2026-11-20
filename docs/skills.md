@@ -35,7 +35,7 @@ plugins: [attachments]   # plugins it needs (below)
 3. Propose five dinners as a question, with "Looks good" as a suggestion.
 ```
 
-The description is what the model sees before loading, so say when to use
+The description is paid on every turn, so keep it to one or two sentences. It is what the model sees before loading, so say when to use
 the skill, not just what it is. The body is what it reads after loading.
 
 To ship tools with it, use a folder:

@@ -354,7 +354,25 @@ The system prompt, rebuilt every turn, so edits reach existing chats at
 once. Ergo adds the rest around it: the skill list, the current time, the
 KB's index article, context functions and the chat's recent history. Keep
 `agents.md` about the bot's job and voice; put procedures in skills, which
-only load when needed, and facts in `kb/`.
+only load when needed, and facts in `kb/`. It is paid on every turn, so
+stay token-minded: see [Token budget](#token-budget).
+
+### Token budget
+
+`agents.md`, bot.yaml instructions, `kb/index.md`, `always_load` skills and
+every skill description are paid on every turn, so keep them small.
+
+- Keep the core around 8k characters or less: identity, hard gates as
+  one-line rules, and an index saying when to read each doc or skill.
+- Put procedures in skills (loaded with `ergo_skill_load`) and reference
+  material in the bot folder's `docs/` or `kb/` (read on demand with
+  `ergo_self_read`, `ergo_kb_search` or `ergo_config_repo_read`).
+- Never paste logs, schemas, history or examples into always-loaded text.
+- Prefer a pointer to restating.
+
+Ergo logs a warning at load when a bot's always-loaded text passes
+`DJANGO_ERGO["BOT_INSTRUCTIONS_WARN_CHARS"]` (default 12000; 0 turns it off).
+It never stops a bot from loading.
 
 ## Chats and threads
 
