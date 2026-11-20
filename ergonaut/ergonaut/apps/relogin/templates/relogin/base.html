@@ -3,7 +3,8 @@
     <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
-        <meta name="referrer" content="no-referrer">
+        {% comment %}same-origin, never no-referrer: under no-referrer browsers send "Origin: null" on same-origin POSTs and CSRF refuses them. Other sites still get nothing.{% endcomment %}
+        <meta name="referrer" content="same-origin">
         <title>
             {% block title %}Re-login{% endblock %}
         · Ergonaut</title>

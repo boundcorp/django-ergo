@@ -1,10 +1,12 @@
 import logging
 import os
+import re
 import shlex
 import sys
 import threading
 import time
 from datetime import timedelta
+from pathlib import Path
 
 import pytest
 from django.test import Client
@@ -183,6 +185,58 @@ def test_start_needs_csrf(staff, bot, redis):
     strict.force_login(staff)
     assert strict.post("/relogin/start/", {"bot": "devbox", "store": "claude-cli"}).status_code == 403
     assert not ReloginSession.objects.exists()
+
+
+# Policies under which a browser sends "Origin: null" on a same-origin POST (Fetch spec,
+# "serializing a request origin"), which Django's CSRF origin check refuses.
+NULLS_ORIGIN = {"no-referrer"}
+
+
+def _referrer_policies(response):
+    metas = re.findall(rb'<meta\s+name="referrer"\s+content="([^"]*)"', response.content, re.I)
+    return [m.decode().strip().lower() for m in metas] + [
+        p.strip().lower() for p in response.get("Referrer-Policy", "").split(",") if p.strip()
+    ]
+
+
+def test_pages_keep_origin_on_their_own_posts(staff, bot, redis, client):
+    session = _session(staff)
+    for url in ["/relogin/?bot=devbox&store=omp/anthropic", f"/relogin/{session.pk}/"]:
+        response = client.get(url)
+        policies = _referrer_policies(response)
+        assert response.status_code == 200 and policies, url
+        assert not NULLS_ORIGIN & set(policies), (url, policies)
+        assert set(policies) == {"same-origin"}, (url, policies)  # and nothing goes to other sites
+
+
+def test_no_ergonaut_template_sends_no_referrer():
+    root = Path(__file__).resolve().parents[3]  # ergonaut/ergonaut
+    offenders = [
+        str(path.relative_to(root))
+        for path in root.rglob("templates/**/*.html")
+        for tag in re.findall(r"<meta\b[^>]*>", path.read_text(), re.I)
+        if re.search(r"no-referrer", tag, re.I)
+    ]
+    assert not offenders
+
+
+def test_start_accepts_a_same_origin_post_with_csrf(staff, bot, redis, monkeypatch):
+    monkeypatch.setattr("ergonaut.apps.relogin.tasks.run_relogin.delay", lambda pk: None)
+    strict = Client(enforce_csrf_checks=True)
+    strict.force_login(staff)
+    page = strict.get("/relogin/?bot=devbox&store=omp/anthropic", secure=True)
+    token = re.search(rb'name="csrfmiddlewaretoken" value="([^"]+)"', page.content).group(1).decode()
+    form = {"bot": "devbox", "store": "omp/anthropic", "csrfmiddlewaretoken": token}
+    # What a no-referrer page made the browser send: refused.
+    null = strict.post("/relogin/start/", form, secure=True, headers={"Origin": "null"})
+    assert null.status_code == 403 and not ReloginSession.objects.exists()
+    ok = strict.post("/relogin/start/", form, secure=True, headers={"Origin": "https://testserver"})
+    session = ReloginSession.objects.get()
+    assert ok.status_code == 302 and ok["Location"] == f"/relogin/{session.pk}/"
+    cancel = strict.post(
+        f"/relogin/{session.pk}/cancel", secure=True, headers={"Origin": "https://testserver", "X-CSRFToken": token}
+    )
+    assert cancel.status_code == 200
 
 
 def test_start_creates_one_session_per_store_and_port(

@@ -45,6 +45,23 @@ def staff_only(view):
     return wrapped
 
 
+REFERRER_POLICY = "same-origin"
+
+
+def same_origin_referrer(view):
+    """Pages send no referrer to other sites but keep Origin/Referer on their own POSTs.
+    SecurityMiddleware already defaults to same-origin; this pins it if that setting changes.
+    no-referrer makes browsers send "Origin: null" on form POSTs, which CSRF refuses."""
+
+    @wraps(view)
+    def wrapped(request, *args, **kwargs):
+        response = view(request, *args, **kwargs)
+        response["Referrer-Policy"] = REFERRER_POLICY
+        return response
+
+    return wrapped
+
+
 def _own(request, session_id: str) -> ReloginSession:
     session = ReloginSession.objects.filter(pk=session_id, user=request.user).first()
     if session is None:
@@ -62,6 +79,7 @@ def _ready() -> str:
 @never_cache
 @require_GET
 @staff_only
+@same_origin_referrer
 def start_page(request):
     bot_name, key = request.GET.get("bot", ""), request.GET.get("store", "")
     context = {"bot_name": bot_name, "key": key, "error": "", "store": None, "active": None}
@@ -82,6 +100,7 @@ def start_page(request):
 @never_cache
 @require_POST
 @staff_only
+@same_origin_referrer
 def start(request):
     bot_name, key = request.POST.get("bot", ""), request.POST.get("store", "")
     try:
@@ -121,6 +140,7 @@ def start(request):
 @never_cache
 @require_GET
 @staff_only
+@same_origin_referrer
 def session_page(request, session_id):
     session = _own(request, session_id)
     return render(
