@@ -19,99 +19,145 @@ def _legacy_orca_worker_fixtures_have_healthy_logins(monkeypatch):
     )
 
 
-def test_omp_launch_guard_stops_quarantined_model():
-    from django_ergo.plugins.orca import OrcaPlugin
+class _OmpPlugin:
+    """verify_omp_model's collaborators: the terminal tail and omp's session log."""
 
-    class FakePlugin:
-        stopped = []
-
-        def cli_json(self, args):
-            assert args[:2] == ["terminal", "read"]
-            return {"terminal": {"tail": ["Kimi K3"]}}
-
-        def end_worker(self, dispatch, status):
-            self.stopped.append((dispatch, status))
-
-    plugin = FakePlugin()
-    ctx = SimpleNamespace(
-        state={
-            "dispatch_receipt": {"launch_model": None},
-            "omp_catalog_name": "Claude Sonnet 5.5",
-        }
-    )
-    handle = {"dispatch": "dispatch_1", "selected_model": "anthropic/claude-sonnet-5-5"}
-    shown = {"worker": {"agent_terminal_handle": "terminal_1"}}
-    with pytest.raises(RuntimeError, match="Kimi K3|kimi k3"):
-        OrcaPlugin.verify_omp_model(plugin, ctx, handle, shown)
-    assert plugin.stopped == [("dispatch_1", "running")]
-    assert ctx.state["dispatch_receipt"]["launch_model"] == "kimi k3"
-
-
-class _HeaderPlugin:
-    def __init__(self, tail):
-        self.tail = tail
+    def __init__(self, tail=(), models=(), fallback=False):
+        self.tail = list(tail)
+        self.used = {"models": list(models), "fallback": fallback}
         self.stopped = []
 
-    def cli_json(self, _args):
+    def cli_json(self, args):
+        assert args[:2] == ["terminal", "read"]
         return {"terminal": {"tail": self.tail}}
+
+    def omp_session_models(self, _handle):
+        return self.used
 
     def end_worker(self, dispatch, status):
         self.stopped.append((dispatch, status))
 
 
 GROK_HEADER = "\x1b[2m╭── π / ◑ Grok 4.7 🙈 / 📁 …vbox / ⑂ main *3 ?1 ──9%──┃──500K──╮"
+SHOWN = {"worker": {"agent_terminal_handle": "terminal_1"}}
 
 
-def test_omp_launch_guard_verifies_the_header_display_name():
+def _omp_ctx():
+    return SimpleNamespace(state={"dispatch_receipt": {"launch_model": None}})
+
+
+def _omp_handle(model, launched_at=None):
+    import time
+
+    return {
+        "dispatch": "dispatch_1",
+        "selected_model": model,
+        "path": "/w",
+        "launched_at": time.time() if launched_at is None else launched_at,
+    }
+
+
+def test_omp_launch_guard_stops_quarantined_model():
     from django_ergo.plugins.orca import OrcaPlugin
 
-    # The brief mentions the incident; the header is what counts.
-    plugin = _HeaderPlugin([GROK_HEADER, "Kimi K3 fell back last time"])
-    ctx = SimpleNamespace(
-        state={
-            "dispatch_receipt": {"launch_model": None},
-            "omp_catalog_name": "Grok 4.7 🙈",
-        }
+    plugin = _OmpPlugin(tail=["Kimi K3"])
+    ctx = _omp_ctx()
+    with pytest.raises(RuntimeError, match="kimi k3 instead of selected"):
+        OrcaPlugin.verify_omp_model(
+            plugin, ctx, _omp_handle("anthropic/claude-sonnet-5-5"), SHOWN
+        )
+    assert plugin.stopped == [("dispatch_1", "running")]
+    assert ctx.state["dispatch_receipt"]["launch_model"] == "kimi k3"
+
+
+def test_omp_launch_guard_proves_provider_from_the_session_log():
+    from django_ergo.plugins.orca import OrcaPlugin
+
+    # The brief mentions the incident; the session log is what counts.
+    plugin = _OmpPlugin(
+        tail=[GROK_HEADER, "Kimi K3 fell back last time"],
+        models=["xai-oauth/grok-4.7"],
     )
-    handle = {"dispatch": "dispatch_1", "selected_model": "xai-oauth/grok-4.7:high"}
-    shown = {"worker": {"agent_terminal_handle": "terminal_1"}}
-    OrcaPlugin.verify_omp_model(plugin, ctx, handle, shown)
+    ctx = _omp_ctx()
+    OrcaPlugin.verify_omp_model(
+        plugin, ctx, _omp_handle("xai-oauth/grok-4.7:high"), SHOWN
+    )
     assert plugin.stopped == []
-    assert ctx.state["dispatch_receipt"]["launch_model"] == "xai-oauth/grok-4.7"
+    receipt = ctx.state["dispatch_receipt"]
+    assert receipt["launch_model"] == "xai-oauth/grok-4.7"
+    assert receipt["launch_model_provenance"] == "omp session log"
+
+
+@pytest.mark.parametrize(
+    ("models", "fallback", "observed"),
+    [
+        # Same display name ("Claude Sonnet 5.5") in the header, another provider.
+        (
+            ["github-copilot/claude-sonnet-5-5"],
+            False,
+            "github-copilot/claude-sonnet-5-5",
+        ),
+        (
+            ["anthropic/claude-sonnet-5-5", "fireworks/kimi-k3"],
+            False,
+            "fireworks/kimi-k3",
+        ),
+        (["anthropic/claude-sonnet-5-5"], True, "a fallback for"),
+    ],
+)
+def test_omp_launch_guard_stops_another_provider_with_the_same_display_name(
+    models, fallback, observed
+):
+    from django_ergo.plugins.orca import OrcaPlugin
+
+    header = GROK_HEADER.replace("Grok 4.7 🙈", "Claude Sonnet 5.5")
+    plugin = _OmpPlugin(tail=[header], models=models, fallback=fallback)
+    with pytest.raises(RuntimeError, match=observed):
+        OrcaPlugin.verify_omp_model(
+            plugin, _omp_ctx(), _omp_handle("anthropic/claude-sonnet-5-5"), SHOWN
+        )
+    assert plugin.stopped == [("dispatch_1", "running")]
 
 
 def test_omp_launch_guard_stops_a_kimi_header():
     from django_ergo.plugins.orca import OrcaPlugin
 
-    plugin = _HeaderPlugin([GROK_HEADER.replace("Grok 4.7", "Kimi K3")])
-    ctx = SimpleNamespace(state={"omp_catalog_name": "Grok 4.7 🙈"})
-    handle = {"dispatch": "dispatch_1", "selected_model": "xai-oauth/grok-4.7"}
-    shown = {"worker": {"agent_terminal_handle": "terminal_1"}}
+    plugin = _OmpPlugin(tail=[GROK_HEADER.replace("Grok 4.7", "Kimi K3")])
+    ctx = _omp_ctx()
     with pytest.raises(RuntimeError, match="kimi k3 instead of selected"):
-        OrcaPlugin.verify_omp_model(plugin, ctx, handle, shown)
+        OrcaPlugin.verify_omp_model(
+            plugin, ctx, _omp_handle("xai-oauth/grok-4.7"), SHOWN
+        )
     assert plugin.stopped == [("dispatch_1", "running")]
     assert ctx.state["dispatch_receipt"]["launch_model"] == "kimi k3"
 
 
-def test_omp_launch_guard_fails_closed_without_model_status():
+def test_omp_launch_guard_header_alone_is_not_proof():
+    import time
+
+    from django_ergo.plugins.orca import OMP_MODEL_PROOF_SECONDS
     from django_ergo.plugins.orca import OrcaPlugin
 
-    class FakePlugin:
-        stopped = []
+    plugin = _OmpPlugin(tail=[GROK_HEADER])
+    ctx = _omp_ctx()
+    OrcaPlugin.verify_omp_model(plugin, ctx, _omp_handle("xai-oauth/grok-4.7"), SHOWN)
+    assert plugin.stopped == []
+    assert ctx.state["dispatch_receipt"]["launch_model"] is None
+    late = _omp_handle("xai-oauth/grok-4.7", time.time() - OMP_MODEL_PROOF_SECONDS - 1)
+    with pytest.raises(RuntimeError, match="did not record its provider/model"):
+        OrcaPlugin.verify_omp_model(plugin, ctx, late, SHOWN)
+    assert plugin.stopped == [("dispatch_1", "running")]
 
-        def cli_json(self, _args):
-            return {"terminal": {"tail": []}}
 
-        def end_worker(self, dispatch, status):
-            self.stopped.append((dispatch, status))
+def test_omp_launch_guard_fails_closed_for_old_handles_without_model_status():
+    from django_ergo.plugins.orca import OrcaPlugin
 
-    plugin = FakePlugin()
-    ctx = SimpleNamespace(state={"omp_catalog_name": "Claude Sonnet 5.5"})
+    plugin = _OmpPlugin()
+    ctx = _omp_ctx()
     handle = {"dispatch": "dispatch_1", "selected_model": "anthropic/claude-sonnet-5-5"}
-    shown = {"worker": {"agent_terminal_handle": "terminal_1"}}
-    OrcaPlugin.verify_omp_model(plugin, ctx, handle, shown)
-    with pytest.raises(RuntimeError, match="did not report its launch model"):
-        OrcaPlugin.verify_omp_model(plugin, ctx, handle, shown)
+    OrcaPlugin.verify_omp_model(plugin, ctx, handle, SHOWN)
+    with pytest.raises(RuntimeError, match="did not record its provider/model"):
+        OrcaPlugin.verify_omp_model(plugin, ctx, handle, SHOWN)
     assert plugin.stopped == [("dispatch_1", "running")]
 
 
