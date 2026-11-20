@@ -1249,3 +1249,25 @@ def test_terminal_worker_classifies_unsent_and_uncertain_mail(
     published = list(workers)
     w.schedule(worker, 0)
     assert workers == published
+
+
+def test_a_finished_event_names_output_files_without_hashes():
+    from django_ergo.bots.workers import EVENT_OUTPUTS
+    from django_ergo.bots.workers import result_for_chat
+
+    outputs = [
+        {"path": f"out/{n}.wav", "size": 4_653_200, "sha256": "ab" * 32}
+        for n in range(EVENT_OUTPUTS + 3)
+    ]
+    text = result_for_chat(
+        {"job": "j", "summary": "Done — 18 lines.", "outputs": outputs}
+    )
+    shown = json.loads(text)
+    assert shown["summary"] == "Done — 18 lines."
+    assert "Done — 18 lines." in text  # not escaped
+    assert "sha256" not in text
+    assert shown["outputs"][0] == "out/0.wav (4,653,200 bytes)"
+    assert len(shown["outputs"]) == EVENT_OUTPUTS + 1
+    assert shown["outputs"][-1] == "... 3 more; ergo_worker_list has them all"
+    assert result_for_chat("plain text") == "plain text"
+    assert json.loads(result_for_chat({"a": 1})) == {"a": 1}

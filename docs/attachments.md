@@ -231,6 +231,13 @@ Older ones are replaced by `[image omitted: name
 before sending; without it they are sent as they are when they're JPEG, PNG,
 GIF or WebP under 5 MB, and left out otherwise.
 
+## Files in this chat
+
+The attachments plugin puts a "Files in this chat" section in each turn's
+context: the newest 20 unarchived files (`CONTEXT_LISTED`), one line each
+with name, media type, size and id, then a count of the older and the
+archived ones. `ergo_attachments_list` lists them all.
+
 ## Archiving session files
 
 A long chat collects files the bot no longer needs. The attachments plugin's

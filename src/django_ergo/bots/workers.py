@@ -55,6 +55,41 @@ MAX_POLLS = 10_000
 # (the process running it died). Steps are meant to be short polls.
 STEP_LEASE_SECONDS = 30 * 60
 MAX_RESULT_CHARS = 6000
+# Output files named in the "finished" event a worker's chat gets. Agent jobs
+# report every file they touched, with a sha256 each; the event stays in the
+# chat's history and is re-sent on later turns, so it names the first few by
+# path and size only. ergo_worker_list returns the full result.
+EVENT_OUTPUTS = 20
+
+
+def result_for_chat(result: Any) -> str:
+    """A finished worker's result as the event text shows it.
+
+    An ``outputs`` list of ``{path, size, sha256}`` dicts (agent job reports)
+    becomes ``path (size)`` lines, the first ``EVENT_OUTPUTS`` of them, with a
+    count of the rest. Everything else is shown as stored.
+    """
+    if isinstance(result, str):
+        return result
+    if isinstance(result, dict) and isinstance(result.get("outputs"), list):
+        outputs = result["outputs"]
+        shown = []
+        for item in outputs[:EVENT_OUTPUTS]:
+            if isinstance(item, dict) and item.get("path"):
+                size = item.get("size")
+                shown.append(
+                    f"{item['path']} ({size:,} bytes)"
+                    if isinstance(size, int)
+                    else str(item["path"])
+                )
+            else:
+                shown.append(item)
+        if len(outputs) > EVENT_OUTPUTS:
+            shown.append(
+                f"... {len(outputs) - EVENT_OUTPUTS} more; ergo_worker_list has them all"
+            )
+        result = {**result, "outputs": shown}
+    return json.dumps(result, indent=2, ensure_ascii=False, default=str)
 
 
 def _record_worker_event(
@@ -671,11 +706,7 @@ def _finish(worker: Worker, status: str, result: Any, error: str) -> None:
     if not worker.notify or status == "cancelled":
         return
     if status == "completed":
-        shown = (
-            result
-            if isinstance(result, str)
-            else json.dumps(result, indent=2, default=str)
-        )
+        shown = result_for_chat(result)
         text = (
             f"Worker “{worker.title}” finished.\n\nResult:\n{shown[:MAX_RESULT_CHARS]}"
         )
