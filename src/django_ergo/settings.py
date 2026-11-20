@@ -111,6 +111,10 @@ DEFAULTS = {
     # "https://bots.example.com/hooks". Plugins build their webhook URLs from
     # it; None = no public URL, so channels such as Telegram poll instead.
     "BOT_WEBHOOK_BASE_URL": None,
+    # Characters of always-loaded text (instructions plus always_load skills'
+    # bodies and every skill's description) above which a bot logs a warning at
+    # load. Advisory only; 0 turns the check off.
+    "BOT_INSTRUCTIONS_WARN_CHARS": 12000,
     # Extra or overriding model prices, USD per million tokens (see pricing.py)
     "MODEL_PRICES": {},
     # Name prefixes of environment variables that tools (ToolContext.secret) and

@@ -4306,3 +4306,24 @@ async def test_a_private_bot_is_closed_to_other_bots_but_reaches_out(tmp_path):
         assert files.session_for(worker, str(root.id)).id == root.id
 
     await sync_to_async(checks)()
+
+
+def test_large_always_loaded_instructions_warn_but_load(tmp_path, caplog, settings):
+    folder = write_bot(tmp_path, KITCHEN_YAML)
+    (folder / "agents.md").write_text("x" * 500)
+    settings.DJANGO_ERGO = {"BOT_INSTRUCTIONS_WARN_CHARS": 100}
+    with caplog.at_level("WARNING"):
+        bot = Bot.load(folder)
+    assert bot.always_loaded_chars() >= 500
+    assert "always-loaded instructions are" in caplog.text
+
+
+def test_small_or_disabled_instruction_check_is_quiet(tmp_path, caplog, settings):
+    folder = write_bot(tmp_path, KITCHEN_YAML)
+    with caplog.at_level("WARNING"):
+        Bot.load(folder)
+    settings.DJANGO_ERGO = {"BOT_INSTRUCTIONS_WARN_CHARS": 0}
+    (folder / "agents.md").write_text("x" * 50000)
+    with caplog.at_level("WARNING"):
+        Bot.load(folder)
+    assert "always-loaded instructions" not in caplog.text

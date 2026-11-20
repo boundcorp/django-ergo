@@ -68,6 +68,22 @@ to use the skill. A skill with tools must also be loadable: don't put
 everything in `always_load`; list it in `chats.<chat>.skills` only when that
 chat uses it on most turns.
 
+## Token budget
+
+`agents.md`, bot.yaml instructions, `always_load` skills and skill
+descriptions are paid on every turn. Keep `agents.md` near 8k characters:
+identity, hard gates as one-line rules, and an index of when to read each doc
+or skill. Procedures go in skills, reference material in the bot's `docs/` or
+`kb/` (read with `ergo_self_read` or `ergo_kb_search`). Never paste logs,
+schemas, history or examples into always-loaded text; point to them.
+
+Hard gates (spend caps, consent, irreversible or external actions, credentials)
+stay in the core as one-line rules with every number, date and condition, plus
+"read <doc> before acting" where detail moved. Name each pointer's exact path.
+Docs must sit in the bot's own folder (`<bot>/docs/`, `<bot>/kb/`): a repo-root
+`docs/` is out of reach, and `ergo_self_read` needs the `introspection` skill
+loaded (list it in the chat's `skills:`).
+
 ## Writing a tool file
 
 ```python
@@ -288,5 +304,7 @@ total="sum:amount") %} {{ row.category }}: {{ row.total | money }}<br />
   files load on their own), every table file under `tables:`.
 - New skills, tables, schedules and pins are explained in the PR body,
   with any secrets someone must set.
+- `agents.md` and each chat's instructions are within the token budget, and
+  every doc they point to is readable by the bot.
 - Re-read the diff as a reviewer would: no secrets, no debugging leftovers,
   docstrings that tell the model when to use each tool.

@@ -218,6 +218,7 @@ class Bot:
             specs.append(PluginSpec("ergo_kb", {"path": "kb"}))
         specs = self._with_skill_plugins(specs)
         messaging.KNOWN_BOTS[definition.name] = self
+        self.warn_if_instructions_large()
         self.plugins: list[BotPlugin] = [
             resolve_plugin_class(spec.name)(self, spec.config) for spec in specs
         ]
@@ -977,6 +978,35 @@ class Bot:
             metadata=metadata,
             system_prompt=self.instructions_for(name),
         )
+
+    def always_loaded_chars(self) -> int:
+        """Characters paid on every turn: the longest chat's instructions, the
+        bodies of ``always_load`` skills and every skill's description."""
+        chats = [None, *self.definition.chats]
+        longest = max(len(self.instructions_for(chat)) for chat in chats)
+        skills = sum(
+            len(s.description) + (len(s.body) if s.always_load else 0)
+            for s in self.skills
+        )
+        return longest + skills
+
+    def warn_if_instructions_large(self) -> None:
+        """Log (never fail) when always-loaded text passes
+        ``DJANGO_ERGO["BOT_INSTRUCTIONS_WARN_CHARS"]``; 0 disables."""
+        from django_ergo.settings import api_settings
+
+        limit = int(api_settings.BOT_INSTRUCTIONS_WARN_CHARS or 0)
+        size = self.always_loaded_chars()
+        if limit and size > limit:
+            logger.warning(
+                "%s: always-loaded instructions are %d characters (warn above %d), "
+                "paid on every turn. Move procedures into skills and reference "
+                "material into docs or kb/ (see docs/building-bots.md, "
+                "'Token budget').",
+                self.name,
+                size,
+                limit,
+            )
 
     def instructions_for(self, chat: str | None) -> str:
         """The bot's instructions, plus a chat's own when it has any."""

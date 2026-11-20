@@ -62,7 +62,10 @@ schedules:
         to: {thread: "Receipts {date:%b %d}"}
 ```
 
-- `agents.md` is the system prompt. Brief the bot the way you would brief a
+- `agents.md` is the system prompt, paid on every turn: keep it near 8k
+  characters (identity, one-line hard gates, an index of when to read each
+  skill or doc); procedures go in skills, reference in `docs/` or `kb/`.
+  Ergo logs a warning above 12k always-loaded characters. Brief the bot the way you would brief a
   person: who it works for, what it owns, how it replies, and when to ask.
 - Tools are `@bot_tool` functions. Type hints become the parameters and the
   docstring becomes the description. Use `requires_approval=True` for
