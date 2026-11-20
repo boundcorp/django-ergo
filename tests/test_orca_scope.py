@@ -70,19 +70,13 @@ def provider_config():
         },
         "agents": {
             "medium": [
+                {"agent": "claude", "provider": "claude", "model": "claude-sonnet-5-5"},
                 {
-                    "agent": "omp",
-                    "provider": "claude",
-                    "model": "anthropic/claude-sonnet-5-5",
-                    "effort": "high",
-                },
-                {
-                    "agent": "omp",
+                    "agent": "codex",
                     "provider": "chatgpt",
-                    "model": "openai-codex/gpt-6-sol",
+                    "model": "gpt-6-sol",
                     "effort": "medium",
                 },
-                {"agent": "claude", "provider": "claude", "model": "claude-sonnet-5-5"},
             ],
         },
         "routing": {
@@ -197,6 +191,9 @@ class Runner:
             self.starts += 1
             return {"dispatchId": f"dispatch-{self.starts}"}
         if command == ("terminal", "read"):
+            launched = self.commands("orchestration", "worker-start")[-1]
+            if launched[launched.index("--agent") + 1] != "omp":
+                return {"terminal": {"tail": []}}
             import yaml
 
             roles = yaml.safe_load((self.paths[-1] / ".omp/config.yml").read_text())[
@@ -244,8 +241,10 @@ def scoped(tmp_path, monkeypatch, execution_host, workers):  # noqa: F811
     )
     bot, _, plugin = orca_bot(
         tmp_path,
-        config="executable: orca-test, files_host: '', scoped_repositories: {demo: 'name:demo'}",
+        config="executable: orca-test, files_host: '', scoped_repositories: {demo: 'name:demo'}, agents: [claude, codex, omp]",
     )
+    # Test worktrees live under pytest's /tmp root, outside Orca's trusted root.
+    monkeypatch.setattr(plugin, "seed_claude_trust", lambda _worktree, _path: None)
     registry = BotRegistry()
     registry.providers = Providers.from_dict(provider_config())
     registry.add(bot)
@@ -296,8 +295,6 @@ def start(scoped, **kwargs):
         {"workspace": "path:/tmp/arbitrary"},
         {"workspace": "id:another-worktree"},
         {"workspace": "name:demo"},
-        {"agent": "claude"},
-        {"agent": "codex"},
         {"agent": "arbitrary"},
         {"model": "paid/gpt-6-sol"},
         {"model": "unknown/gpt-6-sol"},
@@ -322,8 +319,8 @@ def test_default_medium_routes_safe_subscription_and_pins_all_roles(scoped):
     )
     started = start(scoped)
     assert started["agent"] == {
-        "agent": "omp",
-        "model": "openai-codex/gpt-6-sol",
+        "agent": "codex",
+        "model": "gpt-6-sol",
         "effort": "medium",
         "tier": "medium",
     }
@@ -333,26 +330,15 @@ def test_default_medium_routes_safe_subscription_and_pins_all_roles(scoped):
     assert created[created.index("--setup") + 1] == "skip"
     assert "--no-parent" in created
     [launched] = scoped.runner.commands("orchestration", "worker-start")
-    assert launched[launched.index("--agent") + 1] == "omp"
+    assert launched[launched.index("--agent") + 1] == "codex"
     assert launched[launched.index("--worktree") + 1] == "id:wt-1"
-    assert "--model" not in launched and "--effort" not in launched
-    import yaml
-
-    roles = yaml.safe_load((scoped.runner.paths[0] / ".omp/config.yml").read_text())[
-        "modelRoles"
-    ]
-    assert roles["default"] == "openai-codex/gpt-6-sol:medium"
-    assert all(
-        value.split(":")[0] == "openai-codex/gpt-6-sol" for value in roles.values()
-    )
+    assert launched[launched.index("--model") + 1] == "gpt-6-sol"
+    assert launched[launched.index("--effort") + 1] == "medium"
     # Filtering is a copy, not a destructive edit of global routing.
-    assert len(scoped.bot.providers.routing.agents["medium"]) == 3
+    assert len(scoped.bot.providers.routing.agents["medium"]) == 2
     worker = Worker.objects.get(pk=started["id"])
     assert worker.args["handle"]["worktree"] == "id:wt-1"
-    assert (
-        worker.state["dispatch_receipt"]["selected"]["model"]
-        == "openai-codex/gpt-6-sol"
-    )
+    assert worker.state["dispatch_receipt"]["selected"]["model"] == "gpt-6-sol"
 
 
 @pytest.mark.django_db(transaction=True)
@@ -369,9 +355,11 @@ def test_exhausted_subscriptions_never_fall_back_to_paid_api(scoped):
 
 @pytest.mark.django_db(transaction=True)
 def test_explicit_canonical_model_is_admitted_without_tier(scoped):
-    started = start(scoped, model="anthropic/claude-sonnet-5-5", agent="omp")
-    assert started["agent"]["model"] == "anthropic/claude-sonnet-5-5"
+    started = start(scoped, model="anthropic/claude-sonnet-5-5", agent="claude")
+    assert started["agent"]["model"] == "claude-sonnet-5-5"
     assert started["agent"]["tier"] == ""
+    [launched] = scoped.runner.commands("orchestration", "worker-start")
+    assert launched[launched.index("--model") + 1] == "claude-sonnet-5-5"
 
 
 @pytest.mark.django_db(transaction=True)
@@ -379,7 +367,7 @@ def test_explicit_canonical_model_is_admitted_without_tier(scoped):
 def test_scope_permissions_and_no_raw_orca_tools(scoped, root_only):
     scoped.plugin.root_only = root_only
     assert scoped.plugin._tools() == []
-    assert scoped.plugin.manager.agents == ("omp",)
+    assert scoped.plugin.manager.agents == ("claude", "codex", "omp")
     assert scoped.kit.has_tool("ergo_agent_start")
     thread = ConversationSession.objects.create(
         user=scoped.session.user,
@@ -772,10 +760,47 @@ def test_filtered_routing_preserves_only_canonical_omp_candidates():
     assert [
         (choice.agent, choice.model) for choice in filtered.routing.agents["medium"]
     ] == [
-        ("omp", "anthropic/claude-sonnet-5-5"),
-        ("omp", "openai-codex/gpt-6-sol"),
+        ("claude", "claude-sonnet-5-5"),
+        ("codex", "gpt-6-sol"),
     ]
-    assert len(providers.routing.agents["medium"]) == 4
+    assert len(providers.routing.agents["medium"]) == 3
+
+
+def test_scoped_medium_accepts_native_chat_from_real_omp_cache_shape():
+    data = provider_config()
+    data["agents"]["medium"] = [
+        {"agent": "omp", "provider": "claude", "model": "claude-sonnet-5-5"},
+        {"agent": "claude", "provider": "claude", "model": "claude-sonnet-5-5"},
+    ]
+    cache = {
+        "id": "claude-sonnet-5-5",
+        "api": "anthropic-messages",
+        "input": ["text", "image"],
+        "maxTokens": 16384,
+        "cost": {"input": 1, "output": 2},
+    }
+    filtered, allowed = admitted_providers(
+        Providers.from_dict(data),
+        {
+            "omp": True,
+            "subscriptions": ["anthropic"],
+            "catalogs": {"anthropic": [cache]},
+        },
+    )
+    assert allowed == {"anthropic/claude-sonnet-5-5"}
+    assert [(c.agent, c.model) for c in filtered.routing.agents["medium"]] == [
+        ("claude", "claude-sonnet-5-5")
+    ]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_omp_only_scope_reports_existing_tier_filtered_by_policy(scoped):
+    scoped.plugin.manager.agents = ("omp",)
+    with pytest.raises(ValueError, match="tier exists but has no choices admitted"):
+        start(scoped, tier="medium")
+    with pytest.raises(ValueError, match="requires allowed agent claude"):
+        start(scoped, model="anthropic/claude-sonnet-5-5", agent="omp")
+    assert scoped.runner.calls == []
 
 
 @pytest.mark.django_db
