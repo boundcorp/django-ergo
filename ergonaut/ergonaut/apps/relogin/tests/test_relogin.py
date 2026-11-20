@@ -40,7 +40,17 @@ def test_find_url_only_allowed_hosts():
     assert parsing.find_url("https://evil.com/?r=https://claude.ai", hosts) is None
     assert parsing.find_url("https://user@claude.ai/x", hosts) is None
     assert parsing.find_url("http://claude.ai/oauth", hosts) is None
-    assert parsing.find_url("https://console.claude.ai/x", hosts) == "https://console.claude.ai/x"
+    assert parsing.find_url("https://console.claude.ai/x\n", hosts) == "https://console.claude.ai/x"
+    assert parsing.find_url("https://evil.com\\.claude.ai/x\n", hosts) is None  # browsers read \\ as /
+    assert parsing.find_url("https://claude.ai:8443/x\n", hosts) is None
+    assert parsing.find_url("https://claude.ai%2e/x\n", hosts) is None
+
+
+def test_a_link_cut_between_reads_is_not_taken():
+    hosts = frozenset({"claude.ai"})
+    assert parsing.find_url(AUTH_URL[:120], hosts) is None
+    assert parsing.read_output(AUTH_URL[: AUTH_URL.index("state=") + 8], "paste_redirect", hosts) is None
+    assert parsing.read_output(AUTH_URL + "\n", "paste_redirect", hosts).state == STATE
 
 
 def test_clean_strips_ansi_and_hyperlinks():
@@ -59,9 +69,9 @@ def test_device_code_and_expiry():
 
 
 def test_redirect_needs_state_in_link():
-    no_state = AUTH_URL.replace(f"&state={STATE}", "")
+    no_state = AUTH_URL.replace(f"&state={STATE}", "") + "\n"
     assert parsing.read_output(no_state, "paste_redirect", frozenset({"claude.ai"})) is None
-    assert parsing.read_output(AUTH_URL, "paste_redirect", frozenset({"claude.ai"})).state == STATE
+    assert parsing.read_output(AUTH_URL + "\n", "paste_redirect", frozenset({"claude.ai"})).state == STATE
 
 
 @pytest.mark.parametrize(
@@ -121,18 +131,18 @@ def test_url_hosts_are_cut_to_the_global_list(bot):
 
 
 def test_remote_command_is_fixed_and_quoted():
-    remote = runner.remote_command(("omp", "login", "anthropic"))
-    assert remote.startswith("exec env PATH=") and remote.endswith(" omp login anthropic")
+    remote = runner.remote_command(("omp", "login", "anthropic"), 330)
+    assert remote.startswith("exec env -i HOME=") and remote.endswith(" 330 omp login anthropic")
     words = shlex.split(remote)
-    assert words[words.index("-c") + 1] == runner.RELAY and words[-3:] == ["omp", "login", "anthropic"]
+    assert words[words.index("-c") + 1] == runner.RELAY and words[-4:] == ["330", "omp", "login", "anthropic"]
     with pytest.raises(stores.StoreError):
-        runner.remote_command(("bash", "-c", "id"))
+        runner.remote_command(("bash", "-c", "id"), 60)
 
 
 def test_ssh_argv_pins_host_and_ends_options(bot, tmp_path):
     target = stores.ssh_target(bot)
     with runner.known_hosts(target) as path:
-        argv = runner.ssh_argv(target, path, runner.remote_command(("omp", "login", "anthropic")))
+        argv = runner.ssh_argv(target, path, runner.remote_command(("omp", "login", "anthropic"), 60))
         assert open(path).read().startswith("[devbox-ssh.test]:2222 ssh-ed25519 ")
     assert not os.path.exists(path)
     assert argv[argv.index("--") + 1] == "devbox-ssh.test"
@@ -252,7 +262,7 @@ def test_submit_paste_code(staff, bot, redis, client):
 
 def _relayed(argv):
     """The fake CLI behind the same PTY relay that runs on the login host."""
-    return runner.Remote([sys.executable, "-c", runner.RELAY, *argv])
+    return runner.Remote([sys.executable, "-c", runner.RELAY, "600", *argv])
 
 
 def _run(session, argv, **kwargs):
@@ -417,7 +427,53 @@ def test_post_check_failure_fails_the_session(staff, bot, redis, tmp_path):
 
 
 def test_stale_sessions_are_swept(staff, bot, redis):
-    session = _session(staff, expires_at=timezone.now() - timedelta(minutes=5))
+    unclaimed = _session(staff, expires_at=timezone.now() - timedelta(minutes=5))
+    claimed = _session(staff, store="codex-cli", state="checking", expires_at=timezone.now() - timedelta(minutes=5))
+    assert runner.sweep() == 1  # a claimed session may still be stopping or post-checking
+    unclaimed.refresh_from_db()
+    claimed.refresh_from_db()
+    assert unclaimed.outcome == "expired" and claimed.outcome == ""
+    ReloginSession.objects.filter(pk=claimed.pk).update(expires_at=timezone.now() - timedelta(minutes=20))
     assert runner.sweep() == 1
-    session.refresh_from_db()
-    assert session.outcome == "expired"
+
+
+def test_a_session_runs_once(staff, bot, redis, tmp_path):
+    session = _run(_session(staff, store="codex-cli"), fake_cli(tmp_path, CODEX_DEVICE))
+    assert session.outcome == "ok"
+    spawned = []
+    ReloginSession.objects.filter(pk=session.pk).update(outcome="", state="running")
+    runner.run(session.pk, spawn=spawned.append)  # a second delivery of the task
+    assert spawned == []
+
+
+def test_the_relay_ends_the_cli_at_its_deadline(tmp_path):
+    pid_file = tmp_path / "cli.pid"
+    script = fake_cli(
+        tmp_path, f"import os, time\nopen({str(pid_file)!r}, 'w').write(str(os.getpid()))\ntime.sleep(60)\n"
+    )
+    remote = runner.Remote([sys.executable, "-c", runner.RELAY, "1", *script])
+    started = time.monotonic()
+    assert remote.proc.wait(timeout=15) == 124  # stdin still open: the relay's own deadline
+    assert time.monotonic() - started < 10
+    with pytest.raises(ProcessLookupError):
+        os.kill(int(pid_file.read_text()), 0)
+
+
+def test_a_crash_carries_nothing_out(staff, bot, redis, tmp_path, monkeypatch, caplog):
+    caplog.set_level(logging.DEBUG)
+
+    def broken(*args, **kwargs):
+        raise ConnectionError(f"redis down while holding {DEVICE_CODE}")
+
+    session = _session(staff, store="codex-cli")
+    original = handoff.show
+
+    def show_then_break(sid, data, ttl):
+        original(sid, data, ttl)
+        monkeypatch.setattr(handoff, "cancelled", broken)
+        monkeypatch.setattr(handoff, "clear", broken)
+
+    monkeypatch.setattr(handoff, "show", show_then_break)
+    session = _run(session, fake_cli(tmp_path, CODEX_DEVICE))  # must not raise
+    assert session.outcome == "failed" and session.error == runner.CRASHED
+    assert DEVICE_CODE not in caplog.text

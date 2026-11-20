@@ -34,15 +34,28 @@ def _host_allowed(host: str, hosts: frozenset[str]) -> bool:
     return any(host == allowed or host.endswith("." + allowed) for allowed in hosts)
 
 
+_HOST = re.compile(r"[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+")
+
+
 def find_url(text: str, hosts: frozenset[str]) -> str | None:
-    """The first https link to an allowed sign-in host, or None."""
+    """The first complete https link to an allowed sign-in host, or None.
+
+    Complete: the output already continues after it, so a link cut between two reads isn't
+    taken. The host must be a plain DNS name (no backslash, userinfo, port or escapes), so
+    what a browser opens is what was checked."""
     for match in _URL.finditer(text):
+        if match.end() >= len(text):
+            continue  # maybe cut off; wait for more output
         url = match.group(0).rstrip(").,;]")
+        if "\\" in url:
+            continue
         try:
             parts = urlsplit(url)
         except ValueError:
             continue
-        if parts.scheme == "https" and parts.hostname and not parts.username and _host_allowed(parts.hostname, hosts):
+        if parts.scheme != "https" or not _HOST.fullmatch(parts.netloc.lower()):
+            continue
+        if _host_allowed(parts.netloc, hosts):
             return url
     return None
 

@@ -16,7 +16,7 @@ def _session_id() -> str:
 
 
 class ReloginSession(models.Model):
-    STATES = ["starting", "waiting", "submitted", "checking", "ended"]
+    STATES = ["starting", "running", "waiting", "submitted", "checking", "ended"]
     OUTCOMES = ["ok", "failed", "expired", "cancelled"]
 
     id = models.CharField(primary_key=True, max_length=64, default=_session_id, editable=False)

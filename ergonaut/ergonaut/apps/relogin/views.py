@@ -190,7 +190,7 @@ def submit(request, session_id):
     except stores.StoreError as exc:
         return JsonResponse({"error": str(exc)}, status=409)
     except Exception as exc:  # noqa: BLE001 - never let a traceback carry the pasted value
-        logger.error("relogin %s: submit failed (%s)", session_id, type(exc).__name__)
+        logger.warning("relogin %s: submit failed (%s)", session_id, type(exc).__name__)
         return JsonResponse({"error": "The submission could not be handed over."}, status=500)
     logger.info("relogin %s: submission accepted", session.pk)
     return JsonResponse({"ok": True})

@@ -26,13 +26,17 @@ from ergonaut.apps.relogin.models import ReloginSession
 
 logger = logging.getLogger(__name__)
 
+RELAY_GRACE = 30  # the relay's own deadline is the session's end plus this
+WORKER_GRACE = 15 * 60  # a claimed session is abandoned this long after its end time
 READ_LIMIT = 64 * 1024  # the output kept in memory, at most
 URL_WAIT = 45  # seconds for the sign-in link to appear before failing closed
 EXIT_WAIT = 60  # seconds for the CLI to finish after the submission or device approval
 # PATH on the login host: ssh runs a non-login shell, so put the user's bin dir first.
 # No browser to open, no colours, and plain links instead of OSC 8 hyperlinks.
+# `env -i` first: nothing from the shell's startup files (API keys) reaches the CLI.
 REMOTE_ENV = (
-    'PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin" TERM=xterm-256color'
+    'HOME="$HOME" USER="$USER" LOGNAME="$USER" LANG=C.UTF-8'
+    ' PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin" TERM=xterm-256color'
     " BROWSER=false NO_COLOR=1 FORCE_HYPERLINK=0"
 )
 CURL = "curl -sS --max-time 10 -o /dev/null -w '%{http_code}' -K -"
@@ -47,15 +51,17 @@ CRASHED = "The re-login stopped on an internal error."
 
 # Runs on the login host as `python3 -c RELAY <argv>`: gives the CLI its own terminal (2000
 # columns, so links don't wrap) and relays bytes between it and ssh's pipes. When ssh's stdin
-# closes (cancel, timeout, the worker or the connection going away) it hangs up and then kills
-# the CLI's whole process group. ssh itself requests no terminal: devbox's login shell would
+# closes (cancel, timeout, the worker or the connection going away), or at its own deadline
+# (the first argument, so a lost connection can't leave a login running), it hangs up and then
+# kills the CLI's whole process group. ssh itself requests no terminal: devbox's login shell would
 # attach a tty session to the shared tmux instead of running the command.
 RELAY = r"""
 import fcntl, os, pty, select, signal, struct, sys, termios, time
+deadline = time.monotonic() + int(sys.argv[1])
 pid, fd = pty.fork()
 if pid == 0:
     fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", 50, 2000, 0, 0))
-    os.execvp(sys.argv[1], sys.argv[1:])
+    os.execvp(sys.argv[2], sys.argv[2:])
 def stop(*_):
     for sig in (signal.SIGHUP, signal.SIGTERM, signal.SIGKILL):
         try:
@@ -70,6 +76,9 @@ for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGPIPE):
     signal.signal(sig, lambda *_: (stop(), os._exit(129)))
 try:
     while True:
+        if time.monotonic() > deadline:
+            stop()
+            os._exit(124)
         ready = select.select([0, fd], [], [], 1)[0]
         if fd in ready:
             try:
@@ -95,11 +104,12 @@ sys.exit(code if code >= 0 else 128 - code)
 REMOTE_PYTHON = "/usr/bin/python3"
 
 
-def remote_command(argv: tuple[str, ...]) -> str:
-    """The fixed shell text run on the login host: env, the PTY relay, the allow-listed argv."""
+def remote_command(argv: tuple[str, ...], seconds: int) -> str:
+    """The fixed shell text run on the login host: a clean env, the PTY relay with its
+    deadline, the allow-listed argv."""
     if tuple(argv) not in stores.COMMANDS.values():
         raise stores.StoreError("Command is not on the allow-list.")
-    return f"exec env {REMOTE_ENV} {REMOTE_PYTHON} -c {shlex.quote(RELAY)} {shlex.join(argv)}"
+    return f"exec env -i {REMOTE_ENV} {REMOTE_PYTHON} -c {shlex.quote(RELAY)} {int(seconds)} {shlex.join(argv)}"
 
 
 def ssh_argv(target: stores.SshTarget, known_hosts: str, remote: str) -> list[str]:
@@ -340,7 +350,8 @@ def finish(session: ReloginSession, outcome: str, *, error: str = "", **fields) 
     ended = ReloginSession.objects.filter(pk=session.pk, outcome="").update(
         outcome=outcome, state="ended", ended_at=timezone.now(), error=error[:300], **fields
     )
-    handoff.clear(session.pk)
+    with contextlib.suppress(Exception):  # Redis down: the keys expire on their own
+        handoff.clear(session.pk)
     if ended:
         logger.info("relogin %s ended: %s", session.pk, outcome)
     return bool(ended)
@@ -377,11 +388,10 @@ def announce(bot, session: ReloginSession) -> None:
 
 def run(session_id: str, *, spawn=None) -> None:
     """The Celery task body. ``spawn(argv) -> Remote`` is replaceable for tests."""
-    from django_ergo.bots.tools import ToolContext
-
-    session = ReloginSession.objects.select_related("user").filter(pk=session_id, outcome="").first()
-    if session is None:
+    # Claim it: a second delivery of the task finds it already running and does nothing.
+    if not ReloginSession.objects.filter(pk=session_id, outcome="", state="starting").update(state="running"):
         return
+    session = ReloginSession.objects.select_related("user").get(pk=session_id)
     bot = None
     try:
         bot = stores.get_bot(session.bot_name)
@@ -394,42 +404,64 @@ def run(session_id: str, *, spawn=None) -> None:
         if bot is not None:
             announce(bot, session)
         return
-    ctx = ToolContext(bot=bot, user=session.user)
+    crashed = ""
     try:
-        before = _identity(bot, ctx, store.key)
-        with known_hosts(target) as known_hosts_file:
-            argv = ssh_argv(target, known_hosts_file, remote_command(store.argv))
-            proc = (spawn or Remote)(argv)
-            try:
-                outcome, error = drive(session, store, proc, lambda url: relay_redirect(target, known_hosts_file, url))
-            finally:
-                exit_code = proc.stop()
-        handoff.clear(session.pk)
-        if outcome == "failed" and error == CANT_READ and exit_code == 255:  # noqa: PLR2004 - ssh's own failure
-            error = UNREACHABLE
-        if outcome is None:
-            outcome, error = ("ok", "") if exit_code == 0 else ("failed", f"The login exited with code {exit_code}.")
-        _update(session.pk, state="checking", exit_code=exit_code)
-        check = _post_check(bot, ctx, store.key, before)
-        if outcome == "ok" and check and not check["ok"]:
-            outcome, error = "failed", "The login finished but the store still doesn't check out."
-        finish(
-            session,
-            outcome,
-            error=error,
-            exit_code=exit_code,
-            post_check={k: v for k, v in check.items() if k != "account"},
-            account=check.get("account", ""),
-        )
-    except Exception as exc:  # noqa: BLE001 - never let a traceback carry the CLI output anywhere
-        logger.error("relogin %s crashed (%s)", session_id, type(exc).__name__)
+        _run(session, bot, store, target, spawn)
+    except Exception as exc:  # noqa: BLE001 - only its name leaves; see below
+        crashed = type(exc).__name__
+    # Outside the handler, so nothing raised from here chains to that exception, whose
+    # traceback holds the CLI output and the pasted value in its frames.
+    if crashed:
+        logger.warning("relogin %s crashed (%s)", session_id, crashed)
         finish(session, "failed", error=CRASHED)
     announce(bot, session)
 
 
+def _run(session: ReloginSession, bot, store: stores.Store, target: stores.SshTarget, spawn) -> None:
+    from django_ergo.bots.tools import ToolContext
+
+    ctx = ToolContext(bot=bot, user=session.user)
+    before = _identity(bot, ctx, store.key)
+    seconds = int((session.expires_at - timezone.now()).total_seconds()) + RELAY_GRACE
+    with known_hosts(target) as known_hosts_file:
+        argv = ssh_argv(target, known_hosts_file, remote_command(store.argv, max(1, seconds)))
+        proc = (spawn or Remote)(argv)
+        try:
+            outcome, error = drive(session, store, proc, lambda url: relay_redirect(target, known_hosts_file, url))
+        finally:
+            exit_code = proc.stop()
+    with contextlib.suppress(Exception):
+        handoff.clear(session.pk)
+    if outcome == "failed" and error == CANT_READ and exit_code == 255:  # noqa: PLR2004 - ssh's own failure
+        error = UNREACHABLE
+    if outcome is None:
+        outcome, error = ("ok", "") if exit_code == 0 else ("failed", f"The login exited with code {exit_code}.")
+    _update(session.pk, state="checking", exit_code=exit_code)
+    check = _post_check(bot, ctx, store.key, before)
+    if outcome == "ok" and check and not check["ok"]:
+        outcome, error = "failed", "The login finished but the store still doesn't check out."
+    finish(
+        session,
+        outcome,
+        error=error,
+        exit_code=exit_code,
+        post_check={k: v for k, v in check.items() if k != "account"},
+        account=check.get("account", ""),
+    )
+
+
 def sweep() -> int:
-    """End sessions whose worker is gone: past their end time by more than a minute."""
-    stale = ReloginSession.objects.filter(Q(outcome=""), expires_at__lt=timezone.now() - timedelta(seconds=90))
+    """End sessions whose worker is gone, so their store and port are free again.
+
+    A session no worker claimed is stale 90 s after its end time. A claimed one only after
+    WORKER_GRACE: its worker may still be stopping the CLI or running the post-check, and the
+    relay on the login host has ended the CLI by its own deadline anyway."""
+    now = timezone.now()
+    stale = ReloginSession.objects.filter(
+        Q(state="starting", expires_at__lt=now - timedelta(seconds=90))
+        | Q(expires_at__lt=now - timedelta(seconds=WORKER_GRACE)),
+        outcome="",
+    )
     count = 0
     for session in stale:
         if finish(session, "expired", error="The re-login worker stopped before the session ended."):
