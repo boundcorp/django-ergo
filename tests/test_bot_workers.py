@@ -149,6 +149,23 @@ def test_omp_launch_guard_header_alone_is_not_proof():
     assert plugin.stopped == [("dispatch_1", "running")]
 
 
+def test_omp_launch_guard_keeps_header_checks_for_workers_launched_before_it():
+    from django_ergo.plugins.orca import OrcaPlugin
+
+    # A worker started by the previous release: no launched_at, so its session
+    # log can't be told apart from earlier runs in the worktree.
+    plugin = _OmpPlugin(tail=[GROK_HEADER], models=["fireworks/kimi-k3"])
+    plugin.omp_session_models = lambda handle: OrcaPlugin.omp_session_models(
+        plugin, handle
+    )
+    ctx = _omp_ctx()
+    handle = {"dispatch": "dispatch_1", "selected_model": "xai-oauth/grok-4.7"}
+    handle["path"] = "/w"
+    for _ in range(3):
+        OrcaPlugin.verify_omp_model(plugin, ctx, handle, SHOWN)
+    assert plugin.stopped == []
+
+
 def test_omp_launch_guard_fails_closed_for_old_handles_without_model_status():
     from django_ergo.plugins.orca import OrcaPlugin
 

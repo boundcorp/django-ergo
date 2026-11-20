@@ -294,10 +294,11 @@ INPUT_KEYS = (
 )
 
 
-def _omp_terminal_model(lines: list) -> str:
-    """A model the omp terminal names that can fail a launch fast: a quarantined
-    provider in the header, or (with no header on screen) a model id or
-    quarantined name elsewhere. Never proof of the selected provider."""
+def _omp_terminal_model(lines: list) -> tuple[str, str]:
+    """The model the omp terminal names that can fail a launch fast (a
+    quarantined provider in the header, or, with no header on screen, a model id
+    or quarantined name elsewhere), and the header's display name. Neither is
+    proof of the selected provider."""
     header = mentioned = ""
     for line in lines:
         clean = ANSI.sub("", str(line))
@@ -309,8 +310,8 @@ def _omp_terminal_model(lines: list) -> str:
             mentioned = found.group().lower()
     if header:
         quarantined = QUARANTINED_STATUS.search(header)
-        return quarantined.group().lower() if quarantined else ""
-    return mentioned
+        return (quarantined.group().lower() if quarantined else ""), header
+    return mentioned, ""
 
 
 def _stop_omp(plugin, ctx, handle, observed, selected, provenance):  # noqa: PLR0913
@@ -1384,13 +1385,15 @@ class OrcaPlugin(BotPlugin):
                 ["terminal", "read", "--terminal", terminal, "--limit", "100"]
             )
             lines = (read.get("terminal") or {}).get("tail") or []
-        mentioned = _omp_terminal_model(lines)
+        mentioned, header = _omp_terminal_model(lines)
         if mentioned and mentioned != selected:
             _stop_omp(self, ctx, handle, mentioned, selected, "omp terminal status")
         launched = handle.get("launched_at")
         if launched:
             waited = time.time() - launched >= OMP_MODEL_PROOF_SECONDS
-        else:  # handles from before launched_at was recorded
+        elif header:  # workers launched before session-log proof keep header checks
+            return
+        else:
             checks = ctx.state.get("omp_unverified_checks", 0) + 1
             ctx.state["omp_unverified_checks"] = checks
             waited = checks >= OMP_MODEL_CHECK_LIMIT
@@ -1403,9 +1406,10 @@ class OrcaPlugin(BotPlugin):
         """omp's session log for the worker's worktree since launch: the distinct
         ``provider/model`` ids it used (read on the execution host, ids only)."""
         path = handle.get("path") or ""
-        if not path:
+        launched = handle.get("launched_at")
+        if not path or not launched:  # no launch time: older runs would count
             return {"models": [], "fallback": False}
-        since = str(float(handle.get("launched_at") or 0) - OMP_SESSION_CLOCK_SLACK)
+        since = str(float(launched) - OMP_SESSION_CLOCK_SLACK)
         script = (
             Path(__file__).with_name("orca_omp_session.py").read_text(encoding="utf-8")
         )
