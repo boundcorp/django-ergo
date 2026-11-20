@@ -214,7 +214,8 @@ def test_no_ergonaut_template_sends_no_referrer():
     offenders = [
         str(path.relative_to(root))
         for path in root.rglob("templates/**/*.html")
-        if re.search(r'name=["\']referrer["\'][^>]*content=["\']no-referrer["\']', path.read_text(), re.I)
+        for tag in re.findall(r"<meta\b[^>]*>", path.read_text(), re.I)
+        if re.search(r"no-referrer", tag, re.I)
     ]
     assert not offenders
 

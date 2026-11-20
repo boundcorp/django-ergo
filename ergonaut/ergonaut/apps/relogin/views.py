@@ -50,7 +50,8 @@ REFERRER_POLICY = "same-origin"
 
 def same_origin_referrer(view):
     """Pages send no referrer to other sites but keep Origin/Referer on their own POSTs.
-    Stricter policies (no-referrer) make browsers send "Origin: null", which CSRF refuses."""
+    SecurityMiddleware already defaults to same-origin; this pins it if that setting changes.
+    no-referrer makes browsers send "Origin: null" on form POSTs, which CSRF refuses."""
 
     @wraps(view)
     def wrapped(request, *args, **kwargs):
