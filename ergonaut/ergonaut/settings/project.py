@@ -27,6 +27,8 @@ ENVIRONMENT = os.environ.get("APP_ENV", Environments.DEVELOPMENT).lower()
 BACKEND_PORT = int(os.environ.get("DEVELOP_BACKEND_PORT", 8000))
 INGRESS_PORT = int(os.environ.get("DEVELOP_INGRESS_PORT", 8888))
 DEBUG = os.environ.get("DJANGO_DEBUG", "") == "true"
+HINDSIGHT_URL = os.environ.get("HINDSIGHT_URL", "")
+HINDSIGHT_API_KEY = os.environ.get("HINDSIGHT_API_KEY", "")
 
 # Composer voice transcription is opt-in and uses the existing OpenAI key.
 VOICE_TRANSCRIPTION_ENABLED = env_variable_truthy("VOICE_TRANSCRIPTION_ENABLED")
@@ -177,6 +179,7 @@ DJANGO_ERGO = {
     "THREAD_MESSAGE_RUNNER": "ergonaut.apps.bots.tasks.queue_thread_message",
     # A bot tool's ctx.tasks.start(...) runs @bot_task functions on a worker.
     "BOT_TASK_RUNNER": "ergonaut.apps.bots.tasks.celery_bot_task",
+    "HINDSIGHT_RETAIN_RUNNER": "ergonaut.apps.bots.tasks.queue_hindsight_retain",
     # Each due schedule run is a task of its own.
     "SCHEDULE_RUNNER": "ergonaut.apps.bots.tasks.queue_schedule_run",
     "WORKER_RUNNER": "ergonaut.apps.bots.tasks.queue_worker",

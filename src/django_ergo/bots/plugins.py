@@ -42,6 +42,7 @@ if TYPE_CHECKING:
 
 OFFICIAL_PLUGINS = {
     "ergo_kb": "django_ergo.plugins.kb.ErgoKBPlugin",
+    "hindsight_memory": "django_ergo.plugins.hindsight_memory.HindsightMemoryPlugin",
     "bot_management": "django_ergo.plugins.bot_management.BotManagementPlugin",
     "telegram": "django_ergo.plugins.telegram.TelegramPlugin",
     "orca": "django_ergo.plugins.orca.OrcaPlugin",

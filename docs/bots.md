@@ -1645,6 +1645,14 @@ and pushed to the checkout's branch at once (`commit: false` leaves it
 uncommitted). Use it for things a bot should learn, like preferences; use
 `bot_management` for changes you want to review.
 
+### hindsight_memory
+
+Add `hindsight_memory` for automatic long-term working memory alongside the
+Markdown KB. It retains completed human turns asynchronously, recalls relevant
+facts into the turn context, and provides recall, reflect, and explicit retain
+tools. See [Hindsight working memory](hindsight-memory.md) for configuration,
+environment variables, and scope.
+
 ### pages
 
 ```yaml

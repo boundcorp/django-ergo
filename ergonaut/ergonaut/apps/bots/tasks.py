@@ -783,6 +783,17 @@ def run_bot_task(bot_name: str, task_name: str, args: list, kwargs: dict):
     return background.execute(bot_name, task_name, args, kwargs)
 
 
+@shared_task(name="ergonaut.hindsight_retain", ignore_result=True, queue="bot_tasks")
+def hindsight_retain(bank: str, item: dict) -> None:
+    from django_ergo.plugins.hindsight_memory import retain_item
+
+    retain_item(bank, item)
+
+
+def queue_hindsight_retain(bank: str, item: dict) -> None:
+    hindsight_retain.delay(bank, item)
+
+
 class CeleryTaskHandle:
     """A @bot_task running on a Celery worker; wait() or await it."""
 

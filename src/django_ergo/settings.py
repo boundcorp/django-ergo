@@ -60,6 +60,8 @@ DEFAULTS = {
     "OLD_MESSAGE_CHARS": 1500,
     # Extra bot plugins by short name: {"name": "dotted.path.PluginClass"}.
     "BOT_PLUGINS": {},
+    # Optional fire-and-forget retain dispatcher (bank, item). None uses a thread.
+    "HINDSIGHT_RETAIN_RUNNER": None,
     # Skills from Ergo's skill library (bots/skill_library) that every bot
     # loaded from a folder gets. A bot opts out in bot.yaml with
     # skills: {exclude: [...]} or skills: {defaults: false}; a default skill
