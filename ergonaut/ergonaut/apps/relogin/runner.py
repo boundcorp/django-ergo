@@ -346,10 +346,12 @@ def _identity(bot, ctx, key: str):
         return None
 
 
-def finish(session: ReloginSession, outcome: str, *, error: str = "", **fields) -> bool:
-    ended = ReloginSession.objects.filter(pk=session.pk, outcome="").update(
-        outcome=outcome, state="ended", ended_at=timezone.now(), error=error[:300], **fields
-    )
+def finish(session: ReloginSession, outcome: str, *, error: str = "", only_state: str | None = None, **fields) -> bool:
+    """End the session once; ``only_state`` ends it only if it is still in that state."""
+    rows = ReloginSession.objects.filter(pk=session.pk, outcome="")
+    if only_state:
+        rows = rows.filter(state=only_state)
+    ended = rows.update(outcome=outcome, state="ended", ended_at=timezone.now(), error=error[:300], **fields)
     with contextlib.suppress(Exception):  # Redis down: the keys expire on their own
         handoff.clear(session.pk)
     if ended:

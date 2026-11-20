@@ -205,6 +205,6 @@ def cancel(request, session_id):
         ReloginSession.objects.filter(pk=session.pk, outcome="").update(cancel_requested_at=timezone.now())
         handoff.cancel(session.pk)
         if session.state == "starting" and session.created_at < timezone.now() - timedelta(seconds=60):
-            runner.finish(session, "cancelled", error="Cancelled before the worker started.")
+            runner.finish(session, "cancelled", error="Cancelled before the worker started.", only_state="starting")
         logger.info("relogin %s: cancel requested", session.pk)
     return JsonResponse({"ok": True})

@@ -477,3 +477,19 @@ def test_a_crash_carries_nothing_out(staff, bot, redis, tmp_path, monkeypatch, c
     session = _run(session, fake_cli(tmp_path, CODEX_DEVICE))  # must not raise
     assert session.outcome == "failed" and session.error == runner.CRASHED
     assert DEVICE_CODE not in caplog.text
+
+
+def test_cancel_never_ends_a_claimed_session_itself(staff, bot, redis, client):
+    old = timezone.now() - timedelta(minutes=2)
+    claimed = _session(staff, state="running")
+    ReloginSession.objects.filter(pk=claimed.pk).update(created_at=old)
+    assert runner.finish(claimed, "cancelled", only_state="starting") is False
+    client.post(f"/relogin/{claimed.pk}/cancel")
+    claimed.refresh_from_db()
+    assert claimed.outcome == "" and claimed.cancel_requested_at  # the worker stops it
+    assert redis.exists(f"relogin:{claimed.pk}:cancel")
+    unclaimed = _session(staff, store="codex-cli")
+    ReloginSession.objects.filter(pk=unclaimed.pk).update(created_at=old)
+    client.post(f"/relogin/{unclaimed.pk}/cancel")
+    unclaimed.refresh_from_db()
+    assert unclaimed.outcome == "cancelled"
