@@ -1,0 +1,117 @@
+{% extends "relogin/base.html" %}
+{% block content %}
+    <h1>
+        Re-login: <code>{{ session.store }}</code>
+    </h1>
+    <div class="card"
+         id="relogin"
+         data-status="{% url 'relogin-status' session.pk %}"
+         data-input="{% url 'relogin-input' session.pk %}"
+         data-cancel="{% url 'relogin-cancel' session.pk %}"
+         data-shape="{{ session.shape }}">
+        {% csrf_token %}
+        <p id="phase" class="muted">
+            Starting <code>{{ session.command }}</code> on devbox…
+        </p>
+        <div id="signin" hidden>
+            <p>{{ instructions }} Use a private browser window.</p>
+            <p>
+                <a id="link"
+                   class="button primary"
+                   target="_blank"
+                   rel="noopener noreferrer">Open sign-in page</a>
+            </p>
+            <div id="code" class="code" hidden></div>
+            <form id="paste" hidden autocomplete="off">
+                <label for="value">
+                    {% if session.shape == "paste_redirect" %}
+                        The whole address from the failed localhost page
+                    {% else %}
+                        The code the sign-in page showed
+                    {% endif %}
+                </label>
+                <input id="value"
+                       name="value"
+                       type="text"
+                       spellcheck="false"
+                       autocomplete="off"
+                       required>
+                <p>
+                    <button class="primary" type="submit">Submit</button>
+                </p>
+            </form>
+            <p id="inputmsg"></p>
+        </div>
+        <p>
+            <span id="left" class="muted"></span>
+        </p>
+        <div id="result" hidden></div>
+        <p>
+            <button id="cancel" type="button">Cancel</button>
+            <a id="again" class="button" href="{{ again }}" hidden>Start again</a>
+        </p>
+        <p class="muted">
+            Manual fix: run <code>{{ session.command }}</code> on devbox.
+        </p>
+    </div>
+    <script>
+(() => {
+  const box = document.getElementById('relogin')
+  const csrf = box.querySelector('input[name=csrfmiddlewaretoken]').value
+  const $ = id => document.getElementById(id)
+  let timer = null, sent = false
+  const post = (url, body) => fetch(url, {method: 'POST', headers: {'X-CSRFToken': csrf}, body, credentials: 'same-origin'})
+  function render(s) {
+    const live = !s.outcome
+    $('left').textContent = live ? `${Math.floor(s.seconds_left / 60)}:${String(s.seconds_left % 60).padStart(2, '0')} left` : ''
+    $('cancel').hidden = !live
+    $('again').hidden = live
+    if (live && s.state === 'waiting' && s.url && s.url.startsWith('https://')) {
+      $('phase').textContent = 'Waiting for you to sign in.'
+      $('signin').hidden = false
+      $('link').href = s.url
+      if (s.code) { $('code').textContent = s.code; $('code').hidden = false }
+      $('paste').hidden = box.dataset.shape === 'device_code' || s.submitted || sent
+    } else {
+      $('signin').hidden = true
+      $('link').removeAttribute('href')
+      $('code').textContent = ''
+    }
+    if (live && s.state === 'submitted') $('phase').textContent = 'Submitted. Waiting for the login to finish…'
+    if (live && s.state === 'checking') $('phase').textContent = 'Checking the new login…'
+    if (!live) {
+      const words = {ok: 'Re-login completed.', failed: 'Re-login failed.', expired: 'The session expired.', cancelled: 'Cancelled; the login process was stopped.'}
+      $('phase').textContent = words[s.outcome] || s.outcome
+      $('phase').className = s.outcome === 'ok' ? 'good' : 'bad'
+      const r = $('result'); r.hidden = false; r.textContent = ''
+      const add = text => { const p = document.createElement('p'); p.textContent = text; r.appendChild(p) }
+      if (s.error) add(s.error)
+      if (s.post_check && s.post_check.state) add(`Post-check: ${s.post_check.ok ? 'healthy' : 'not healthy'} (${s.post_check.state})${s.post_check.detail ? ' · ' + s.post_check.detail : ''}`)
+      if (s.account === 'same') add('Signed in to the same account as before.')
+      if (s.account === 'different') { add('Warning: signed in to a different account than before.') }
+      if (s.exit_code !== undefined && s.exit_code !== null) add(`CLI exit code ${s.exit_code}`)
+      clearInterval(timer)
+    }
+  }
+  async function poll() {
+    try {
+      const res = await fetch(box.dataset.status, {credentials: 'same-origin', cache: 'no-store'})
+      if (res.ok) render(await res.json())
+    } catch (e) { /* try again next tick */ }
+  }
+  $('paste').addEventListener('submit', async ev => {
+    ev.preventDefault()
+    const body = new FormData(); body.append('value', $('value').value)
+    $('value').value = ''
+    const res = await post(box.dataset.input, body)
+    const data = await res.json().catch(() => ({}))
+    if (res.ok) { sent = true; $('paste').hidden = true; $('inputmsg').textContent = 'Sent.'; $('inputmsg').className = 'good' }
+    else { $('inputmsg').textContent = data.error || 'Not accepted.'; $('inputmsg').className = 'bad' }
+    poll()
+  })
+  $('cancel').addEventListener('click', async () => { await post(box.dataset.cancel, new FormData()); poll() })
+  timer = setInterval(poll, 2000)
+  poll()
+})()
+    </script>
+{% endblock %}

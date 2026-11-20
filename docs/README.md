@@ -17,6 +17,7 @@
 | [Browser control](browser.md)           | The `browser` plugin, a Chrome a person can sign in to, tunnels                                     |
 | [Bot reference](bots.md)                | Every bot.yaml key and official plugin option; private inference pools                              |
 | [Running Ergonaut](ergonaut.md)         | Commands, settings, the web app, reloading, containers, production, private inference               |
+| [Re-login](relogin.md) | Staff re-login of a bot's CLI logins: allow-listed commands over ssh, paste hand-off, audit |
 | [Observability](observability.md)       | Read-only Grafana and Prometheus: bounded PromQL, target health, dashboard links, chart attachments |
 | [RunPod workers](runpod.md)             | Native GPU workers, scoped admission, durable rental ownership and independent cleanup              |
 | [Realtime voice](realtime-voice.md) | Native live voice and optional STT → normal text assistant → TTS; separate media consent and release gates |

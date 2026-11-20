@@ -1,0 +1,59 @@
+{% extends "relogin/base.html" %}
+{% block content %}
+    <h1>
+        Re-login
+        {% if store %}: {{ store.label }}{% endif %}
+    </h1>
+    {% if error %}<p class="bad">{{ error }}</p>{% endif %}
+    {% if store %}
+        <div class="card">
+            <div>
+                Store <code>{{ store.key }}</code> · runs <code>{{ store.command }}</code> on devbox
+            </div>
+            <p>{{ instructions }}</p>
+            <p class="muted">
+                Use a private browser window, so you sign in to the right account. The session lasts {{ store.max_seconds|floatformat:0 }} seconds at most and accepts one submission.
+            </p>
+            {% if active %}
+                {% if active.user_id == request.user.pk %}
+                    <a class="button primary" href="{% url 'relogin-session' active.pk %}">Open the running session</a>
+                {% else %}
+                    <p class="bad">Another session for this store is running.</p>
+                {% endif %}
+            {% elif not error %}
+                <form method="post" action="{% url 'relogin-start' %}">
+                    {% csrf_token %}
+                    <input type="hidden" name="bot" value="{{ store.bot_name }}">
+                    <input type="hidden" name="store" value="{{ store.key }}">
+                    <button class="primary" type="submit">Start re-login</button>
+                </form>
+            {% endif %}
+            <p class="muted">
+                Manual fix: run <code>{{ store.command }}</code> on devbox.
+            </p>
+        </div>
+        {% if recent %}
+            <div class="card">
+                <strong>Recent sessions</strong>
+                <table>
+                    <tr>
+                        <th>Started (UTC)</th>
+                        <th>Outcome</th>
+                        <th>Exit</th>
+                        <th>Check</th>
+                        <th>Account</th>
+                    </tr>
+                    {% for row in recent %}
+                        <tr>
+                            <td>{{ row.created_at|date:"Y-m-d H:i" }}</td>
+                            <td>{{ row.outcome|default:row.state }}</td>
+                            <td>{{ row.exit_code|default_if_none:"—" }}</td>
+                            <td>{{ row.post_check.state|default:"—" }}</td>
+                            <td>{{ row.account|default:"—" }}</td>
+                        </tr>
+                    {% endfor %}
+                </table>
+            </div>
+        {% endif %}
+    {% endif %}
+{% endblock %}

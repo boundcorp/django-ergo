@@ -160,6 +160,7 @@ INSTALLED_APPS = [
     "django_ergo.plugins.runpod.apps.RunpodConfig",
     "ergonaut.apps.users",
     "ergonaut.apps.bots",
+    "ergonaut.apps.relogin",
 ]
 
 # The built web app (npm run build in frontend/), served for unknown paths.
