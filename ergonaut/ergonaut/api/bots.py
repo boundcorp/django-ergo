@@ -187,6 +187,28 @@ class MessageOut(Schema):
     provenance: dict
 
 
+class OriginalUserMessageOut(Schema):
+    message_id: str
+    session_id: str
+    sequence: int
+    actor_id: str
+    timestamp: str
+    text_blocks: list[str]
+
+
+class ApprovalDecisionEvidenceOut(Schema):
+    evidence_class: Literal["authenticated_owner_tool_decision"]
+    decision_transport: Literal["api_key", "django_session", "unknown"]
+    decision_id: str
+    call_id: str
+    session_id: str
+    actor_id: str
+    tool_use_id: str
+    decided_at: str
+    pending_sha256: str
+    reviewed_item: dict
+
+
 class CallOut(Schema):
     id: str
     kind: str
@@ -1269,6 +1291,43 @@ def provisional_title(message: str) -> str:
     return " ".join(words[:6]) + ("…" if len(words) > 6 else "") if words else ""
 
 
+@router.get("/messages/{message_id}/original-user", response=OriginalUserMessageOut)
+def original_user_message(request, message_id: str):
+    """Return stored direct, authenticated owner text, not an approval decision."""
+    message = (
+        SessionMessage.objects.filter(
+            pk=uuid_or_404(message_id, "message"),
+            session__in=visible_sessions(request.auth),
+            role="user",
+        )
+        .select_related("session")
+        .prefetch_related("content_blocks")
+        .first()
+    )
+    if message is None:
+        raise HttpError(404, "No such original user message")
+    author = message.author or {}
+    blocks = list(message.content_blocks.all())
+    if (
+        not isinstance(author, dict)
+        or author.get("kind") != "django_user"
+        or author.get("authenticated_by") != "ergonaut_session"
+        or author.get("ref") != str(message.session.user_id)
+        or message.provenance != {}
+        or not blocks
+        or any(block.block_type != "text" or block.text is None for block in blocks)
+    ):
+        raise HttpError(404, "No such original user message")
+    return {
+        "message_id": str(message.pk),
+        "session_id": str(message.session_id),
+        "sequence": message.sequence,
+        "actor_id": author["ref"],
+        "timestamp": message.created_at.isoformat().replace("+00:00", "Z"),
+        "text_blocks": [block.text for block in blocks],
+    }
+
+
 @router.get("/sessions/{session_id}", response=SessionDetailOut)
 def session_detail(
     request, session_id: str, before: int | None = None, limit: int = PAGE_MESSAGES, around: int | None = None
@@ -1572,7 +1631,7 @@ async def dismiss_call(request, call_id: str):
     return call_out(call)
 
 
-def record_authenticated_approval(call_id, user, approve, approval_ids, expected_pending, request_payload):
+def record_authenticated_approval(call_id, user, approve, approval_ids, expected_pending, request_payload, transport):
     """Persist the authenticated answer before handing it to a worker."""
     from django_ergo.conversation.toolkit import approval_pending_digest
 
@@ -1611,6 +1670,7 @@ def record_authenticated_approval(call_id, user, approve, approval_ids, expected
             "request": request_payload,
             "pending_sha256": approval_pending_digest(pending),
             "shown_verified": shown is not None and shown_call_id == str(call.pk),
+            "decision_transport": transport if transport in ("api_key", "django_session") else "unknown",
             "decided_at": timezone.now().isoformat(),
         }
         metadata = dict(call.metadata or {})
@@ -1621,6 +1681,79 @@ def record_authenticated_approval(call_id, user, approve, approval_ids, expected
         call.metadata = metadata
         call.save(update_fields=["metadata"])
     return entry, waiting
+
+
+@router.get(
+    "/calls/{call_id}/approval-decisions/{decision_id}/tools/{tool_id}",
+    response=ApprovalDecisionEvidenceOut,
+)
+def approval_decision_evidence(request, call_id: str, decision_id: str, tool_id: str):
+    """Read a verified owner decision and the exact tool item reviewed."""
+    from django_ergo.conversation.toolkit import approval_pending_digest
+
+    call = (
+        StructuredCall.objects.filter(
+            pk=uuid_or_404(call_id, "call"),
+            session__in=visible_sessions(request.auth),
+        )
+        .select_related("session")
+        .first()
+    )
+    not_found = HttpError(404, "No such owner approval decision")
+    if call is None:
+        raise not_found
+    entries = (call.metadata or {}).get("authenticated_approval_decisions", [])
+    if not isinstance(entries, list):
+        raise not_found
+    matches = [entry for entry in entries if isinstance(entry, dict) and entry.get("id") == decision_id]
+    if len(matches) != 1:
+        raise not_found
+    entry = matches[0]
+    submitted = entry.get("request")
+    decisions = entry.get("decisions")
+    if not isinstance(submitted, dict) or not isinstance(decisions, dict):
+        raise not_found
+    shown = submitted.get("shown_approvals")
+    if (
+        not isinstance(shown, list)
+        or not shown
+        or any(not isinstance(item, dict) or not isinstance(item.get("id"), str) for item in shown)
+    ):
+        raise not_found
+    ids = [item["id"] for item in shown]
+    items = [item for item in shown if item["id"] == tool_id]
+    if (
+        len(set(ids)) != len(ids)
+        or len(items) != 1
+        or set(decisions) != set(ids)
+        or any(type(value) is not bool for value in decisions.values())
+        or decisions.get(tool_id) is not True
+        or entry.get("shown_verified") is not True
+        or entry.get("call_id") != str(call.pk)
+        or submitted.get("shown_call_id") != str(call.pk)
+        or not call.session.user_id
+        or entry.get("actor_id") != str(call.session.user_id)
+        or entry.get("pending_sha256") != approval_pending_digest(shown)
+        or not isinstance(entry.get("decided_at"), str)
+        or not entry["decided_at"]
+    ):
+        raise not_found
+    return {
+        "evidence_class": "authenticated_owner_tool_decision",
+        "decision_transport": (
+            entry.get("decision_transport")
+            if entry.get("decision_transport") in ("api_key", "django_session")
+            else "unknown"
+        ),
+        "decision_id": decision_id,
+        "call_id": str(call.pk),
+        "session_id": str(call.session_id),
+        "actor_id": entry["actor_id"],
+        "tool_use_id": tool_id,
+        "decided_at": entry["decided_at"],
+        "pending_sha256": entry["pending_sha256"],
+        "reviewed_item": items[0],
+    }
 
 
 @router.post("/sessions/{session_id}/approvals", response=TurnOut)
@@ -1647,6 +1780,7 @@ async def answer_approval(request, session_id: str, data: ApprovalIn):
         approval_ids,
         approval_pending_digest((pending.metadata or {}).get("pending_approvals", [])),
         data.model_dump(exclude_unset=True),
+        getattr(request, "ergonaut_auth_transport", "unknown"),
     )
     return await sync_to_async(queue_and_report)(
         session, approve=approve, approval_ids=waiting, authenticated_approval_id=entry["id"]

@@ -738,6 +738,82 @@ Only a hash is stored. Keys are made and revoked from a signed-in session
 (`/api/auth/keys`), not with another key. Make one per place a key is used
 so each can be revoked alone. The [`ergonaut-remote` command](agent-skills.md) uses them.
 
+### Original user message lookup
+
+`GET /api/messages/<message UUID>/original-user` uses the same session or API
+key authentication and session visibility as the chat API (including superuser
+visibility). It returns `message_id`, `session_id`, `sequence`, `actor_id`,
+`timestamp`, and ordered `text_blocks` containing the exact stored text. The
+UUID is a message UUID, not a session UUID. A missing or invisible message,
+or one without an explicit authenticated session-owner author, empty
+provenance and exclusively text blocks, returns 404. Forwards, events,
+tool results, legacy unattributed messages and voice-attributed messages are
+not certified by this endpoint.
+
+This is a read-only snapshot of a stored transcript, **not a consent decision
+or a signed immutable receipt**. Multiple queued inputs by the same owner can
+have been combined into one stored message. A receiver must protect credentials
+and validate the Ergonaut server over authenticated TLS, pin the intended
+server/issuer through independently administered configuration, restrict access
+to a suitable account, bind the returned actor to the independently authorized
+person, and check the exact message, source identity, scope, deduplication and
+current policy before acting. API keys have the account's broad access and
+are not proof of a fresh user approval. No cross-service identity mapping,
+receiver trust root, content interpretation, budget authorization or ledger
+mutation is provided by this endpoint.
+
+### Authenticated owner tool decision lookup
+
+`GET /api/calls/<call UUID>/approval-decisions/<decision ID>/tools/<tool use ID>`
+is a read-only lookup using the same session or API-key authentication and
+session visibility as chat, including superuser visibility. It returns the
+decision, call, session, actor and tool IDs, decision time, batch digest and
+the exact `reviewed_item` from the submitted approval batch. It returns 404
+unless the recorded authenticated actor is the session owner, the tool was
+approved (not denied), and the submitted call ID and complete shown batch
+were verified against the pending call when the answer was recorded. The
+lookup also checks the recorded batch digest and rejects ambiguous tool IDs.
+Older approvals without a verified shown batch cannot be recovered this way.
+
+The response's `evidence_class` is `authenticated_owner_tool_decision`.
+`decision_transport` is `api_key` or `django_session`, based on the successful
+authentication mechanism for the **decision POST**, not for this lookup.
+Records predating transport capture and unrecognized values return `unknown`;
+they are never upgraded from actor identity. Both mechanisms can be used by
+automation, and neither proves a human acted or independently reauthenticated.
+A receiver must default-deny unknown or unapproved evidence classes, issuers
+and transports and explicitly configure any acceptance; an allowlist expresses
+operator policy, not proof of human consent. The receiver must derive the
+issuer from its authenticated, independently configured server connection, not
+from a claim in this response.
+Where an action requires independent human-owner consent, the receiver must
+verify a separate owner-authority proof bound to the action; this endpoint
+does not supply it. Without such proof, fail closed even if a decision
+transport has been explicitly allowed.
+
+An executing approved tool receives `ctx.approval_decision` with the decision,
+actor, call and tool-use IDs only for a verified displayed batch. A receiver
+must independently trust the Ergonaut issuer and authenticated TLS, map the
+actor to its authorized owner, verify all IDs and compare the returned
+`reviewed_item` including its full input to the exact source message, item and
+scope being authorized. Those bindings must actually be present in that input;
+the lookup does not infer them from a transcript. Deduplicate using the issuer,
+decision and tool IDs and enforce the receiver's current policy. Authenticate
+and authorize the reader appropriately; API keys have broad account access.
+
+This is an authenticated decision recorded when the answer was submitted,
+not a signed immutable receipt, proof of a human or fresh reauthentication,
+proof that the worker executed the tool, or proof that the decision remains
+valid under later policy. Competing submissions may be recorded before one
+worker claims the pending call. In particular, a lookup by itself must not
+authorize an action as if its tool had run. Independently authenticate and
+authorize the executing tool caller and channel, bind that identity to the
+receipt, and enforce replay and current-policy checks at the receiver: the
+receipt is not a signature and its values can be read by authorized users.
+Trust roots, cross-service identity mapping and external authorization are not
+configured by this interface. Historical message attribution is not a current
+decision.
+
 ## Reloading
 
 Ergonaut fingerprints the bot folders and reloads a bot when its files
