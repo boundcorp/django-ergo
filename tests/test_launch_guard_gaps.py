@@ -163,30 +163,70 @@ def test_explicit_orca_start_checks_login_before_side_effects(
         plugin.start_agent(None, AgentSpec("Fix", "worktree", agent, model))
 
 
-def test_omp_catalog_display_name_resolves_provider_and_model(tmp_path, monkeypatch):
+def _omp_session(path, cwd, model, *, provider=None, fallback=False, mtime=None):  # noqa: PLR0913
     import json
-    import sqlite3
+    import os
 
-    directory = tmp_path / ".omp" / "agent"
-    directory.mkdir(parents=True)
-    with sqlite3.connect(directory / "models.db") as db:
-        db.execute(
-            "CREATE TABLE model_cache (provider_id TEXT, models TEXT, updated_at INTEGER)"
-        )
-        db.executemany(
-            "INSERT INTO model_cache VALUES (?, ?, 1)",
-            [
-                ("xai-oauth", json.dumps([{"id": "grok-4.7", "name": "Grok 4.7 🙈"}])),
-                ("anthropic", json.dumps([{"id": "grok-4.7", "name": "Other Grok"}])),
-            ],
-        )
-    monkeypatch.setenv("PI_CODING_AGENT_DIR", str(directory))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    provider_id, _, model_id = model.partition("/")
+    rows = [
+        {"type": "title", "title": "secret brief"},
+        {"type": "session", "id": "s", "cwd": cwd},
+        {"type": "model_change", "model": model, "resolvedModelIsFallback": fallback},
+        {"type": "message", "message": {"role": "user", "content": "secret"}},
+        {
+            "type": "message",
+            "message": {
+                "role": "assistant",
+                "provider": provider or provider_id,
+                "model": model_id,
+                "content": "secret answer",
+            },
+        },
+    ]
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    if mtime is not None:
+        os.utime(path, (mtime, mtime))
+
+
+def test_omp_session_log_reports_provider_and_model_for_this_launch(
+    tmp_path, monkeypatch
+):
+    import time
+
+    agent = tmp_path / ".omp" / "agent"
+    sessions = agent / "sessions"
+    cwd = "/home/dev/orca/workspaces/repo/branch"
+    now = time.time()
+    # This launch: omp answered from another provider under the same model id.
+    _omp_session(
+        sessions / "-orca-workspaces-repo-branch" / "new.jsonl",
+        cwd,
+        "openai-codex/gpt-6.1-terra",
+        provider="github-copilot",
+    )
+    # An earlier run in the same worktree and a concurrent run elsewhere.
+    _omp_session(
+        sessions / "-orca-workspaces-repo-branch" / "old.jsonl",
+        cwd,
+        "fireworks/kimi-k3",
+        mtime=now - 3600,
+    )
+    _omp_session(sessions / "-other" / "x.jsonl", "/elsewhere", "fireworks/kimi-k3")
+    monkeypatch.setenv("PI_CODING_AGENT_DIR", str(agent))
     plugin = OrcaPlugin.__new__(OrcaPlugin)
     plugin.files_host = ""
     plugin.timeout = 10
-    assert plugin.omp_catalog_name("xai-oauth/grok-4.7") == "Grok 4.7 🙈"
-    with pytest.raises(ValueError, match="missing or ambiguous"):
-        plugin.omp_catalog_name("xai-oauth/unknown")
+    used = plugin.omp_session_models({"path": cwd, "launched_at": now - 60})
+    assert used == {
+        "models": ["openai-codex/gpt-6.1-terra", "github-copilot/gpt-6.1-terra"],
+        "fallback": False,
+    }
+    assert "secret" not in str(used)
+    assert plugin.omp_session_models({"path": "/none", "launched_at": now}) == {
+        "models": [],
+        "fallback": False,
+    }
 
 
 def test_claude_trust_seed_preserves_settings_and_rejects_outside_path(tmp_path):
@@ -218,6 +258,15 @@ def test_claude_trust_seed_preserves_settings_and_rejects_outside_path(tmp_path)
     ("lines", "blocked"),
     [
         (["Do you trust the files in this folder?"], True),
+        # Claude Code 2.1.x's dialog.
+        (
+            [
+                " Quick safety check: Is this a project you created or one you trust?",
+                " \u276f 1. Yes, I trust this folder",
+                "   2. No, exit",
+            ],
+            True,
+        ),
         (["claude exited", "dev@devbox:~/worktree$ "], True),
         (["Claude Code", "Thinking about the task"], False),
     ],

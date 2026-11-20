@@ -163,8 +163,17 @@ QUARANTINED_STATUS = re.compile(r"(?i)\b(?:kimi\s+k\d|fireworks|moonshot|openrou
 # omp's TUI header names the active model by display name: "π / ◑ Grok 4.7 🙈 / 📁 …".
 OMP_HEADER_MODEL = re.compile(r"π / ([^/]+?) / ")
 OMP_MODEL_CHECK_LIMIT = 2
+# How long an omp worker may run before its session log names provider/model.
+OMP_MODEL_PROOF_SECONDS = 300
+OMP_SESSION_CLOCK_SLACK = 10
 TRUST_PROMPT_CHECK_SECONDS = 30
-TRUST_PROMPT = re.compile(r"do you trust the files in this folder", re.I)
+# Claude Code's folder-trust dialog, current ("Quick safety check: is this a
+# project you created or one you trust?" / "Yes, I trust this folder") and older.
+TRUST_PROMPT = re.compile(
+    r"project you created or one you trust|yes, i trust this folder"
+    r"|do you trust the files in this folder",
+    re.I,
+)
 SHELL_PROMPT = re.compile(r"(?:^|\n)[\w.-]+@[\w.-]+:[^\n]{0,100}[#$] ?$", re.M)
 MAX_OUTPUT_CHARS = 40_000  # about 10k tokens; a 26-worktree list is ~28k compact
 TARGET_FLAGS = ("--environment", "--pairing-code")
@@ -285,9 +294,38 @@ INPUT_KEYS = (
 )
 
 
-def _model_words(name: str) -> str:
-    """A model name or id as lowercase words: "Grok 4.7 🙈" and "grok-4.7" agree."""
-    return " ".join(re.findall(r"[a-z0-9]+", name.lower()))
+def _omp_terminal_model(lines: list) -> tuple[str, str]:
+    """The model the omp terminal names that can fail a launch fast (a
+    quarantined provider in the header, or, with no header on screen, a model id
+    or quarantined name elsewhere), and the header's display name. Neither is
+    proof of the selected provider."""
+    header = mentioned = ""
+    for line in lines:
+        clean = ANSI.sub("", str(line))
+        if found := OMP_HEADER_MODEL.search(clean):
+            header = found.group(1)
+        elif found := OMP_STATUS_MODEL.search(clean) or QUARANTINED_STATUS.search(
+            clean
+        ):
+            mentioned = found.group().lower()
+    if header:
+        quarantined = QUARANTINED_STATUS.search(header)
+        return (quarantined.group().lower() if quarantined else ""), header
+    return mentioned, ""
+
+
+def _stop_omp(plugin, ctx, handle, observed, selected, provenance):  # noqa: PLR0913
+    _set_launch_model(ctx, observed, provenance)
+    plugin.end_worker(handle["dispatch"], "running")
+    msg = f"Omp launched {observed} instead of selected {selected}; worker stopped"
+    raise RuntimeError(msg)
+
+
+def _set_launch_model(ctx, model: str, provenance: str) -> None:
+    receipt = dict(ctx.state.get("dispatch_receipt") or {})
+    receipt["launch_model"] = model
+    receipt["launch_model_provenance"] = provenance
+    ctx.state["dispatch_receipt"] = receipt
 
 
 def claude_trust_blocked(lines: list) -> bool:
@@ -1318,83 +1356,75 @@ class OrcaPlugin(BotPlugin):
         )
 
     def verify_omp_model(self, ctx, handle: dict, shown: dict) -> None:
-        """Stop an omp dispatch as soon as its terminal identifies another model.
+        """Stop an omp dispatch unless omp's own session log shows the selected
+        ``provider/model``, and as soon as anything shows another one.
 
-        omp's header shows the model's display name ("Grok 4.7"), which matches
-        the selected id ("xai-oauth/grok-4.7") once both are reduced to words."""
-        terminal = (shown.get("worker") or {}).get("agent_terminal_handle")
-        if not terminal:
-            return
-        read = self.cli_json(
-            ["terminal", "read", "--terminal", terminal, "--limit", "100"]
-        )
-        lines = (read.get("terminal") or {}).get("tail") or []
+        omp's header names only a display name ("Claude Sonnet 5.5"), which a
+        dozen providers in its catalog share, so the header can't prove the
+        provider. The session log records ``provider/model`` for each model
+        change and each answer; that is the proof. The terminal only fails fast:
+        a quarantined provider or another model id named on screen."""
         selected = handle["selected_model"].lower().split(":", 1)[0]
-        catalog_name = ctx.state.get("omp_catalog_name")
-        if not catalog_name:
-            catalog_name = self.omp_catalog_name(selected)
-            ctx.state["omp_catalog_name"] = catalog_name
-        # The header is authoritative; other mentions (the brief, the agent's
-        # own output) only count while no header is on screen.
-        header_model = mentioned = ""
-        for line in lines:
-            clean = ANSI.sub("", str(line))
-            if (header := OMP_HEADER_MODEL.search(clean)) and (
-                name := _model_words(header.group(1))
-            ):
-                header_model = selected if name == _model_words(catalog_name) else name
-            elif found := OMP_STATUS_MODEL.search(clean):
-                mentioned = found.group().lower()
-            elif quarantined := QUARANTINED_STATUS.search(clean):
-                mentioned = quarantined.group().lower()
-        observed = header_model or mentioned
-        if not observed:
+        try:
+            used = self.omp_session_models(handle)
+        except (ValueError, subprocess.SubprocessError):
+            used = {"models": [], "fallback": False}  # unverified, not proof
+        models = [str(m).lower() for m in used.get("models") or []]
+        if models:
+            ctx.state.pop("omp_unverified_checks", None)
+            wrong = [m for m in models if m != selected]
+            if wrong or used.get("fallback"):
+                observed = ", ".join(wrong) or f"a fallback for {selected}"
+                _stop_omp(self, ctx, handle, observed, selected, "omp session log")
+            _set_launch_model(ctx, models[-1], "omp session log")
+            return
+        terminal = (shown.get("worker") or {}).get("agent_terminal_handle")
+        lines = []
+        if terminal:
+            read = self.cli_json(
+                ["terminal", "read", "--terminal", terminal, "--limit", "100"]
+            )
+            lines = (read.get("terminal") or {}).get("tail") or []
+        mentioned, header = _omp_terminal_model(lines)
+        if mentioned and mentioned != selected:
+            _stop_omp(self, ctx, handle, mentioned, selected, "omp terminal status")
+        launched = handle.get("launched_at")
+        if launched:
+            waited = time.time() - launched >= OMP_MODEL_PROOF_SECONDS
+        elif header:  # workers launched before session-log proof keep header checks
+            return
+        else:
             checks = ctx.state.get("omp_unverified_checks", 0) + 1
             ctx.state["omp_unverified_checks"] = checks
-            if checks >= OMP_MODEL_CHECK_LIMIT:
-                self.end_worker(handle["dispatch"], "running")
-                msg = "Omp did not report its launch model; worker stopped"
-                raise RuntimeError(msg)
-            return
-        ctx.state.pop("omp_unverified_checks", None)
-        receipt = dict(ctx.state.get("dispatch_receipt") or {})
-        receipt["launch_model"] = observed
-        receipt["launch_model_provenance"] = "omp terminal status"
-        ctx.state["dispatch_receipt"] = receipt
-        if observed == selected:
-            return
-        self.end_worker(handle["dispatch"], "running")
-        msg = f"Omp launched {observed} instead of selected {selected}; worker stopped"
-        raise RuntimeError(msg)
+            waited = checks >= OMP_MODEL_CHECK_LIMIT
+        if waited:
+            self.end_worker(handle["dispatch"], "running")
+            msg = "Omp did not record its provider/model in its session log; worker stopped"
+            raise RuntimeError(msg)
 
-    def omp_catalog_name(self, selected: str) -> str:
-        """Resolve omp's display name from its own read-only model catalog."""
-        script = """import json, os, pathlib, sqlite3, sys
-directory = pathlib.Path(os.environ.get('PI_CODING_AGENT_DIR') or pathlib.Path.home() / '.omp/agent')
-db = directory / 'models.db'
-with sqlite3.connect(f'{db.as_uri()}?mode=ro', uri=True) as connection:
-    rows = connection.execute('SELECT provider_id, models FROM model_cache ORDER BY updated_at DESC').fetchall()
-matches = []
-seen = set()
-for provider, models in rows:
-    if provider not in ('anthropic', 'openai', 'openai-codex', 'xai-oauth'):
-        continue
-    if provider in seen:
-        continue
-    seen.add(provider)
-    for model in json.loads(models):
-        mid = model.get('id') or model.get('modelId')
-        name = model.get('name') or model.get('displayName')
-        if mid and name:
-            matches.append((provider, mid, name))
-print(json.dumps(matches))
-"""
-        argv = (
-            ["ssh", "-o", "BatchMode=yes", self.files_host, "python3 -"]
-            if self.files_host
-            else ["python3", "-"]
+    def omp_session_models(self, handle: dict) -> dict:
+        """omp's session log for the worker's worktree since launch: the distinct
+        ``provider/model`` ids it used (read on the execution host, ids only)."""
+        path = handle.get("path") or ""
+        launched = handle.get("launched_at")
+        if not path or not launched:  # no launch time: older runs would count
+            return {"models": [], "fallback": False}
+        since = str(float(launched) - OMP_SESSION_CLOCK_SLACK)
+        script = (
+            Path(__file__).with_name("orca_omp_session.py").read_text(encoding="utf-8")
         )
-        proc = subprocess.run(  # noqa: S603 — fixed read-only catalog query
+        argv = (
+            [
+                "ssh",
+                "-o",
+                "BatchMode=yes",
+                self.files_host,
+                f"python3 - {shlex.quote(path)} {since}",
+            ]
+            if self.files_host
+            else ["python3", "-", path, since]
+        )
+        proc = subprocess.run(  # noqa: S603 — fixed read-only helper; path as data
             argv,
             input=script,
             capture_output=True,
@@ -1404,19 +1434,9 @@ print(json.dumps(matches))
             env=scrubbed_env(),
         )
         if proc.returncode:
-            msg = "Could not verify omp model against its catalog"
+            msg = "Could not read omp's session log"
             raise ValueError(msg)
-        provider, _, model = selected.partition("/")
-        rows = json.loads(proc.stdout)
-        names = [name for p, mid, name in rows if p == provider and mid == model]
-        if (
-            len(names) != 1
-            or sum(_model_words(name) == _model_words(names[0]) for _, _, name in rows)
-            != 1
-        ):
-            msg = "Omp model display name is missing or ambiguous in its catalog"
-            raise ValueError(msg)
-        return names[0]
+        return json.loads(proc.stdout)
 
     def check(self, ctx, handle: dict) -> AgentCheck:  # noqa: C901
         """One look at an Orca worker: its status, new messages, latest output and
