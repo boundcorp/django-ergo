@@ -82,3 +82,7 @@ one whose worker died 15 minutes after it.
 
 Re-login needs Redis (`REDIS_URL`) and a Celery broker. Without them the page says so and
 starts nothing.
+
+The pages use referrer policy `same-origin` (meta tag and `Referrer-Policy` header), so other
+sites, including the sign-in link (`rel="noopener noreferrer"`), get no referrer. Don't make it
+`no-referrer`: browsers then send `Origin: null` on the page's own POSTs and CSRF refuses them.
