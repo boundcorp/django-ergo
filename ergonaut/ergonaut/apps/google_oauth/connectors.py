@@ -14,7 +14,8 @@ A bot declares it in one of its tool modules::
     def google_revoke_token(ctx, email) -> str | None: ...        # the plain token, to revoke it
     def google_delete_account(ctx, email) -> None: ...
 
-Only a bot with ``private: true`` is offered, and only to a user its ``permissions.users`` names
+``calendar.events`` can create and change events and email invitations to attendees; the
+page says so before sign-in. Only a bot with ``private: true`` is offered, and only to a user its ``permissions.users`` names
 (or a superuser). Scopes outside ``ALLOWED_SCOPES`` are refused."""
 
 from __future__ import annotations
@@ -25,7 +26,15 @@ from dataclasses import dataclass
 SCOPE_PREFIX = "https://www.googleapis.com/auth/"
 ALLOWED_SCOPES = frozenset(
     SCOPE_PREFIX + name
-    for name in ("gmail.readonly", "gmail.compose", "gmail.modify", "calendar.readonly", "calendar.events.readonly")
+    for name in (
+        "gmail.readonly",
+        "gmail.compose",
+        "gmail.modify",
+        "calendar.readonly",
+        "calendar.events.readonly",
+        "calendar.events",
+        "calendar.calendarlist.readonly",
+    )
 )
 BASE_SCOPES = ("openid", "email")
 HOOKS = ("google_store_account", "google_list_accounts", "google_revoke_token", "google_delete_account")

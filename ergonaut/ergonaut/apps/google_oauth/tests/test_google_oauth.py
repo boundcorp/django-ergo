@@ -17,8 +17,9 @@ CLIENT_SECRET = "GOCSPX-client-secret-value"
 REFRESH = "1//refresh-token-value"
 CODE = "4/auth-code-value"
 GM = "https://www.googleapis.com/auth/gmail.readonly"
-CAL = "https://www.googleapis.com/auth/calendar.readonly"
-SCOPES = [GM, CAL]
+CAL = "https://www.googleapis.com/auth/calendar.events"
+CALLIST = "https://www.googleapis.com/auth/calendar.calendarlist.readonly"
+SCOPES = [GM, CAL, CALLIST]
 
 
 class Store:
@@ -443,3 +444,15 @@ def test_credential_box_fails_closed(monkeypatch):
         credential_box.unseal(sealed, key_env="K")
     with pytest.raises(credential_box.CredentialBoxError):
         credential_box.unseal("plaintext", key_env="K")
+
+
+def test_page_discloses_calendar_writes_and_emailed_invites(client, owner, bots):
+    body = client.get(reverse("google-oauth-page"), {"bot": "personal"}).content.decode()
+    assert "calendar.events" in body and "Google emails the invitations" in body
+    assert "write access" in body and "calendar.calendarlist.readonly" in body
+
+
+def test_read_only_connector_shows_no_write_warning(client, owner, bots):
+    bots["personal"].tool_modules[0].module.GOOGLE_OAUTH["scopes"] = [GM]
+    body = client.get(reverse("google-oauth-page"), {"bot": "personal"}).content.decode()
+    assert "write access" not in body

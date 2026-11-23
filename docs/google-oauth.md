@@ -7,7 +7,7 @@ chat. This page is how a person connects a Google account to a **private** bot w
 with no model, chat or tool anywhere in the flow. A bot links to it; from chat it only sends
 the link.
 
-Asked for by Lee (2026-11-23) for the `personal` bot; the bot side is
+Asked for by Lee (2026-11-23; at 21:11 UTC he added creating/changing calendar events and emailing meeting invitations, on both his Gmail and boundcorp.net calendars, hence `calendar.events` and `calendar.calendarlist.readonly` rather than `calendar.readonly`; sending ordinary Gmail stays out) for the `personal` bot; the bot side is
 [ergo-bots#367](https://github.com/boundcorp/ergo-bots/pull/367).
 
 ## What a bot declares
@@ -22,7 +22,8 @@ GOOGLE_OAUTH = {
     "scopes": [
         "https://www.googleapis.com/auth/gmail.readonly",
         "https://www.googleapis.com/auth/gmail.compose",
-        "https://www.googleapis.com/auth/calendar.readonly",
+        "https://www.googleapis.com/auth/calendar.events",
+        "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
     ],  # all required; openid and email are always added
 }
 
@@ -42,7 +43,7 @@ token. For ergo-bots `personal`: upsert `GoogleClient` (client id, secret encryp
 Fail-closed rules (`connectors.py`): the bot must have `private: true`; the user must be in
 the bot's `permissions.users` or a superuser (a bot listing nobody is superuser-only); scopes
 must come from an Ergonaut allow-list (`gmail.readonly|compose|modify`, `calendar.readonly`,
-`calendar.events.readonly`); the env names must be upper-case; all four functions must exist.
+`calendar.events.readonly`, `calendar.events`, `calendar.calendarlist.readonly`); the env names must be upper-case; all four functions must exist.
 A user who isn't allowed gets the same 404 as an unknown bot.
 
 ## Encryption
@@ -55,7 +56,7 @@ the refresh token (and the client secret); its sync code unseals with the same `
 
 ## The flow
 
-1. **Page** (GET): lists connected accounts (email, scopes, mail/calendar sync status and last
+1. **Page** (GET): says what each permission allows (and warns plainly about calendar writes and emailed invitations), lists connected accounts (email, scopes, mail/calendar sync status and last
    sync, never a token) and a connect form. With no client secret in the environment it says
    "Not configured" and disables the button.
 2. **Start** (POST, CSRF): validates the optional expected account (`login_hint`) and account
@@ -119,8 +120,10 @@ client type is **Web application** (not Desktop: the redirect is Ergonaut's own 
    - Using one External project for both accounts is simplest; or an Internal project for
      boundcorp.net and an External one for Gmail, each with its own env secret names.
 4. Data access / Scopes: add `openid`, `email`, `.../auth/gmail.readonly`,
-   `.../auth/gmail.compose`, `.../auth/calendar.readonly`. (`gmail.compose` technically allows
-   sending; the bot's code has no send route.)
+   `.../auth/gmail.compose`, `.../auth/calendar.events`,
+   `.../auth/calendar.calendarlist.readonly`. (`gmail.compose` technically allows sending mail; the
+   bot has no send route. `calendar.events` lets the bot create and change events and, with
+   guests and `sendUpdates=all`, Google emails the invitations; that is the requested capability.)
 5. Credentials → Create credentials → OAuth client ID → **Web application**; add the redirect
    URI above; copy the client ID and secret straight into the secret store (never into a chat).
 6. Then open `/oauth/google/?bot=personal` and connect each account.

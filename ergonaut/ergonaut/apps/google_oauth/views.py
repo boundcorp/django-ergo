@@ -91,6 +91,22 @@ def _scopes(value) -> list[str]:
     return [str(s).removeprefix(connectors.SCOPE_PREFIX)[:60] for s in items if s]
 
 
+WRITE_SCOPES = tuple(connectors.SCOPE_PREFIX + n for n in ("calendar.events", "gmail.modify"))
+DISCLOSURES = {
+    "gmail.readonly": "Read your email (the bot stores headers and short snippets).",
+    "gmail.compose": "Create drafts. This permission technically allows sending mail, but the bot has no send route.",
+    "gmail.modify": "Read and change your email, labels and drafts.",
+    "calendar.readonly": "Read your calendars and events.",
+    "calendar.events.readonly": "Read your calendar events.",
+    "calendar.events": "Create, change and delete calendar events, including adding guests: Google emails the invitations when the bot asks it to.",
+    "calendar.calendarlist.readonly": "List which calendars you have.",
+}
+
+
+def _disclosures(connector) -> list[dict]:
+    return [{"scope": s, "text": DISCLOSURES.get(s, "")} for s in _scopes(connector.scopes)]
+
+
 def _back(connector) -> str:
     return reverse("google-oauth-page") + "?" + urlencode({"bot": connector.bot_name})
 
@@ -112,7 +128,8 @@ def page(request):
         "google_oauth/page.html",
         {
             "connector": connector,
-            "scopes": _scopes(connector.scopes),
+            "scopes": _disclosures(connector),
+            "writes": any(s in connector.scopes for s in WRITE_SCOPES),
             "accounts": _accounts(request, connector),
             "configured": configured,
             "client_id_env": connector.client_id_env,
