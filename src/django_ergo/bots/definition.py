@@ -36,6 +36,7 @@ bot.yaml::
     max_turns: 50                      # model calls one reply may use, tool calls included
     tool_results_in_context: 6         # large tool results each model call keeps in full
     tool_results_tokens: 40000         # optional budget for older ones; default 20% of window
+    permanent_chats: []                # session UUIDs to protect on bot load
     chats:
       main:                            # every user's main chat (always there)
         skills: [orchestration, tandoor]   # loaded from the start (default: orchestration)
@@ -152,6 +153,19 @@ class ChatDefinition:
     compaction: dict = field(default_factory=dict)
 
 
+def _permanent_chats(value):
+    from uuid import UUID
+
+    if not isinstance(value, list):
+        msg = "permanent_chats must be a list of session UUIDs"
+        raise BotDefinitionError(msg)
+    try:
+        return [str(UUID(str(item))) for item in value]
+    except (ValueError, TypeError, AttributeError) as exc:
+        msg = "permanent_chats must contain session UUIDs"
+        raise BotDefinitionError(msg) from exc
+
+
 @dataclass
 class BotDefinition:
     name: str
@@ -174,6 +188,7 @@ class BotDefinition:
     todos: bool = True
     allow_create_sessions: bool = False
     archive_after_days: int = 7
+    permanent_chats: list[str] = field(default_factory=list)
     default_compaction_mode: str = CompactionMode.CONTEXT_SIZE
     default_compaction_config: dict = field(default_factory=dict)
     tool_files: list[Path] = field(default_factory=list)
@@ -229,6 +244,8 @@ class BotDefinition:
             msg = f"Unknown compaction mode {mode!r}"
             raise BotDefinitionError(msg)
 
+        permanent_chats = _permanent_chats(data.get("permanent_chats", []))
+
         chats = _chats(data.get("chats") or {}, orchestration=orchestration)
         schedules = _schedules(data.get("schedules") or [])
         for schedule in schedules:
@@ -260,6 +277,7 @@ class BotDefinition:
             todos=bool(data.get("todos", True)),
             allow_create_sessions=bool(sessions.get("allow_create", False)),
             archive_after_days=int(sessions.get("archive_after_days", 7) or 0),
+            permanent_chats=permanent_chats,
             default_compaction_mode=mode,
             default_compaction_config=dict(compaction.get("config") or {}),
             tool_files=[_tool_path(p, root_dir) for p in data.get("tools") or []],
@@ -376,7 +394,7 @@ def _schedules(items: list) -> list:
     from django_ergo.bots.schedules import Schedule
     from django_ergo.bots.schedules import ScheduleError
 
-    found, names = [], set()
+    found, names, owners = [], set(), {}
     for item in items:
         try:
             schedule = Schedule.from_config(item)
@@ -387,6 +405,13 @@ def _schedules(items: list) -> list:
             msg = f"schedules: two named {schedule.name!r}"
             raise BotDefinitionError(msg)
         names.add(schedule.name)
+        for key in schedule.keys:
+            if owners.setdefault(key, schedule.name) != schedule.name:
+                msg = (
+                    f"schedules: id or alias {key!r} is used by both "
+                    f"{owners[key]!r} and {schedule.name!r}"
+                )
+                raise BotDefinitionError(msg)
         found.append(schedule)
     return found
 

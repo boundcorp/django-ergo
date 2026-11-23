@@ -112,3 +112,16 @@ def test_tables_get_migrations_in_the_bot_folder_and_tools(realty):
         "0002_beds.py",
     ]
     assert "AddField" in (folder / "migrations" / "0002_beds.py").read_text()
+
+
+@pytest.mark.parametrize("policy", ["add", {"add", "typo"}, 1, {"add": True}])
+def test_invalid_generic_writes_fails_at_class_creation(policy):
+    from django_ergo.bots.tables import BotTable
+
+    with pytest.raises(ValueError, match="InvalidPolicy.*generic_writes"):
+
+        class InvalidPolicy(BotTable):
+            generic_writes = policy
+
+            class Meta:
+                abstract = True

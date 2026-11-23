@@ -1,5 +1,6 @@
 from datetime import timedelta
 
+from django import forms
 from django.contrib import admin
 from django.db.models import Count
 from django.http import JsonResponse
@@ -937,8 +938,25 @@ try:
         def has_add_permission(self, request):
             return False
 
+    class ConversationSessionForm(forms.ModelForm):
+        class Meta:
+            model = ConversationSession
+            fields = "__all__"  # noqa: DJ007 - admin exposes the existing model fields
+
+        def clean_status(self):
+            status = self.cleaned_data["status"]
+            if not self.instance._state.adding and status == "completed":  # noqa: SLF001
+                previous = ConversationSession.objects.get(pk=self.instance.pk)
+                if previous.status != "completed":
+                    try:
+                        previous.require_closable()
+                    except ValueError as exc:
+                        raise forms.ValidationError(str(exc)) from exc
+            return status
+
     @admin.register(ConversationSession)
     class ConversationSessionAdmin(admin.ModelAdmin):
+        form = ConversationSessionForm
         list_display = [
             "session_id_short",
             "user",
@@ -951,7 +969,7 @@ try:
         ]
         list_filter = ["engine_type", "compaction_mode", "status"]
         search_fields = ["session_id", "bot_name", "metadata"]
-        readonly_fields = ["id", "created_at", "updated_at"]
+        readonly_fields = ["id", "created_at", "updated_at", "is_permanent"]
         inlines = [StructuredCallInline, SessionMessageInline]
 
         def get_urls(self):

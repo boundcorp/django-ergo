@@ -1870,20 +1870,22 @@ async def test_idle_threads_are_archived_and_reopen_on_a_message(tmp_path):
     old = await bot.create_session(user, parent=root, title="Old")
     busy = await bot.create_session(user, parent=root, title="Busy")
     fresh = await bot.create_session(user, parent=root, title="Fresh")
+    permanent = await bot.create_session(user, parent=root, title="Protected")
+    await ConversationSession.objects.filter(pk=permanent.pk).aupdate(is_permanent=True)
     await ThreadMessage.objects.acreate(
         recipient_session=busy, text="still working", status="delivered"
     )
     ago = timezone.now() - timedelta(days=8)
-    await ConversationSession.objects.filter(id__in=[root.id, old.id, busy.id]).aupdate(
-        updated_at=ago
-    )
+    await ConversationSession.objects.filter(
+        id__in=[root.id, old.id, busy.id, permanent.id]
+    ).aupdate(updated_at=ago)
 
     archived = await sync_to_async(archival.archive_idle_threads)([bot])
     assert archived == [str(old.id)]
     await old.arefresh_from_db()
     assert old.status == "completed"
     assert old.metadata["archived_reason"] == "idle"
-    for session in (root, busy, fresh):
+    for session in (root, busy, fresh, permanent):
         await session.arefresh_from_db()
         assert session.status == "active"
 
@@ -3884,7 +3886,7 @@ async def test_finished_threads_are_resolved_and_unfinished_ones_refused(
     resolved = json.loads(q3["content"])
     assert resolved["note"].startswith("Resolved kitchen · Done")
     assert (resolved["session_id"], resolved["status"]) == (str(done.id), "resolved")
-    assert q4["is_error"] and "only threads are" in q4["content"]
+    assert q4["is_error"] and "permanent" in q4["content"]
     await done.arefresh_from_db()
     assert done.status == "completed"
     assert done.metadata["resolved_summary"] == "PR #88 merged"
@@ -4327,3 +4329,250 @@ def test_small_or_disabled_instruction_check_is_quiet(tmp_path, caplog, settings
     with caplog.at_level("WARNING"):
         Bot.load(folder)
     assert "always-loaded instructions" not in caplog.text
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_permanent_chat_defaults_and_archival(tmp_path):
+    from django_ergo.bots import archival
+    from django_ergo.bots import orchestrator
+    from django_ergo.conversation.models import PermanentChatError
+
+    user = await User.objects.acreate(username="permanent-owner")
+    bot, _ = make_bot(
+        tmp_path,
+        say("ok"),
+        yaml_text=KITCHEN_YAML.replace(
+            "      main: {skills: [orchestration, pantry]}",
+            "      main: {skills: [orchestration, pantry]}\n      reports: {description: Reports}",
+        ),
+    )
+    main = await bot.main_session(user)
+    named = await bot.chat_session(user, "reports")
+    thread = await bot.create_session(user, parent=main, title="A task")
+    channel = await bot.create_session(
+        user, parent=main, metadata={"telegram_thread": "channel"}
+    )
+    assert main.is_permanent and named.is_permanent and channel.is_permanent
+    assert not thread.is_permanent
+    thread.is_permanent = True
+    await thread.asave(update_fields=["is_permanent"])
+    with pytest.raises(PermanentChatError, match="permanent"):
+        await sync_to_async(archival.archive)(thread)
+    ctx = bot.tool_context(thread)
+    with pytest.raises(Exception, match="permanent"):
+        await sync_to_async(orchestrator.ergo_thread_resolve)(ctx)
+    with pytest.raises(Exception, match="permanent"):
+        await sync_to_async(orchestrator.ergo_thread_archive)(ctx, str(thread.id))
+    thread.is_permanent = False
+    await thread.asave(update_fields=["is_permanent"])
+    await sync_to_async(archival.archive)(thread)
+    await thread.arefresh_from_db()
+    assert thread.status == "completed"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_permanent_chat_config_applies_only_to_own_bot(tmp_path):
+    user = User.objects.create(username="config-owner")
+    bot, _ = make_bot(tmp_path, say("ok"))
+    thread = ConversationSession.objects.create(
+        user=user,
+        bot_name=bot.name,
+        status="active",
+        engine_type="claude",
+        metadata={"bot_role": "thread"},
+    )
+    other = ConversationSession.objects.create(
+        user=user,
+        bot_name="other",
+        status="active",
+        engine_type="claude",
+        metadata={"bot_role": "thread"},
+    )
+    bot.definition.permanent_chats = [str(thread.id), str(other.id)]
+    BotRegistry().add(bot)
+    thread.refresh_from_db()
+    other.refresh_from_db()
+    assert thread.is_permanent and not other.is_permanent
+
+
+@pytest.mark.django_db
+def test_permanence_backfill_preserves_archived_history():
+    import importlib
+
+    from django.apps import apps
+
+    from django_ergo.conversation.models import SessionMessage
+
+    user = User.objects.create(username="migration-owner")
+    rows = []
+    for role, metadata, status in [
+        ("main", {}, "active"),
+        ("chat", {}, "completed"),
+        ("thread", {"telegram_thread": "channel"}, "completed"),
+        ("thread", {"title": "Task"}, "active"),
+    ]:
+        rows.append(
+            ConversationSession.objects.create(
+                user=user,
+                bot_name="fixture",
+                status=status,
+                engine_type="claude",
+                metadata={"bot_role": role, **metadata},
+            )
+        )
+    message = SessionMessage.objects.create(session=rows[1], role="user", sequence=0)
+    block = MessageBlock.objects.create(
+        message=message, block_type="text", sequence=0, text="preserve me"
+    )
+    migration = importlib.import_module("django_ergo.migrations.0053_permanent_chats")
+    migration.mark_configured_chats(apps, None)
+    for row in rows:
+        row.refresh_from_db()
+    assert [row.is_permanent for row in rows] == [True, True, True, False]
+    assert [row.status for row in rows] == [
+        "active",
+        "completed",
+        "completed",
+        "active",
+    ]
+    block.refresh_from_db()
+    assert block.text == "preserve me"
+
+
+@pytest.mark.django_db
+def test_permanent_status_change_is_refused_by_admin_and_model():
+    from django_ergo.admin import ConversationSessionForm
+    from django_ergo.conversation.models import PermanentChatError
+
+    user = User.objects.create(username="admin-protection-owner")
+    chat = ConversationSession.objects.create(
+        user=user,
+        bot_name="fixture",
+        status="active",
+        engine_type="claude",
+        is_permanent=True,
+    )
+    chat.status = "completed"
+    with pytest.raises(PermanentChatError, match="permanent"):
+        chat.save(update_fields=["status"])
+    form = ConversationSessionForm(instance=chat)
+    form.cleaned_data = {"status": "completed"}
+    with pytest.raises(Exception, match="permanent"):
+        form.clean_status()
+    chat.refresh_from_db()
+    assert chat.status == "active"
+
+
+def test_permanent_chat_config_validation():
+    from uuid import uuid4
+
+    session_id = str(uuid4())
+    assert BotDefinition.from_dict(
+        {"name": "fixture", "permanent_chats": [session_id]}
+    ).permanent_chats == [session_id]
+    with pytest.raises(BotDefinitionError, match="permanent_chats"):
+        BotDefinition.from_dict({"name": "fixture", "permanent_chats": ["invalid"]})
+    with pytest.raises(BotDefinitionError, match="permanent_chats"):
+        BotDefinition.from_dict({"name": "fixture", "permanent_chats": session_id})
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_permanent_ids_are_applied_when_registry_loads_in_async_context(tmp_path):
+    user = await User.objects.acreate(username="async-config-owner")
+    bot, _ = make_bot(tmp_path, say("ok"))
+    thread = await bot.create_session(user, title="Task")
+    bot.definition.permanent_chats = [str(thread.id)]
+    BotRegistry().add(bot)
+    await thread.arefresh_from_db()
+    assert thread.is_permanent
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_session_managers_refuse_permanent_and_close_ordinary_threads(tmp_path):
+    from django_ergo.conversation.manager import SessionManager
+    from django_ergo.conversation.models import PermanentChatError
+
+    user = await User.objects.acreate(username="manager-owner")
+    bot, _ = make_bot(tmp_path, say("ok"))
+    for manager in (bot, SessionManager()):
+        thread = await bot.create_session(user, title="Task")
+        await ConversationSession.objects.filter(pk=thread.pk).aupdate(
+            is_permanent=True
+        )
+        with pytest.raises(PermanentChatError, match="permanent"):
+            await manager.close_session(thread)
+        await thread.arefresh_from_db()
+        assert thread.status == "active"
+        await ConversationSession.objects.filter(pk=thread.pk).aupdate(
+            is_permanent=False
+        )
+        await manager.close_session(thread)
+        await thread.arefresh_from_db()
+        assert thread.status == "completed"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_configured_permanence_respects_explicit_unmark_after_reload(tmp_path):
+    user = User.objects.create(username="config-override-owner")
+    bot, _ = make_bot(tmp_path, say("ok"))
+    thread = ConversationSession.objects.create(
+        user=user, bot_name=bot.name, status="active", engine_type="claude"
+    )
+    bot.definition.permanent_chats = [str(thread.id)]
+    BotRegistry().add(bot)
+    thread.refresh_from_db()
+    assert thread.is_permanent
+    ConversationSession.objects.filter(pk=thread.pk).update(
+        is_permanent=False, permanence_initialized=True
+    )
+    BotRegistry().add(bot)
+    thread.refresh_from_db()
+    assert not thread.is_permanent
+
+
+@pytest.mark.django_db(transaction=True)
+def test_closure_waits_for_concurrent_permanence_change(monkeypatch):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    from django.db import DatabaseError
+    from django.db import close_old_connections
+    from django.db import transaction
+
+    user = User.objects.create(username="closure-race-owner")
+    session = ConversationSession.objects.create(
+        user=user, status="active", engine_type="claude"
+    )
+    guarded = threading.Event()
+    release = threading.Event()
+    original_guard = ConversationSession.require_closable
+
+    def pause_after_guard(row):
+        original_guard(row)
+        guarded.set()
+        assert release.wait(10)
+
+    monkeypatch.setattr(ConversationSession, "require_closable", pause_after_guard)
+
+    def close():
+        try:
+            stale = ConversationSession.objects.get(pk=session.pk)
+            stale.status = "completed"
+            stale.save(update_fields=["status"])
+        finally:
+            close_old_connections()
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(close)
+        try:
+            assert guarded.wait(10)
+            # NOWAIT proves the guard is still inside the row-locked section.
+            with pytest.raises(DatabaseError), transaction.atomic():
+                ConversationSession.objects.select_for_update(nowait=True).get(
+                    pk=session.pk
+                )
+        finally:
+            release.set()
+            future.result(timeout=10)
+    session.refresh_from_db()
+    assert session.status == "completed"

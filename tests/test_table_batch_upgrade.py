@@ -87,14 +87,18 @@ def test_generic_write_policy_blocks_tools_and_pages_but_not_trusted_orm(item_mo
             ),
         ]
         for name, args in calls:
-            with pytest.raises(ValueError, match="does not allow generic table writes"):
+            with pytest.raises(
+                ValueError, match="does not allow generic (add|update|delete)"
+            ):
                 toolkit.execute_tool(name, args)
         for action in (
             lambda: page_add(bot, "House", {"sku": "new", "address": "New"}),
             lambda: page_update(bot, "House", row.pk, {"address": "Changed"}),
             lambda: page_delete(bot, "House", row.pk),
         ):
-            with pytest.raises(ValueError, match="does not allow generic table writes"):
+            with pytest.raises(
+                ValueError, match="does not allow generic (add|update|delete)"
+            ):
                 action()
         assert "Original" in toolkit.execute_tool(
             "ergo_table_query", {"table": "House"}
@@ -102,6 +106,7 @@ def test_generic_write_policy_blocks_tools_and_pages_but_not_trusted_orm(item_mo
         schema = json.loads(
             toolkit.execute_tool("ergo_table_schema", {"table": "House"})
         )
+        assert schema["writes"] == []
         assert not any(field["writable"] for field in schema["fields"])
         row.refresh_from_db()
         assert row.address == "Original"
@@ -231,3 +236,63 @@ def test_upsert_recovers_when_competing_insert_wins(
     assert missed
     assert row["id"] == existing.pk
     assert item_model.objects.get(pk=existing.pk).price == 12
+
+
+def test_append_only_generic_writes_preflight(item_model):
+    from types import SimpleNamespace
+
+    from django_ergo.bots.tables import add_row
+    from django_ergo.bots.tables import delete_row
+    from django_ergo.bots.tables import describe
+    from django_ergo.bots.tables import page_add
+    from django_ergo.bots.tables import page_delete
+    from django_ergo.bots.tables import page_delete_preview
+    from django_ergo.bots.tables import page_update
+    from django_ergo.bots.tables import table_schema
+    from django_ergo.bots.tables import update_row
+
+    item_model.generic_writes = {"add"}
+    bot = SimpleNamespace(table=lambda name: item_model)
+    original = add_row(item_model, {"sku": "original", "address": "Original"})
+    before = item_model.objects.values().get(pk=original["id"])
+    assert page_add(bot, "House", {"sku": "page", "address": "Page"})["sku"] == "page"
+    schema = table_schema(item_model)
+    assert schema["writes"] == ["add"]
+    assert next(f for f in schema["fields"] if f["name"] == "address")["writable"]
+    assert "generic writes: add" in describe(item_model)
+    actions = [
+        lambda: update_row(item_model, original["id"], {"address": "changed"}),
+        lambda: delete_row(item_model, original["id"]),
+        lambda: page_update(bot, "House", original["id"], {"address": "changed"}),
+        lambda: page_delete(bot, "House", original["id"]),
+        lambda: page_delete_preview(bot, "House", original["id"]),
+        lambda: batch(
+            item_model, [{"op": "update", "id": original["id"], "values": {}}]
+        ),
+        lambda: batch(
+            item_model, [{"op": "upsert", "match": {"sku": "original"}, "values": {}}]
+        ),
+        lambda: batch(
+            item_model,
+            [
+                {"op": "add", "values": {"sku": "mixed", "address": "Mixed"}},
+                {"op": "update", "id": original["id"], "values": {}},
+            ],
+        ),
+    ]
+    for action in actions:
+        with pytest.raises(
+            ValueError, match=r"does not allow generic (update|delete) \(allowed: add\)"
+        ):
+            action()
+    assert item_model.objects.values().get(pk=original["id"]) == before
+    assert not item_model.objects.filter(sku="mixed").exists()
+    with pytest.raises(ValueError, match=r"operation 1:.*generic update"):
+        batch(
+            item_model,
+            [
+                {"op": "add", "values": {"sku": "mixed", "address": "Mixed"}},
+                {"op": "update", "id": original["id"], "values": {}},
+            ],
+        )
+    del item_model.generic_writes

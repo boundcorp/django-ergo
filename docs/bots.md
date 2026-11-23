@@ -234,6 +234,9 @@ schedules:
       [lee] # default: permissions.users, else everyone with a chat
       # (a schedule of only run steps: once, as the first admin)
     enabled: true
+    id: weekly-stats # stable key (default: name), so `name` can change
+    continuity: true # default false: new threads list earlier runs
+    continuity_runs: 5 # how many, default 5, at most 20
 ```
 
 Cron fields take `*`, numbers, ranges, `*/n` steps, lists and day/month
@@ -288,7 +291,9 @@ IDs (for example `realtime` or `tts`) also exclude coding when an upstream cache
 mislabels them as chat. Discovery flags and a
 deployment's `ModelsAvailable` table are not core worker execution allowlists:
 explicit worker models and configured agent tiers do not consult them.
-See [Schedules](schedules.md#workflows) for the complete format and safety rules.
+See [Schedules](schedules.md#workflows) for the complete format and safety rules,
+and [Identity and continuity](schedules.md#identity-and-continuity) for `id`,
+run-thread links and the earlier-runs list.
 
 ## Skills
 
@@ -1887,6 +1892,8 @@ The shared `agents` skill provides launch/reply/stop; load `workers` for chat-ow
 scoped `orca` skill loads both. Questions,
 answers and completion use the existing durable watcher. Worker status/logs in
 Ergonaut remain session-owned; a launch grants no access to another chat's jobs.
+Optional source-message and prior-worker references preserve provenance without
+granting permission or stopping work; see [instruction checkpoints](plugins.md#orca-instruction-checkpoints).
 
 Routing uses the normal tier subscription-pace scorer, filtered before selection.
 Only anthropic, openai, openai-codex and xai-oauth coding identities qualify;
@@ -2758,3 +2765,11 @@ selected workers, never cumulative worker totals. When multiple native sessions
 contribute, totals are null because their events may overlap. Any token field with missing values is suppressed rather than reported as a partial sum. Null token fields and missing
 or untimestamped events remain unknown, and event coverage is partial. Counts
 are observations of stored data, not a live refresh or a historical status audit.
+
+A bot can list session UUIDs under `permanent_chats` in `bot.yaml`. Loading the
+bot initializes matching sessions belonging to that bot as permanent, including
+threads. An explicit user choice persists across configuration reloads. Main
+chats, named chats and channel chats start permanent; ordinary task threads do not, even when titled. Permanence is
+separate from pinning and prevents resolving or idle archival. Existing
+archived chats are marked where applicable but stay archived, with their
+history and status unchanged.

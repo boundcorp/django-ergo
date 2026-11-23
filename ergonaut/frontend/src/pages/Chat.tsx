@@ -699,6 +699,31 @@ export function Chat({ onChange }: { onChange: () => void }) {
           </div>
         </section>
       )}
+      <section aria-label="Chat permanence">
+        <h3>Chat permanence</h3>
+        <button
+          type="button"
+          className="thread-option-action"
+          aria-pressed={!!detail.session.is_permanent}
+          onClick={async () => {
+            try {
+              const session = await api.setPermanent(id, !detail.session.is_permanent)
+              setDetail(d => (d ? { ...d, session } : d))
+              onChange()
+            } catch (e) {
+              setError(String((e as Error).message ?? e))
+            }
+            closeOptions()
+          }}
+        >
+          <span>
+            {detail.session.is_permanent ? 'Remove permanence' : 'Make permanent'}
+            <small>
+              {detail.session.is_permanent ? 'This chat cannot be resolved' : 'Protect this chat from being resolved'}
+            </small>
+          </span>
+        </button>
+      </section>
       <section aria-label="Thread data">
         <h3>Thread data</h3>
         <button
@@ -715,31 +740,26 @@ export function Chat({ onChange }: { onChange: () => void }) {
           </span>
         </button>
       </section>
-      {detail.session.role === 'thread' && (
-        <section aria-label="Thread lifecycle">
-          <h3>Thread lifecycle</h3>
-          <button
-            type="button"
-            className="thread-option-action thread-option-danger"
-            disabled={archived || busy}
-            onClick={async () => {
-              await api.close(id).catch(e => setError(String(e.message ?? e)))
-              closeOptions()
-              await load()
-              onChange()
-            }}
-          >
-            <OptionIcon path="m7 12 3 3 7-7M21 12a9 9 0 1 1-9-9" />
-            <span>
-              {archived ? 'Resolved' : 'Resolve thread'}
-              <small>
-                Archives this thread and stops its queued/running workers. New messages reopen the thread, not cancelled
-                work.
-              </small>
-            </span>
-          </button>
-        </section>
-      )}
+      <section aria-label="Chat lifecycle">
+        <h3>Chat lifecycle</h3>
+        <button
+          type="button"
+          className="thread-option-action thread-option-danger"
+          disabled={archived || closed || busy || detail.session.is_permanent}
+          onClick={async () => {
+            await api.close(id).catch(e => setError(String(e.message ?? e)))
+            closeOptions()
+            await load()
+            onChange()
+          }}
+        >
+          <OptionIcon path="m7 12 3 3 7-7M21 12a9 9 0 1 1-9-9" />
+          <span>
+            {archived || closed ? 'Resolved' : detail.session.role === 'thread' ? 'Resolve thread' : 'Resolve chat'}
+            <small>Archives this chat and stops its queued/running workers.</small>
+          </span>
+        </button>
+      </section>
     </div>
   )
 
@@ -754,6 +774,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
               </div>
               <SessionTitle key={id} title={detail.session.title} onSave={renameSession} />
               <div className="mt-1 text-sm text-muted">
+                {detail.session.is_permanent && 'Permanent · '}
                 {detail.session.role || 'session'} · {(detail.message_count ?? detail.messages.length).toLocaleString()}{' '}
                 messages · Updated {agoLong(lastActivity)} · Session{' '}
                 {archived ? 'archived' : closed ? 'closed' : 'active'}
@@ -798,6 +819,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
           summary={summary}
           meta={
             <>
+              {detail.session.is_permanent && 'Permanent · '}
               {detail.session.role || 'session'} · {(detail.message_count ?? detail.messages.length).toLocaleString()}{' '}
               messages · Updated {agoLong(lastActivity)} · Session{' '}
               {archived ? 'archived' : closed ? 'closed' : 'active'}

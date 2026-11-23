@@ -686,3 +686,147 @@ def test_stale_or_wrong_version_claim_is_not_applied(instruction_worker, version
     assert latest["acknowledgement_claim"] is None
     assert latest["acknowledgement"] is None
     assert latest["acceptance"] == "unknown"
+
+
+def test_authority_reference_is_scoped_and_idempotent(instruction_worker):
+    from django_ergo.conversation.models import SessionMessage
+
+    env = instruction_worker
+    user = env.ctx.session.user
+    message = SessionMessage.objects.create(
+        session=env.ctx.session,
+        role="user",
+        sequence=1,
+        author={
+            "kind": "django_user",
+            "ref": str(user.pk),
+            "authenticated_by": "ergonaut_session",
+        },
+    )
+    args = {
+        "worker_id": str(env.worker.pk),
+        "instruction_id": "authority-1",
+        "text": "Continue within scope",
+        "supersedes": "",
+        "authority_message_id": str(message.pk),
+    }
+    first = json.loads(env.kit.execute_tool("ergo_orca_instruct", args))
+    assert first["authority"]["authorization"] == "not_evaluated"
+    assert json.loads(env.kit.execute_tool("ergo_orca_instruct", args)) == first
+    with pytest.raises(ValueError, match="different content"):
+        env.kit.execute_tool("ergo_orca_instruct", {**args, "authority_message_id": ""})
+    assert run(env) == "running"
+    payload = json.loads(env.state["sends"][0][-1])
+    assert payload["ergoInstruction"]["authority"] == first["authority"]
+    assert (
+        "context only"
+        in env.state["sends"][0][env.state["sends"][0].index("--body") + 1]
+    )
+
+
+def test_authority_reference_rejects_unverified_and_other_chat(instruction_worker):
+    from django_ergo.conversation.models import SessionMessage
+
+    env = instruction_worker
+    user = env.ctx.session.user
+    message = SessionMessage.objects.create(
+        session=env.ctx.session, role="user", sequence=1
+    )
+    with pytest.raises(ValueError, match="authenticated user"):
+        agents.authority_reference(env.ctx, str(message.pk))
+    message.author = {
+        "kind": "django_user",
+        "ref": str(user.pk),
+        "authenticated_by": "ergonaut_session",
+    }
+    message.provenance = {"kind": "forwarded"}
+    message.save()
+    with pytest.raises(ValueError, match="authenticated user"):
+        agents.authority_reference(env.ctx, str(message.pk))
+    other_user = get_user_model().objects.create(username="other-authority-owner")
+    other = async_to_sync(env.bot.main_session)(other_user)
+    message.session = other
+    message.provenance = {}
+    message.save()
+    with pytest.raises(ValueError, match="authenticated user"):
+        agents.authority_reference(env.ctx, str(message.pk))
+    with pytest.raises(ValueError, match="Invalid"):
+        agents.authority_reference(env.ctx, "not-a-uuid")
+
+
+def test_orca_launch_passes_authority_reference_to_brief(
+    instruction_worker, monkeypatch
+):
+    from django_ergo.conversation.models import SessionMessage
+
+    env = instruction_worker
+    message = SessionMessage.objects.create(
+        session=env.ctx.session,
+        role="user",
+        sequence=1,
+        author={
+            "kind": "django_user",
+            "ref": str(env.ctx.session.user_id),
+            "authenticated_by": "ergonaut_session",
+        },
+    )
+    calls = []
+    monkeypatch.setattr(
+        env.plugin,
+        "dispatch",
+        lambda *args: (
+            calls.append(args) or ("task", "run", "mail", {"dispatchId": "dispatch"})
+        ),
+    )
+    spec = agents.AgentSpec(
+        "Do work", "site", "codex", title="Work", authority_message_id=str(message.pk)
+    )
+    env.plugin._launch_agent(env.ctx, spec, "site", None)
+    assert str(message.pk) in calls[0][1]
+    assert "does not grant authorization" in calls[0][1]
+
+
+def test_launch_supersedes_only_this_chats_worker(instruction_worker, monkeypatch):
+    env = instruction_worker
+    calls = []
+    monkeypatch.setattr(
+        env.plugin,
+        "dispatch",
+        lambda *args: (
+            calls.append(args) or ("task", "run", "mail", {"dispatchId": "dispatch"})
+        ),
+    )
+    spec = agents.AgentSpec(
+        "Follow up",
+        "site",
+        "codex",
+        title="Work",
+        supersedes_worker_id=str(env.worker.pk),
+    )
+    env.plugin._launch_agent(env.ctx, spec, "site", None)
+    assert str(env.worker.pk) in calls[0][1]
+    assert "does not stop" in calls[0][1]
+    spec.supersedes_worker_id = "00000000-0000-0000-0000-000000000000"
+    with pytest.raises(ValueError, match="Superseded worker"):
+        env.plugin._launch_agent(env.ctx, spec, "site", None)
+    assert len(calls) == 1
+
+
+def test_authority_reference_rejects_missing_and_other_author(instruction_worker):
+    from django_ergo.conversation.models import SessionMessage
+
+    env = instruction_worker
+    with pytest.raises(ValueError, match="authenticated user"):
+        agents.authority_reference(env.ctx, "00000000-0000-0000-0000-000000000000")
+    message = SessionMessage.objects.create(
+        session=env.ctx.session,
+        role="user",
+        sequence=1,
+        author={
+            "kind": "django_user",
+            "ref": "another-user",
+            "authenticated_by": "ergonaut_session",
+        },
+    )
+    with pytest.raises(ValueError, match="authenticated user"):
+        agents.authority_reference(env.ctx, str(message.pk))

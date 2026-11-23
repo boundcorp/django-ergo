@@ -41,6 +41,7 @@ export type Session = {
   waiting_for?: 'approval' | 'question' | 'failure' | 'blocked' | ''
   status_line?: string // the bot's one line from its latest reply (a resolved thread's summary)
   pinned?: boolean
+  is_permanent?: boolean
   last_activity?: string | null // when its latest turn moved
   workers_running?: number
   workers_total?: number
@@ -514,6 +515,9 @@ export type BotDetail = Bot & {
   manages_repo?: boolean
   schedules?: {
     name: string
+    id: string // stable key; the name may change while it stays
+    continuity: boolean // each run's thread lists earlier runs of this schedule
+    continuity_runs: number
     cron: string
     timezone: string
     users: string[]
@@ -1098,6 +1102,8 @@ export const api = {
   revalidateApproval: (id: string, call_id: string, shown_approvals: Approval[]) =>
     request<Turn>('POST', `/sessions/${id}/approvals/revalidate`, { call_id, shown_approvals }),
   close: (id: string) => request<Session>('POST', `/sessions/${id}/close`),
+  setPermanent: (id: string, is_permanent: boolean) =>
+    request<Session>('POST', `/sessions/${id}/permanent`, { is_permanent }),
   pinSession: (id: string, pinned: boolean) => request<Session>('POST', `/sessions/${id}/pin`, { pinned }),
   changes: (bot: string) => request<Changes>('GET', `/bots/${bot}/changes`),
   changeDiff: (bot: string, n: number) => request<{ diff: string }>('GET', `/bots/${bot}/changes/${n}/diff`),

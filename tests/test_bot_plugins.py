@@ -1785,6 +1785,9 @@ async def test_telegram_target_thread_comes_back_when_archived(tmp_path):
     bot, engine, plugin = telegram_thread_bot(tmp_path, say("One."), say("Two."))
     await plugin.handle_update(update(1, text="a", **person(5, "Lee")))
     thread = await bot.sessions().aget(metadata__bot_role="thread")
+    assert thread.is_permanent
+    thread.is_permanent = False
+    await thread.asave(update_fields=["is_permanent"])
     await sync_to_async(archival.archive)(thread)
 
     await plugin.handle_update(update(2, text="b", **person(5, "Lee")))

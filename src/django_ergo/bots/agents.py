@@ -58,6 +58,64 @@ class AgentSpec:
     effort: str = ""
     title: str = ""
     tier: str = ""
+    authority_message_id: str = ""
+    supersedes_worker_id: str = ""
+
+
+def authority_reference(ctx, message_id):
+    """Resolve direct authenticated owner messages in the current chat only."""
+    if not message_id:
+        return None
+    from uuid import UUID
+
+    from django_ergo.conversation.models import SessionMessage
+
+    try:
+        message_id = UUID(str(message_id))
+    except (ValueError, TypeError, AttributeError) as exc:
+        msg = "Invalid authority message reference"
+        raise ValueError(msg) from exc
+    message = SessionMessage.objects.filter(
+        pk=message_id, session=ctx.session, role="user"
+    ).first()
+    author = (message.author or {}) if message else {}
+    if (
+        not message
+        or author.get("kind") != "django_user"
+        or author.get("ref") != str(ctx.session.user_id)
+        or author.get("authenticated_by") != "ergonaut_session"
+        or message.provenance
+    ):
+        msg = "Authority reference must name an authenticated user message in this chat"
+        raise ValueError(msg)
+    return {
+        "message_id": str(message.pk),
+        "session_id": str(ctx.session.pk),
+        "verification": "authenticated_session_author",
+        "authorization": "not_evaluated",
+    }
+
+
+def superseded_worker_reference(ctx, worker_id):
+    """Resolve a previous Orca worker belonging to this chat."""
+    if not worker_id:
+        return None
+    from uuid import UUID
+
+    from django_ergo.conversation.models import Worker
+
+    try:
+        worker_id = UUID(str(worker_id))
+    except (ValueError, TypeError, AttributeError) as exc:
+        msg = "Invalid superseded worker reference"
+        raise ValueError(msg) from exc
+    worker = Worker.objects.filter(
+        pk=worker_id, session=ctx.session, bot_name=ctx.bot.name, function="agent:orca"
+    ).first()
+    if not worker:
+        msg = "Superseded worker must be an Orca agent in this chat"
+        raise ValueError(msg)
+    return str(worker.pk)
 
 
 @dataclass
@@ -207,6 +265,8 @@ def start(ctx: ToolContext, spec: AgentSpec, manager: str = "") -> Worker:
     from django_ergo.bots.model_choice import AGENT
     from django_ergo.bots.model_choice import check
 
+    authority = authority_reference(ctx, spec.authority_message_id)
+    supersedes = superseded_worker_reference(ctx, spec.supersedes_worker_id)
     requested = {
         "tier": spec.tier,
         "agent": spec.agent,
@@ -254,6 +314,16 @@ def start(ctx: ToolContext, spec: AgentSpec, manager: str = "") -> Worker:
             ctx.session,
         )
     handle = found.start(ctx, spec)
+    handle.update(
+        {
+            key: value
+            for key, value in (
+                ("authority", authority),
+                ("supersedes_worker_id", supersedes),
+            )
+            if value
+        }
+    )
     state = {
         "agent": spec.agent,
         "model": spec.model,
@@ -546,6 +616,14 @@ def agent_toolkit(bot: Bot, ctx: ToolContext):
             },
             "effort": {"type": "string", "description": "Reasoning effort"},
             "manager": {"type": "string", "enum": names},
+            "supersedes_worker_id": {
+                "type": "string",
+                "description": "Optional previous Orca worker in this chat; context only",
+            },
+            "authority_message_id": {
+                "type": "string",
+                "description": "Optional authenticated user message in this chat; context only",
+            },
         },
         required=["brief", "workspace"],
         requires_approval=approval,
@@ -560,9 +638,21 @@ def agent_toolkit(bot: Bot, ctx: ToolContext):
         model: str = "",
         effort: str = "",
         manager: str = "",
+        authority_message_id: str = "",
+        supersedes_worker_id: str = "",
     ) -> dict:
         check_spacing(brief, "brief")
-        spec = AgentSpec(brief, workspace, agent, model, effort, title, tier)
+        spec = AgentSpec(
+            brief,
+            workspace,
+            agent,
+            model,
+            effort,
+            title,
+            tier,
+            authority_message_id,
+            supersedes_worker_id,
+        )
         worker = start(ctx, spec, manager)
         out = {
             **describe(worker),
