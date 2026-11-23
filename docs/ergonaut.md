@@ -92,7 +92,8 @@ See [release evidence, limits and policy contract](realtime-voice.md).
 ## Voice input
 
 In a chat or on the new-thread page, the microphone records only after you press
-it. Stop transcribes the recording into the editable draft; it never sends a message.
+it. Stop transcribes the recording into the editable draft at the cursor; it never sends a message.
+When needed, a space separates the transcription from the text before it.
 Cancel or Escape discards it. Recordings exceeding the server's configured limits
 are rejected; on failure, retry or download the captured audio. If a browser
 produces an unsupported format, download the recording instead of retrying

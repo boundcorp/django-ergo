@@ -182,8 +182,11 @@ export function ComposerVoiceProvider({ children }: { children: ReactNode }) {
                 onText={transcript => {
                   const input = entry.mounted ? entry.composer.current : null
                   const start = input?.selectionStart ?? entry.selection
-                  updateText(entry, current => current.slice(0, start) + transcript + current.slice(start))
-                  entry.selection = start + transcript.length
+                  if (!transcript) return
+                  const before = entry.text.slice(0, start)
+                  const separator = before && !/\s$/.test(before) && !/^\s/.test(transcript) ? ' ' : ''
+                  updateText(entry, current => current.slice(0, start) + separator + transcript + current.slice(start))
+                  entry.selection = start + separator.length + transcript.length
                   if (input)
                     requestAnimationFrame(() => {
                       if (entry.mounted && entry.composer.current === input) {
