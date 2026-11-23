@@ -2735,3 +2735,23 @@ these checks. The planned second phase moves private inference into a
 separate, credential-isolated service: its own workload and service user,
 the key mounted only there, signed short-lived grants, and network egress
 limited to Fireworks.
+
+### Self-health metrics
+
+`ergo_self_health_metrics(end_utc, session_ids)` returns stored aggregate counts
+for an explicit, half-open seven-day UTC window ending at the timezone-aware
+`end_utc`. `session_ids` defaults to an empty selection and is capped at 200;
+each selected session must belong to the current user and to a bot the caller
+may access. Private bots are excluded. There is no personal-chat classification
+in the session model: the caller must select only non-personal conversations.
+The response reports this limitation and does not claim an exhaustive inventory.
+No message text, titles or tool arguments are returned.
+
+Workers are counted once per stored worker row by creation or completion time,
+with current status for completed rows; one-shot and recurring wakes use separate
+fired and dispatch timestamps. Tool failures are stored error result blocks, with
+stored result blocks as denominator, not a complete count of attempted calls.
+Agent token totals come only from timestamped native usage events linked to the
+selected workers, never cumulative worker totals. Null token fields and missing
+or untimestamped events remain unknown, and event coverage is partial. Counts
+are observations of stored data, not a live refresh or a historical status audit.
