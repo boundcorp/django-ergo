@@ -1495,6 +1495,23 @@ class OrcaPlugin(BotPlugin):
             raise ValueError(msg)
         return json.loads(proc.stdout)
 
+    @staticmethod
+    def _scope_blocked_report(report, dispatch, status):
+        # Worker assertion only, never an authorization decision or inference.
+        try:
+            payload = json.loads((report or {}).get("payload") or "{}")
+        except (TypeError, ValueError):
+            return {}
+        if (
+            isinstance(payload, dict)
+            and dispatch in (payload.get("dispatchId"), payload.get("dispatch_id"))
+            and payload.get("outcome") == "failed"
+            and ((report or {}).get("subject") or "").startswith("[scope_blocked] ")
+            and (status == "failed" or status not in SETTLED)
+        ):
+            return {"disposition": "scope_blocked"}
+        return {}
+
     def check(self, ctx, handle: dict) -> AgentCheck:
         """One look at an Orca worker: its status, new messages, latest output and
         usage. Fails it when its agent terminal is gone (``fail_if_terminal_gone``)."""
@@ -1542,16 +1559,14 @@ class OrcaPlugin(BotPlugin):
                     questions=questions,
                     error=f"The Orca worker failed: {failure}",
                 )
-            return AgentCheck(
-                "done",
-                questions=questions,
-                report={
-                    "status": status or "completed",
-                    "subject": (report or {}).get("subject") or "",
-                    "report": body,
-                    "dispatch": dispatch,
-                },
-            )
+            result = {
+                "status": status or "completed",
+                "subject": (report or {}).get("subject") or "",
+                "report": body,
+                "dispatch": dispatch,
+            }
+            result.update(self._scope_blocked_report(report, dispatch, status))
+            return AgentCheck("done", questions=questions, report=result)
         if not ctx.stopping:
             self.fail_if_agent_blocked(handle, shown, status)
             questions.extend(self.watch_screen(ctx, handle, shown))

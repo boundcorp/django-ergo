@@ -866,3 +866,75 @@ def test_missing_omp_never_admits_models():
                 "subscriptions": SUBSCRIPTIONS,
             },
         )
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    ("status", "payload", "expected"),
+    [
+        (
+            "failed",
+            {
+                "dispatchId": "dispatch-1",
+                "outcome": "failed",
+                "disposition": "scope_blocked",
+            },
+            "scope_blocked",
+        ),
+        (
+            "dispatched",
+            {
+                "dispatchId": "dispatch-1",
+                "outcome": "failed",
+                "disposition": "scope_blocked",
+            },
+            "scope_blocked",
+        ),
+        ("failed", {"dispatchId": "dispatch-1", "outcome": "failed"}, None),
+        (
+            "failed",
+            {
+                "dispatchId": "other",
+                "taskId": "task-1",
+                "outcome": "failed",
+                "disposition": "scope_blocked",
+            },
+            None,
+        ),
+        (
+            "completed",
+            {
+                "dispatchId": "dispatch-1",
+                "outcome": "succeeded",
+                "disposition": "scope_blocked",
+            },
+            None,
+        ),
+    ],
+)
+def test_scope_blocked_is_an_explicit_dispatch_scoped_assertion(
+    scoped, status, payload, expected
+):
+    from django_ergo.bots import workers as w
+
+    worker_id = start(scoped)["id"]
+    scoped.runner.status = status
+    scoped.runner.messages = [
+        {
+            "id": "done-1",
+            "run_id": "run-1",
+            "type": "worker_done",
+            "body": "Report",
+            "subject": "[scope_blocked] Blocked"
+            if payload.get("disposition")
+            else "Failure",
+            "payload": json.dumps(
+                {key: value for key, value in payload.items() if key != "disposition"}
+            ),
+            "sequence": 1,
+        }
+    ]
+    assert w.run(worker_id, scoped.bot.registry) == "completed"
+    result = Worker.objects.get(pk=worker_id).result
+    assert result.get("disposition") == expected
+    assert result["status"] == status

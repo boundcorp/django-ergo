@@ -33,6 +33,10 @@ For the latest instruction, send its requested status acknowledgement naming the
 instruction id, version and concrete next action BEFORE proceeding. A read flag,
 transport receipt or heartbeat is not this acknowledgement. Repeat acknowledgements
 idempotently on replay; never re-execute side effects because mail was replayed.
+When work cannot proceed within its authorized scope, use the
+normal failed worker_done command and begin its subject with "[scope_blocked] ".
+This is your assertion, not a grant or an authorization decision. Use ordinary
+failed outcome without this disposition for runtime errors and other failures.
 """
 
 
