@@ -394,7 +394,7 @@ def _schedules(items: list) -> list:
     from django_ergo.bots.schedules import Schedule
     from django_ergo.bots.schedules import ScheduleError
 
-    found, names = [], set()
+    found, names, owners = [], set(), {}
     for item in items:
         try:
             schedule = Schedule.from_config(item)
@@ -405,6 +405,13 @@ def _schedules(items: list) -> list:
             msg = f"schedules: two named {schedule.name!r}"
             raise BotDefinitionError(msg)
         names.add(schedule.name)
+        for key in schedule.keys:
+            if owners.setdefault(key, schedule.name) != schedule.name:
+                msg = (
+                    f"schedules: id or alias {key!r} is used by both "
+                    f"{owners[key]!r} and {schedule.name!r}"
+                )
+                raise BotDefinitionError(msg)
         found.append(schedule)
     return found
 

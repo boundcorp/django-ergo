@@ -515,6 +515,9 @@ export type BotDetail = Bot & {
   manages_repo?: boolean
   schedules?: {
     name: string
+    id: string // stable key; the name may change while it stays
+    continuity: boolean // each run's thread lists earlier runs of this schedule
+    continuity_runs: number
     cron: string
     timezone: string
     users: string[]

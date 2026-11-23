@@ -234,6 +234,9 @@ schedules:
       [lee] # default: permissions.users, else everyone with a chat
       # (a schedule of only run steps: once, as the first admin)
     enabled: true
+    id: weekly-stats # stable key (default: name), so `name` can change
+    continuity: true # default false: new threads list earlier runs
+    continuity_runs: 5 # how many, default 5, at most 20
 ```
 
 Cron fields take `*`, numbers, ranges, `*/n` steps, lists and day/month
@@ -288,7 +291,9 @@ IDs (for example `realtime` or `tts`) also exclude coding when an upstream cache
 mislabels them as chat. Discovery flags and a
 deployment's `ModelsAvailable` table are not core worker execution allowlists:
 explicit worker models and configured agent tiers do not consult them.
-See [Schedules](schedules.md#workflows) for the complete format and safety rules.
+See [Schedules](schedules.md#workflows) for the complete format and safety rules,
+and [Identity and continuity](schedules.md#identity-and-continuity) for `id`,
+run-thread links and the earlier-runs list.
 
 ## Skills
 

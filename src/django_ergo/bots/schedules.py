@@ -17,6 +17,10 @@
         users: [lee]                    # default: permissions.users, else everyone with a chat
                                         # (code-only schedules: once, as the first admin)
         enabled: true
+        id: weekly-meal-plan            # stable identity (default: name); rename ``name`` freely
+        aliases: [weekly meal plan]     # earlier keys (the old name) whose runs and threads this adopts
+        continuity: true                # default false: list earlier runs' threads in each new one
+        continuity_runs: 5              # how many (default 5, at most 20)
 
 The cron fields are read in each person's timezone (their ``timezone``, else
 the bot's ``timezone``, else Django's ``TIME_ZONE``). Fields take ``*``,
@@ -33,11 +37,28 @@ function from the bot's Python files and is recorded as a ``BotJob``; if it
 fails, the steps after it don't run. With ``stop_if_empty``, a run step that
 returns nothing (``None``, an empty string, list or dict) ends the run there
 too, as a success: an alert check posts only when it found something.
+
+Identity and continuity: ``id`` is the schedule's stable key (default: its
+name, so existing schedules keep theirs). ``name`` is what people see and may
+change while ``id`` stays. Each thread a run creates records ``schedule_id``,
+``schedule`` (the name then) and ``schedule_run`` in its metadata, and the
+``ScheduleRun`` row records ``schedule_key``; these survive renames, and
+``aliases`` lists earlier keys (an old name) so adding an ``id`` to an
+existing schedule keeps its run history. A key or alias belongs to one
+schedule per bot. At most one run per key, person and minute is claimed, and
+threads stay linked after the schedule is disabled or removed from bot.yaml.
+With ``continuity: true`` the prompt that opens a new thread ends with a
+bounded list of this person's previous threads from the same schedule (newest
+first, resolved ones included, the current run left out): title, time, state,
+chat id and the first part of the latest compaction summary when one exists.
+No model call is made. The bot reads any of them with the history tools,
+which already cover all of the person's chats with the bot and nobody else's.
 """
 
 from __future__ import annotations
 
 import logging
+import re
 from copy import deepcopy
 from dataclasses import dataclass
 from dataclasses import field
@@ -62,6 +83,12 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 MAX_WORKFLOW_STEPS = 100
+DEFAULT_CONTINUITY_RUNS = 5
+MAX_CONTINUITY_RUNS = 20
+CONTINUITY_SUMMARY_CHARS = 400
+CONTINUITY_MAX_CHARS = 6000
+MAX_KEY_LENGTH = 100
+KEY_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,99}")
 
 NAMES = {
     "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
@@ -79,6 +106,39 @@ FIELDS = [
 
 class ScheduleError(ValueError):
     pass
+
+
+def _aliases(name: str, data: dict) -> tuple[str, ...]:
+    raw = data.get("aliases") or []
+    if not isinstance(raw, list) or not all(
+        isinstance(a, str) and a.strip() and len(a.strip()) <= MAX_KEY_LENGTH
+        for a in raw
+    ):
+        msg = f"schedule {name}: aliases must be a list of earlier ids or names"
+        raise ScheduleError(msg)
+    return tuple(dict.fromkeys(a.strip() for a in raw))
+
+
+def _identity_options(name: str, data: dict) -> tuple[str, bool, int]:
+    """A schedule's stable ``id`` (empty: the name), ``continuity`` and
+    ``continuity_runs`` from its config."""
+    key = str(data.get("id") or "").strip()
+    if key and not KEY_PATTERN.fullmatch(key):
+        msg = f"schedule {name}: id must be letters, digits, - _ . (at most 100)"
+        raise ScheduleError(msg)
+    continuity = data.get("continuity", False)
+    if not isinstance(continuity, bool):
+        msg = f"schedule {name}: continuity must be true or false"
+        raise ScheduleError(msg)
+    runs = data.get("continuity_runs", DEFAULT_CONTINUITY_RUNS)
+    if (
+        isinstance(runs, bool)
+        or not isinstance(runs, int)
+        or not 1 <= runs <= MAX_CONTINUITY_RUNS
+    ):
+        msg = f"schedule {name}: continuity_runs must be 1 to {MAX_CONTINUITY_RUNS}"
+        raise ScheduleError(msg)
+    return key, continuity, runs
 
 
 def _value(text: str, low: int, high: int) -> int:
@@ -264,6 +324,19 @@ class Schedule:
     users: tuple[str, ...] = field(default_factory=tuple)
     enabled: bool = True
     timezone: str = ""
+    id: str = ""  # stable identity; defaults to the name
+    aliases: tuple[str, ...] = ()  # earlier keys whose history this schedule adopts
+    continuity: bool = False
+    continuity_runs: int = DEFAULT_CONTINUITY_RUNS
+
+    @property
+    def key(self) -> str:
+        return self.id or self.name
+
+    @property
+    def keys(self) -> tuple[str, ...]:
+        """Its key, then earlier keys it answers to."""
+        return tuple(dict.fromkeys((self.key, *self.aliases)))
 
     @classmethod
     def from_config(cls, data: dict) -> Schedule:  # noqa: C901 — mutually exclusive schedule formats
@@ -311,7 +384,12 @@ class Schedule:
             except (ZoneInfoNotFoundError, ValueError) as exc:
                 msg = "schedule timezone must be a valid IANA timezone"
                 raise ScheduleError(msg) from exc
+        key, continuity, runs = _identity_options(name, data)
         return cls(
+            id=key or name,
+            aliases=_aliases(name, data),
+            continuity=continuity,
+            continuity_runs=runs,
             name=name,
             cron=Cron.parse(str(data["cron"])),
             actions=tuple(actions),
@@ -442,9 +520,20 @@ def run_due(bots: Iterable[Bot], now: datetime | None = None) -> list[str]:
                 moment = local_now(bot, user, now, schedule)
                 if not schedule.cron.matches(moment):
                     continue
+                if ScheduleRun.objects.filter(
+                    bot_name=bot.name,
+                    user=user,
+                    minute=now,
+                    schedule_key__in=schedule.keys,
+                ).exists():
+                    continue  # this identity already ran this minute (maybe under an old key)
                 try:
                     run = ScheduleRun.objects.create(
-                        bot_name=bot.name, schedule=schedule.name, user=user, minute=now
+                        bot_name=bot.name,
+                        schedule=schedule.name,
+                        schedule_key=schedule.key,
+                        user=user,
+                        minute=now,
                     )
                 except IntegrityError:
                     continue  # already ran this minute (another beat, a retry)
@@ -473,9 +562,7 @@ def run_actions(run_id: int, registry=None) -> None:  # noqa: C901, PLR0912, PLR
     bot = None
     try:
         bot = find_bot(run.bot_name, registry)
-        schedule = next(
-            (s for s in bot.definition.schedules if s.name == run.schedule), None
-        )
+        schedule = find_schedule(bot, run)
         if schedule is None:
             msg = "schedule no longer exists"
             raise ScheduleError(msg)  # noqa: TRY301 — missing schedules must fail the claimed run
@@ -536,7 +623,7 @@ def run_actions(run_id: int, registry=None) -> None:  # noqa: C901, PLR0912, PLR
                     stop = not audit["result"]
                 else:
                     audit["result"] = _send_prompt(
-                        bot, action, run, moment, result, values
+                        bot, action, run, moment, result, values, schedule
                     )
                 audit["status"] = "completed"
             except Exception as exc:
@@ -554,6 +641,80 @@ def run_actions(run_id: int, registry=None) -> None:  # noqa: C901, PLR0912, PLR
         run.save(update_fields=["status", "completed_at"])
     except Exception as exc:  # noqa: BLE001 — audit failures from arbitrary workflow steps
         _fail_run(run, bot, safe_error(exc))
+
+
+def find_schedule(bot: Bot, run) -> Schedule | None:
+    """The configured schedule a run was claimed for: by its stable key or an
+    alias of it (so a rename between claim and run still finds it). Only a run
+    with no key at all (from before keys existed) falls back to the name; a run
+    whose key is gone fails rather than run a replacement."""
+    schedules = bot.definition.schedules
+    if run.schedule_key:
+        return next((s for s in schedules if run.schedule_key in s.keys), None)
+    return next((s for s in schedules if run.schedule in s.keys), None)
+
+
+def previous_runs(bot: Bot, run, keys, limit: int, exclude=()) -> list:
+    """This person's earlier threads of a schedule (any of its ``keys``), newest first.
+
+    Scoped to the bot and the run's user, whatever the thread's state
+    (resolved and archived ones included). Threads from before keys existed
+    carry only the schedule's name, which was then its key.
+    """
+    from django.db.models import Q
+
+    keys = list(keys)
+    linked = Q(metadata__schedule_id__in=keys) | Q(
+        metadata__schedule_id__isnull=True, metadata__schedule__in=keys
+    )
+    return list(
+        bot.sessions(run.user)
+        .filter(linked)
+        .exclude(pk__in=list(exclude))
+        # (a bare exclude() would also drop rows without the key: NULL != 5)
+        .filter(
+            ~Q(metadata__has_key="schedule_run") | ~Q(metadata__schedule_run=run.pk)
+        )
+        .order_by("-created_at")[:limit]
+    )
+
+
+def continuity_text(bot: Bot, run, schedule: Schedule, exclude=()) -> str:
+    """The bounded "earlier runs" block for a continuity schedule's new thread
+    ("" when there are none). Reads only stored rows; no model call."""
+    from django_ergo.conversation import roles
+    from django_ergo.conversation.models import ConversationCompaction
+
+    sessions = previous_runs(
+        bot, run, schedule.keys, schedule.continuity_runs, exclude=exclude
+    )
+    if not sessions:
+        return ""
+    lines = [
+        f"Earlier runs of this schedule ({schedule.name}), newest first. Read one "
+        "with the chat history tools, using its chat id:"
+    ]
+    for session in sessions:
+        summary = (
+            ConversationCompaction.objects.filter(session=session)
+            .order_by("-upto_sequence")
+            .values_list("summary", flat=True)
+            .first()
+        )
+        state = "resolved" if session.status == "completed" else session.status
+        line = (
+            f"- {roles.title(session)} ({session.created_at:%Y-%m-%d %H:%M} UTC, "
+            f"{state}) chat id {session.pk}, link /s/{session.pk}"
+        )
+        text = " ".join((summary or "").split())
+        if text:
+            if len(text) > CONTINUITY_SUMMARY_CHARS:
+                text = text[: CONTINUITY_SUMMARY_CHARS - 1] + "…"
+            line += f"\n  summary: {text}"
+        if sum(len(item) + 1 for item in lines) + len(line) > CONTINUITY_MAX_CHARS:
+            break
+        lines.append(line)
+    return "\n".join(lines)
 
 
 def _run_python(bot, action, context):
@@ -651,7 +812,7 @@ def run_code(bot: Bot, action: Action, user, *, name: str):
 
 
 def _send_prompt(  # noqa: PLR0913
-    bot: Bot, action: Action, run, moment, result, values=None
+    bot: Bot, action: Action, run, moment, result, values=None, schedule=None
 ) -> dict:
     import json
 
@@ -670,7 +831,11 @@ def _send_prompt(  # noqa: PLR0913
             user,
             parent=parent,
             title=action.title_for(moment, runs),
-            metadata={"schedule": run.schedule},
+            metadata={
+                "schedule": run.schedule,
+                "schedule_id": run.schedule_key or run.schedule,
+                "schedule_run": run.pk,
+            },
         )
     else:
         session = async_to_sync(bot.chat_session)(user, action.to)
@@ -690,6 +855,15 @@ def _send_prompt(  # noqa: PLR0913
         lambda match: replacements.get(match.group(0), match.group(0)),
         action.message,
     )
+    if (
+        schedule is not None
+        and schedule.continuity
+        and action.llm
+        and action.to == "thread"
+    ):
+        earlier = continuity_text(bot, run, schedule, exclude=[session.pk])
+        if earlier:
+            text = f"{text}\n\n{earlier}"
     if not action.llm:
         from django_ergo.conversation.identity import system_identity
         from django_ergo.conversation.messages import add_message

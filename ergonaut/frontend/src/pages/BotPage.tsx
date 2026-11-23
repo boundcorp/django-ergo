@@ -122,7 +122,15 @@ export function BotPage() {
             <tbody>
               {bot.schedules.map(s => (
                 <tr key={s.name} className="border-t border-zinc-200 align-top dark:border-zinc-800">
-                  <td className="py-1.5 pr-4 font-mono text-xs whitespace-nowrap">{s.name}</td>
+                  <td className="py-1.5 pr-4 font-mono text-xs whitespace-nowrap">
+                    {s.name}
+                    {s.id !== s.name && <div className="text-zinc-500">id {s.id}</div>}
+                    {s.continuity && (
+                      <div className="text-zinc-500" title="Each run's thread lists earlier runs of this schedule">
+                        remembers last {s.continuity_runs} runs
+                      </div>
+                    )}
+                  </td>
                   <td className="py-1.5 pr-4 font-mono text-xs whitespace-nowrap text-zinc-500">
                     {s.cron}
                     {s.timezone && <div>{s.timezone}</div>}

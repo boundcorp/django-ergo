@@ -15,6 +15,7 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 - [x] **Pull request outcomes in Hindsight**: a periodic job writes one replaceable document per pull request (`pr_events` in the plugin config, `docs/hindsight-memory.md`). Follow-up: confirm after deploy that recall finds merged records.
 - [ ] **Deploy plan** for Ergonaut on the octo cluster (modeled on kitchen-mgmt's infra/octo).
 - [x] **Schedules in each bot's bot.yaml** (`schedules:`, run every minute by Celery beat; bot page lists them with the next run). PR from `claude/bot-schedules`.
+- [x] **Schedule identity and continuity**: stable `id`, run threads linked to their schedule (`schedule_id`, `schedule_run`), opt-in `continuity` list of earlier runs, read with the existing history tools.
 - [x] **Auditable schedule workflows**: trusted Python steps, named JSON context, safe conditions, message-only prompts, fixed timezones, silent no-op runs and failure notices.
 - [x] **Read-only model discovery**: core catalog/list checks, persisted idempotent diffs, pricing/capability provenance and private/coding policy flags; new-thread review prompts never enable routing.
 - [x] **Model report snapshot safety**: compact warning references and validate the exact workflow payload before committing the catalog baseline; oversized reports roll back rather than consuming the diff.
