@@ -4,7 +4,9 @@ Production runs the `release` image as separate workloads, each with its
 own start command:
 
 - `start-uvicorn.sh`: the web app (any number of replicas)
-- `start-celery-worker.sh`: a worker for the `celery` and `bot_tasks` queues
+- `start-celery-worker.sh`: a worker for the `turns`, `celery` and `bot_tasks` queues
+  (turns go to `turns` once `ERGONAUT_TURN_QUEUE=turns`; a separate `-Q turns`
+  worker keeps them clear of maintenance)
 - `start-celery-beat.sh`: beat (exactly one)
 
 Ergonaut also needs `ergonaut bots` (exactly one) for long-running bot

@@ -20,6 +20,15 @@ Stop sets ``ergonaut:turn:<session>:stop``; the running turn ends at its next
 step with status ``stopped``. An interrupt sets it and then queues a message,
 which runs as the next turn.
 
+Turns (``run_turn``, ``revalidate_pending``, ``deliver_thread_message``) go to
+``ERGONAUT_TURN_QUEUE`` (settings), so a user's message never waits behind
+maintenance. At most one ``run_turn`` (without an approval) and one delivery per
+session sit in the broker at a time (``_claim_dispatch``): the queued task serves
+everything that arrives meanwhile, so retries and sweeps can't pile up duplicates
+in front of other sessions' turns. Beat's ``redispatch_inboxes`` gives an inbox a
+turn when its messages waited past ``INBOX_STRANDED_SECONDS`` with no turn
+running and none queued (the task that should have taken them was lost).
+
 ``@bot_task`` work runs on its own ``bot_tasks`` queue. Every write to a session's
 messages or calls publishes its id on ``ergonaut:sessions``, which wakes the SSE
 streams watching it.
@@ -57,6 +66,16 @@ DEFAULT_TASK_WAIT_SECONDS = 600
 STOP_TTL_SECONDS = 10 * 60
 # Messages left in an inbox nobody drained (no worker running) expire after this long.
 INBOX_TTL_SECONDS = 24 * 60 * 60
+# A turn task (a user's turn or a bot-to-bot delivery) is killed after this long, so a
+# wedged turn can't hold a worker slot forever; its lock then expires, recover_dead_turns
+# fails its call and the inbox sweep sends on what waited behind it.
+TURN_TIME_LIMIT_SECONDS = int(os.environ.get("ERGONAUT_TURN_TIME_LIMIT_SECONDS") or 60 * 60)
+# A run_turn or delivery waiting in the broker for a session marks it this long; a newer
+# request for the same session is then served by the queued task. Expiry bounds how long
+# a lost task can hide the session from the sweeps.
+DISPATCH_PENDING_SECONDS = 10 * 60
+# Messages waiting this long in an idle session's inbox, with no turn queued, get one.
+INBOX_STRANDED_SECONDS = 60
 # Illustration jobs must return control to Celery before a typical web proxy timeout.
 ILLUSTRATION_SOFT_TIMEOUT_SECONDS = 170
 ILLUSTRATION_HARD_TIMEOUT_SECONDS = 200
@@ -132,6 +151,48 @@ def _inbox_key(session_id) -> str:
     return f"ergonaut:turn:{session_id}:inbox"
 
 
+def _pending_key(session_id, kind: str) -> str:
+    return f"ergonaut:turn:{session_id}:pending:{kind}"
+
+
+_local_pending: dict[str, float] = {}  # pending key -> when it expires (monotonic)
+
+
+def _claim_dispatch(session_id, kind: str) -> bool:
+    """Mark a ``kind`` task ("turn" or "delivery") as queued for the session. False when
+    one already is: that task, once it starts, serves this request too."""
+    key = _pending_key(session_id, kind)
+    client = redis_client()
+    if client is None:
+        with _local_guard:
+            if _local_pending.get(key, 0) > time.monotonic():
+                return False
+            _local_pending[key] = time.monotonic() + DISPATCH_PENDING_SECONDS
+            return True
+    return bool(client.set(key, "1", nx=True, ex=DISPATCH_PENDING_SECONDS))
+
+
+def _release_dispatch(session_id, kind: str) -> None:
+    """The queued task started (or was never sent): the next request queues its own."""
+    key = _pending_key(session_id, kind)
+    client = redis_client()
+    if client is None:
+        with _local_guard:
+            _local_pending.pop(key, None)
+        return
+    with contextlib.suppress(Exception):
+        client.delete(key)
+
+
+def dispatch_pending(session_id, kind: str) -> bool:
+    key = _pending_key(session_id, kind)
+    client = redis_client()
+    if client is None:
+        with _local_guard:
+            return _local_pending.get(key, 0) > time.monotonic()
+    return bool(client.exists(key))
+
+
 def turn_running(session_id) -> bool:
     """Whether a turn (or a thread message's delivery) holds the session's lock now."""
     client = redis_client()
@@ -199,6 +260,7 @@ def push_message(session_id, text: str, attachment_ids: list[str] | None = None,
             "text": text,
             "attachment_ids": [str(a) for a in attachment_ids or []],
             "authenticated_user_id": authenticated_user_id,
+            "queued_at": time.time(),
         }
     )
     client = redis_client()
@@ -390,7 +452,13 @@ def take_uploads(session, attachment_ids: list[str]) -> tuple[list, list]:
     return attachments, rows
 
 
-@shared_task(name="ergonaut.run_turn", ignore_result=True, bind=True, max_retries=None)
+@shared_task(
+    name="ergonaut.run_turn",
+    ignore_result=True,
+    bind=True,
+    max_retries=None,
+    time_limit=TURN_TIME_LIMIT_SECONDS,
+)
 def run_turn(  # noqa: PLR0913
     self,
     session_id: str,
@@ -411,6 +479,8 @@ def run_turn(  # noqa: PLR0913
     """
     from django_ergo.conversation.models import ConversationSession
 
+    if approve is None:
+        _release_dispatch(session_id, "turn")  # anything sent from now on queues a new one
     if message is not None:
         push_message(session_id, message, attachment_ids)
     session = ConversationSession.objects.select_related("user").get(id=session_id)
@@ -627,8 +697,21 @@ def queue_waiting(session_id) -> None:
     from django_ergo.bots import messaging
 
     if inbox_waiting(session_id):
-        run_turn.delay(str(session_id))
+        queue_inbox_turn(session_id)
     messaging.redispatch_waiting(session_id)
+
+
+def queue_inbox_turn(session_id) -> bool:
+    """Queue a run_turn to answer the session's inbox, unless one is already queued (it
+    takes everything in the inbox when it runs). Returns whether a task was sent."""
+    if not _claim_dispatch(session_id, "turn"):
+        return False
+    try:
+        run_turn.delay(str(session_id))
+    except Exception:
+        _release_dispatch(session_id, "turn")
+        raise
+    return True
 
 
 def record_failure(session, message: str | None, exc: Exception) -> None:
@@ -659,9 +742,13 @@ def queue_turn(
     """Queue a turn. Returns True when a worker will run it, False when it already ran."""
     from django.conf import settings
 
+    eager = getattr(settings, "CELERY_TASK_ALWAYS_EAGER", False)
+    if approve is None and not eager:
+        queue_inbox_turn(session_id)  # one already queued takes this message too
+        notify(session_id)
+        return True
     result = run_turn.delay(str(session_id), None, approve, [], approval_ids, False, authenticated_approval_id)
     notify(session_id)
-    eager = getattr(settings, "CELERY_TASK_ALWAYS_EAGER", False)
     # Eager, a message for a turn running in another request waits for that turn.
     return (not eager and result is not None) or (eager and turn_running(session_id))
 
@@ -703,21 +790,41 @@ def deliver_locked(message_id: str):
     return recipient_id
 
 
-@shared_task(name="ergonaut.deliver_thread_message", ignore_result=True)
+@shared_task(name="ergonaut.deliver_thread_message", ignore_result=True, time_limit=TURN_TIME_LIMIT_SECONDS)
 def deliver_thread_message(message_id: str) -> None:
     """Run the recipient's turn for a bot-to-bot message (see django_ergo.bots.messaging)."""
+    from django_ergo.conversation.models import ThreadMessage
+
+    recipient_id = ThreadMessage.objects.filter(id=message_id).values_list("recipient_session_id", flat=True).first()
+    if recipient_id is not None:
+        _release_dispatch(str(recipient_id), "delivery")  # later sends queue their own
     notify(deliver_locked(message_id))
 
 
 def queue_thread_message(message_id: str) -> None:
     """THREAD_MESSAGE_RUNNER: a worker delivers it. Without a broker, a background thread does,
-    since an eager task would run inside the sender's own turn."""
+    since an eager task would run inside the sender's own turn.
+
+    Delivery serves the recipient's oldest queued message, whichever id it was sent
+    for, so one task queued per recipient is enough: a dispatch while one waits in the
+    broker (a sweep, a turn's end, the next send) adds nothing."""
     from django.conf import settings
+    from django_ergo.conversation.models import ThreadMessage
 
     if getattr(settings, "CELERY_TASK_ALWAYS_EAGER", False):
         start_daemon(deliver_locked, message_id)
         return
-    deliver_thread_message.delay(message_id)
+    recipient_id = ThreadMessage.objects.filter(id=message_id).values_list("recipient_session_id", flat=True).first()
+    if recipient_id is None:
+        return
+    recipient_id = str(recipient_id)
+    if not _claim_dispatch(recipient_id, "delivery"):
+        return
+    try:
+        deliver_thread_message.delay(message_id)
+    except Exception:
+        _release_dispatch(recipient_id, "delivery")
+        raise
 
 
 @shared_task(name="ergonaut.archive_idle_threads", ignore_result=True)
@@ -862,6 +969,59 @@ def redispatch_thread_messages() -> int:
     from django_ergo.bots import messaging
 
     return messaging.redispatch_waiting(older_than=60)
+
+
+def stranded_inboxes(older_than: float = INBOX_STRANDED_SECONDS) -> list[str]:
+    """Sessions whose inbox has waited ``older_than`` seconds with no turn running and no
+    run_turn queued: the task that should have answered it was lost (a killed worker
+    child, a restart) or never sent."""
+    client = redis_client()
+    now = time.time()
+    if client is None:
+        with _local_guard:
+            candidates = [sid for sid, items in _local_inboxes.items() if items]
+    else:
+        candidates = []
+        for key in client.scan_iter(match="ergonaut:turn:*:inbox", count=500):
+            key = key.decode() if isinstance(key, bytes) else key
+            candidates.append(key.split(":")[2])
+    stranded = []
+    for session_id in candidates:
+        items = peek_inbox(session_id)
+        if not items:
+            continue
+        times = [item["queued_at"] for item in items if isinstance(item.get("queued_at"), int | float)]
+        if times:
+            age = now - min(times)
+        elif client is not None:
+            # Pushed before items carried a time: the key's TTL dates the newest push.
+            ttl = client.ttl(_inbox_key(session_id))
+            age = INBOX_TTL_SECONDS - ttl if ttl and ttl > 0 else older_than
+        else:
+            age = older_than
+        if age < older_than or turn_running(session_id) or dispatch_pending(session_id, "turn"):
+            continue
+        stranded.append(session_id)
+    return stranded
+
+
+@shared_task(name="ergonaut.redispatch_inboxes", ignore_result=True)
+def redispatch_inboxes(older_than: float = INBOX_STRANDED_SECONDS) -> list[str]:
+    """Give a turn to every stranded inbox (beat runs this), through the same
+    queue_inbox_turn a new message uses: the turn takes the session's lock, so it can't
+    overlap a running one, and an inbox with a turn already queued is left to it."""
+    from django_ergo.conversation.models import ConversationSession
+
+    sent = []
+    for session_id in stranded_inboxes(older_than):
+        if not ConversationSession.objects.filter(id=session_id).exists():
+            continue  # a deleted chat: its inbox just expires
+        if queue_inbox_turn(session_id):
+            sent.append(session_id)
+            notify(session_id)
+    if sent:
+        logger.warning("Redispatched %d stranded inboxes: %s", len(sent), ", ".join(sent))
+    return sent
 
 
 @shared_task(name="ergonaut.fire_wakes", ignore_result=True)
