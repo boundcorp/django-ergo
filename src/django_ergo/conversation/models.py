@@ -540,8 +540,8 @@ class ScheduleRun(models.Model):
 
     bot_name = models.CharField(max_length=100)
     schedule = models.CharField(max_length=100)
-    # The schedule's stable id (bot.yaml ``id``); "" on rows from before ids
-    # existed, whose key was their name.
+    # The schedule's stable id (bot.yaml ``id``, default its name): what a run
+    # is unique by. Rows from before ids existed were backfilled with their name.
     schedule_key = models.CharField(max_length=100, blank=True, default="")
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="+")
     minute = models.DateTimeField()
@@ -555,7 +555,7 @@ class ScheduleRun(models.Model):
     class Meta:
         constraints = [
             models.UniqueConstraint(
-                fields=["bot_name", "schedule", "user", "minute"],
+                fields=["bot_name", "schedule_key", "user", "minute"],
                 name="unique_schedule_run",
             )
         ]

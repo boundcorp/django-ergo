@@ -18,6 +18,7 @@
                                         # (code-only schedules: once, as the first admin)
         enabled: true
         id: weekly-meal-plan            # stable identity (default: name); rename ``name`` freely
+        aliases: [weekly meal plan]     # earlier keys (the old name) whose runs and threads this adopts
         continuity: true                # default false: list earlier runs' threads in each new one
         continuity_runs: 5              # how many (default 5, at most 20)
 
@@ -42,6 +43,9 @@ name, so existing schedules keep theirs). ``name`` is what people see and may
 change while ``id`` stays. Each thread a run creates records ``schedule_id``,
 ``schedule`` (the name then) and ``schedule_run`` in its metadata, and the
 ``ScheduleRun`` row records ``schedule_key``; these survive renames, and
+``aliases`` lists earlier keys (an old name) so adding an ``id`` to an
+existing schedule keeps its run history. A key or alias belongs to one
+schedule per bot. At most one run per key, person and minute is claimed, and
 threads stay linked after the schedule is disabled or removed from bot.yaml.
 With ``continuity: true`` the prompt that opens a new thread ends with a
 bounded list of this person's previous threads from the same schedule (newest
@@ -83,6 +87,7 @@ DEFAULT_CONTINUITY_RUNS = 5
 MAX_CONTINUITY_RUNS = 20
 CONTINUITY_SUMMARY_CHARS = 400
 CONTINUITY_MAX_CHARS = 6000
+MAX_KEY_LENGTH = 100
 KEY_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,99}")
 
 NAMES = {
@@ -101,6 +106,17 @@ FIELDS = [
 
 class ScheduleError(ValueError):
     pass
+
+
+def _aliases(name: str, data: dict) -> tuple[str, ...]:
+    raw = data.get("aliases") or []
+    if not isinstance(raw, list) or not all(
+        isinstance(a, str) and a.strip() and len(a.strip()) <= MAX_KEY_LENGTH
+        for a in raw
+    ):
+        msg = f"schedule {name}: aliases must be a list of earlier ids or names"
+        raise ScheduleError(msg)
+    return tuple(dict.fromkeys(a.strip() for a in raw))
 
 
 def _identity_options(name: str, data: dict) -> tuple[str, bool, int]:
@@ -309,12 +325,18 @@ class Schedule:
     enabled: bool = True
     timezone: str = ""
     id: str = ""  # stable identity; defaults to the name
+    aliases: tuple[str, ...] = ()  # earlier keys whose history this schedule adopts
     continuity: bool = False
     continuity_runs: int = DEFAULT_CONTINUITY_RUNS
 
     @property
     def key(self) -> str:
         return self.id or self.name
+
+    @property
+    def keys(self) -> tuple[str, ...]:
+        """Its key, then earlier keys it answers to."""
+        return tuple(dict.fromkeys((self.key, *self.aliases)))
 
     @classmethod
     def from_config(cls, data: dict) -> Schedule:  # noqa: C901 — mutually exclusive schedule formats
@@ -365,6 +387,7 @@ class Schedule:
         key, continuity, runs = _identity_options(name, data)
         return cls(
             id=key or name,
+            aliases=_aliases(name, data),
             continuity=continuity,
             continuity_runs=runs,
             name=name,
@@ -497,6 +520,13 @@ def run_due(bots: Iterable[Bot], now: datetime | None = None) -> list[str]:
                 moment = local_now(bot, user, now, schedule)
                 if not schedule.cron.matches(moment):
                     continue
+                if ScheduleRun.objects.filter(
+                    bot_name=bot.name,
+                    user=user,
+                    minute=now,
+                    schedule_key__in=schedule.keys,
+                ).exists():
+                    continue  # this identity already ran this minute (maybe under an old key)
                 try:
                     run = ScheduleRun.objects.create(
                         bot_name=bot.name,
@@ -614,19 +644,18 @@ def run_actions(run_id: int, registry=None) -> None:  # noqa: C901, PLR0912, PLR
 
 
 def find_schedule(bot: Bot, run) -> Schedule | None:
-    """The configured schedule a run was claimed for: by its stable key (so a
-    rename between claim and run still finds it), else by name (rows from
-    before keys existed)."""
+    """The configured schedule a run was claimed for: by its stable key or an
+    alias of it (so a rename between claim and run still finds it). Only a run
+    with no key at all (from before keys existed) falls back to the name; a run
+    whose key is gone fails rather than run a replacement."""
     schedules = bot.definition.schedules
     if run.schedule_key:
-        found = next((s for s in schedules if s.key == run.schedule_key), None)
-        if found is not None:
-            return found
-    return next((s for s in schedules if s.name == run.schedule), None)
+        return next((s for s in schedules if run.schedule_key in s.keys), None)
+    return next((s for s in schedules if run.schedule in s.keys), None)
 
 
-def previous_runs(bot: Bot, run, key: str, limit: int, exclude=()) -> list:
-    """This person's earlier threads of schedule ``key``, newest first.
+def previous_runs(bot: Bot, run, keys, limit: int, exclude=()) -> list:
+    """This person's earlier threads of a schedule (any of its ``keys``), newest first.
 
     Scoped to the bot and the run's user, whatever the thread's state
     (resolved and archived ones included). Threads from before keys existed
@@ -634,8 +663,9 @@ def previous_runs(bot: Bot, run, key: str, limit: int, exclude=()) -> list:
     """
     from django.db.models import Q
 
-    linked = Q(metadata__schedule_id=key) | Q(
-        metadata__schedule_id__isnull=True, metadata__schedule=key
+    keys = list(keys)
+    linked = Q(metadata__schedule_id__in=keys) | Q(
+        metadata__schedule_id__isnull=True, metadata__schedule__in=keys
     )
     return list(
         bot.sessions(run.user)
@@ -656,7 +686,7 @@ def continuity_text(bot: Bot, run, schedule: Schedule, exclude=()) -> str:
     from django_ergo.conversation.models import ConversationCompaction
 
     sessions = previous_runs(
-        bot, run, schedule.key, schedule.continuity_runs, exclude=exclude
+        bot, run, schedule.keys, schedule.continuity_runs, exclude=exclude
     )
     if not sessions:
         return ""

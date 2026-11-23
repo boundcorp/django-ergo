@@ -246,6 +246,7 @@ Each schedule has a stable identity and, optionally, memory of its earlier runs.
 ```yaml
 schedules:
   - id: weekly-report # stable key; defaults to name
+    aliases: [Monday review] # earlier keys (the old name) this schedule adopts
     name: Monday review # what people see; rename it freely
     cron: "0 8 * * mon"
     message: Review the week.
@@ -258,6 +259,17 @@ schedules:
   schedule's key is its `name`, so existing schedules keep the identity they
   had. Set `id` before renaming a schedule; renaming one without an `id`
   starts a new identity, and its older threads are no longer found.
+- **Adding an `id` to an existing schedule.** Its runs and threads so far are
+  recorded under its old name, which may not even be a valid id. List the old
+  name in `aliases` (as in the example above) and they are adopted: continuity
+  and run lookups match the `id` and every alias, and a run already claimed
+  under an alias in a minute stops a second claim under the new id. Old
+  `ScheduleRun` rows were backfilled with their name as key (migration 0054).
+  An `id` or alias may belong to only one schedule in a bot (`bot.yaml` is
+  rejected otherwise), and a run whose key matches no schedule's id or alias
+  fails; it is never run as a different schedule that happens to share the
+  name. A schedule is claimed at most once per key, person and minute, so
+  renaming within the same minute cannot deliver it twice.
 - **Links.** Every thread a run creates (`to: {thread: ...}`) records
   `schedule_id`, `schedule` (the name then) and `schedule_run` (the
   `ScheduleRun` id) in its metadata, and the run row records `schedule_key`.
@@ -279,7 +291,9 @@ schedules:
 - **Reading earlier runs.** The bot opens a listed chat with the history tools
   (`ergo_chat_history_open_link`, `_tail`, `_read`, `_search`). Those already
   cover all of the same person's chats with the same bot, resolved ones
-  included, and nobody else's, so there is no separate schedule tool. A run's
+  included, and nobody else's (`open_link` also opens that person's chats with
+  their other, non-private bots, an existing rule), so there is no separate
+  schedule tool. A run's
   list only ever names that person's threads with that bot.
 
 With `continuity` unset nothing changes: no list is added.

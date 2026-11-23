@@ -276,6 +276,109 @@ def test_run_found_by_key_after_rename_between_claim_and_run(setup, lee):
     )
     assert schedules.find_schedule(bot, run).name == "renamed"
     legacy = ScheduleRun.objects.create(
-        bot_name="kitchen", schedule="renamed", user=lee, minute=monday(1)
+        bot_name="kitchen",
+        schedule="renamed",
+        schedule_key="stable",
+        user=lee,
+        minute=monday(1),
     )
     assert schedules.find_schedule(bot, legacy).key == "stable"
+
+
+def two(a: dict, b: dict):
+    base = {"cron": "* * * * *", "message": "x"}
+    return BotDefinition.from_dict(
+        {"name": "k", "schedules": [{**base, **a}, {**base, **b}]}
+    )
+
+
+def test_duplicate_keys_and_aliases_are_rejected():
+    two({"name": "a", "id": "x"}, {"name": "b", "id": "y"})  # fine
+    for a, b in (
+        ({"name": "a", "id": "x"}, {"name": "b", "id": "x"}),
+        ({"name": "a", "id": "b"}, {"name": "b"}),  # b's key is "b"
+        (
+            {"name": "a", "id": "x", "aliases": ["old"]},
+            {"name": "b", "id": "y", "aliases": ["old"]},
+        ),
+        ({"name": "a", "id": "x"}, {"name": "b", "id": "y", "aliases": ["x"]}),
+    ):
+        with pytest.raises(BotDefinitionError, match="used by both"):
+            two(a, b)
+    for bad in ("old", [""], [3], ["x" * 101]):
+        with pytest.raises(BotDefinitionError):
+            two({"name": "a", "aliases": bad}, {"name": "b"})
+
+
+@pytest.mark.django_db(transaction=True)
+def test_rename_in_same_minute_claims_once(setup, lee):
+    first = setup(name="before", key="stable")
+    renamed = setup(name="after", key="stable")
+    assert schedules.run_due([first], monday(0))
+    assert schedules.run_due([renamed], monday(0)) == []
+    assert ScheduleRun.objects.count() == 1
+    assert ScheduleRun.objects.get().schedule_key == "stable"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_adopting_an_id_keeps_history_and_dedup(setup, lee):
+    old = setup(name="weekly report")  # implicit key: the name
+    run_week(old, 0)
+    adopted = setup(
+        name="weekly report",
+        key="weekly-report",
+        extra="continuity: true, aliases: ['weekly report'],",
+    )
+    # Same minute as the legacy-keyed run: not claimed twice.
+    assert schedules.run_due([adopted], monday(0)) == []
+    text = run_week(adopted, 1).text
+    assert "Earlier runs" in text
+    assert text.count("link /s/") == 1
+    # Without the alias the old history is not found (and nothing is guessed).
+    plain = setup(name="weekly report", key="weekly-report")
+    # (only the adopted run's thread, not the week-0 one under the old name)
+    assert run_week(plain, 2).text.count("link /s/") == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_missing_key_does_not_fall_back_to_a_replacement_by_name(setup, lee):
+    bot = setup(name="old", key="new-id")
+    run = ScheduleRun.objects.create(
+        bot_name="kitchen",
+        schedule="new-id-x",
+        schedule_key="gone",
+        user=lee,
+        minute=monday(0),
+    )
+    assert schedules.find_schedule(bot, run) is None
+    named = ScheduleRun.objects.create(
+        bot_name="kitchen",
+        schedule="old",
+        schedule_key="old",
+        user=lee,
+        minute=monday(1),
+    )
+    assert schedules.find_schedule(bot, named) is None  # name matches, key doesn't
+    schedules.run_actions(run.pk, bot.registry)
+    run.refresh_from_db()
+    assert run.status == "failed"
+    assert not ConversationSession.objects.filter(metadata__bot_role="thread").exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_backfill_migration_keys_legacy_rows(lee):
+    import importlib
+
+    from django.apps import apps
+
+    mod = importlib.import_module("django_ergo.migrations.0054_schedule_run_key_unique")
+    legacy = ScheduleRun.objects.create(
+        bot_name="kitchen", schedule="old name", user=lee, minute=monday(0)
+    )
+    keyed = ScheduleRun.objects.create(
+        bot_name="kitchen", schedule="n", schedule_key="k", user=lee, minute=monday(0)
+    )
+    mod.backfill_keys(apps, None)
+    legacy.refresh_from_db()
+    keyed.refresh_from_db()
+    assert (legacy.schedule_key, keyed.schedule_key) == ("old name", "k")
