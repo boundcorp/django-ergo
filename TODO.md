@@ -167,6 +167,7 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 - [x] **Page actions and live refresh**: `@page_action` functions a `.jhtml` page calls as the viewer with `ergo.call` (approval round trip, `PageActionCall` record, "Page actions since your last reply" context), pages re-render when a table they read changes (`table_changed`, `touch()`, SSE stream), folder pages served sandboxed with signed asset URLs. Spec: `docs/specs/page-actions.md`; example `examples/pantry/`.
 - [x] Page forms, row-edit and button blocks (`ergo.table.*`) and `ergo.ask` (parts 3 and 4 of the spec).
 
+- [ ] **Admission drain**: the database lease primitive is not wired into turn or worker admission or the upgrade gate. Fence every claim and preserve queued work, prove the lease survives rollout handoff, and integrate trusted rollout readiness and durable deployment-live events before enabling a drain.
 - [x] Upgrade path: `wait_idle` also waits for queued or running workers; `ergonaut upgrade` and `ERGONAUT_AUTO_UPGRADE_SECONDS` upgrade to a new GitHub release once idle through a pluggable `ERGONAUT_UPGRADER` (`systemd`, `command`, or a class in the bot repo); images record `ERGONAUT_VERSION`.
 - [ ] Start publishing GitHub releases of django-ergo (auto-upgrades follow `releases` by default; `ERGONAUT_UPGRADE_CHANNEL=branch:main` follows main).
 - [ ] Bots with bash/orca in a multi-user Ergonaut: approvals are admin-only now; consider per-plugin approver lists.

@@ -773,6 +773,21 @@ class RecurringWakeStatus(models.TextChoices):
     COMPLETED = "completed", "Completed"
 
 
+class AdmissionDrain(models.Model):
+    """Singleton used to serialize a drain lease with durable work claims."""
+
+    id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
+    owner = models.UUIDField(null=True)
+    expires_at = models.DateTimeField(null=True)
+    deadline = models.DateTimeField(null=True)
+
+    class Meta:
+        constraints = [_recurring_constraint(Q(id=1), "admission_drain_singleton")]
+
+    def __str__(self):
+        return "Admission drain lease"
+
+
 class RecurringWakeLock(models.Model):
     """One durable admission mutex, including when there are no schedules yet."""
 
