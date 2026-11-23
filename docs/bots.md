@@ -1026,6 +1026,7 @@ prompt for caching. The `orchestration` skill (loaded in main by default) has:
 | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `ergo_bot_list`       | The bots it can message, with their `description`s (also in the context block below)                                                                                                                                                                                                                                                                                                                                                                                                |
 | `ergo_thread_list`    | A bot's main chat, named chats and threads with the user (default: this bot). Use `query` to find a specific thread by title, chat name or ID prefix; all words must match, and resolved threads are included by default. Without a query only active threads are listed; `include_archived` overrides that choice. Results are newest first, limited to 50 by default and at most 50; use `limit` for fewer. Read a known thread ID directly with chat history instead of listing. |
+| `ergo_portfolio_status` | One read-only call for a **stored** status snapshot of the user's work across the bots this bot can message: active chats and threads, recently resolved threads, workers, pull requests and recent files. See [Portfolio status snapshot](#portfolio-status-snapshot) |
 | `ergo_thread_send`    | Message a bot's `main` chat, a named chat, a thread id, or a `new` thread; returns at once. A busy thread queues the message (in order, as its next turn) instead of refusing it; optional `interrupt` replaces this chat's own running request there                                                                                                                                                                                                                               |
 | `ergo_thread_forward` | Hand the user's own message (the one this turn answers) to a chat or thread, word for word with its author, time and files, plus an optional `note`. The recipient treats it as the user speaking and answers there; nothing comes back. Refused when the turn isn't answering the user                                                                                                                                                                                             |
 | `ergo_thread_stop`    | Stop the running turn of a thread this bot started (or one of its own), or end its turn that waits for approval (declining those tool calls), and cancel what it queued there                                                                                                                                                                                                                                                                                                       |
@@ -1080,6 +1081,61 @@ Delivery goes through `DJANGO_ERGO["THREAD_MESSAGE_RUNNER"]` (Ergonaut
 queues a Celery task) or a background thread. Set `orchestration: false` for
 a bot that never delegates; it has no `orchestration` skill (it still
 answers messages sent to it, and can message upward, below).
+
+
+### Portfolio status snapshot
+
+`ergo_portfolio_status(bot="", lookback_hours=72, limit=30, offset=0,
+resolved_limit=10, sources=[])` is in the `orchestration` skill (main chats of
+orchestrating bots load it by default), so a bot like Boundcorp Main answers
+"what is going on?" in one call instead of listing and reading threads.
+Implementation: `django_ergo.bots.snapshot`.
+
+It is a **stored snapshot**: rows already in the database, read in about 25
+queries however many chats there are. It never calls GitHub, another bot, a
+worker's host or a model, and has no live refresh. `snapshot.mode` says
+`stored_snapshot` and `snapshot.live_refresh` says `not performed`.
+
+| Key | Content |
+| --- | --- |
+| `snapshot` | `mode`, `generated_at`, `lookback_hours`/`lookback_from`, the freshness note |
+| `scope` | bots in scope (this bot, bots it may message that the user may use), the `bot` filter, sources |
+| `threads` | main chats, named chats and open threads, newest activity first: `state` (`working`, `waiting_for_approval`, `idle`), `recorded` signals, the latest compaction `summary` and `latest_reply` (text, type, time), links (`/s/<id>`) |
+| `resolved` | threads resolved within the lookback (`updated_at >= now - lookback`, so the boundary is included): who, when, the `resolved_summary` |
+| `workers` | owner chat, status, progress line, last activity (a worker's own activity time when it keeps one); running first |
+| `pull_requests` | the stored PR inventory (`github_pr` files of chats in scope, deduplicated by URL, with the chats that recorded it): `state`, `checks`, `checks_stored_at`, `review: "not stored"`, `mergeable: "not stored"` |
+| `attachments` | recent file metadata with a download `link` only for files the caller may read |
+| `coverage` | per source: `status`, `returned`, `limit`, `total`, `truncated`, `freshness` (`read_at`, `newest`, `oldest`), and `next_offset` for threads |
+| `errors`, `partial` | a failing source is named (`"workers unavailable (RuntimeError)"`, never the error text); the others still return |
+
+Rules it keeps:
+
+- **Recorded state only.** Blockers are what is stored: a pending approval, open
+  requests in and out, a reply that asks the user, a chat waiting on another
+  chat's approval. Nothing is inferred, so there is no "ready to resolve" and no
+  "stalled". A state that isn't stored reads `unknown` or `not stored`.
+- **Freshness.** PR `state`, `checks` and `checks_stored_at` are whatever the
+  last refresh (`conversation.links.refresh_pull_request`, run by the app on a
+  schedule) stored; a PR that was never refreshed says `not stored`. The
+  snapshot never implies a check was fetched now. Review state is not stored
+  anywhere today, so it is always `not stored`.
+- **Permissions.** Only the caller's user's chats, only bots the caller may
+  message (private bots never appear, and a `bot` filter naming one fails with
+  the same error as a missing bot). Workers and PRs appear only under chats in
+  scope. A file of another chat is listed only when this bot's `attachments`
+  plugin allows other sessions, and a private-export copy only in the chat it
+  was exported to; no count, name or link outside that scope is returned.
+- **Bounded.** Defaults and maximums: threads 30/100, resolved 10/30, workers
+  20/50, PRs 20/50, files 15/40, lookback 72h/720h; summaries are clipped to 300
+  characters and replies to 500. Truncation is marked in `coverage`.
+- **Read-only.** Named and permanent chats are listed as they are; the call
+  changes no chat, worker or file.
+
+Limitations: ordering of active chats uses the latest structured call or
+session update, not external events; the `attachments` and PR lists scan stored
+rows only (a PR recorded as text but never turned into a file is absent);
+links are relative to the Ergonaut host; a PR's review state and mergeability
+need a future stored field.
 
 ### Budgeted turns
 
