@@ -2492,6 +2492,19 @@ def test_permanence_toggle_and_close_permissions(client, cook, bot_folder, use_b
     url = f"/api/sessions/{thread['id']}"
     assert not thread["is_permanent"]
     assert post(client, f"{url}/permanent", {"is_permanent": True}).json()["is_permanent"]
+    from django.test import Client
+
+    from ergonaut.apps.users.models import ApiKey
+
+    _, bot_key = ApiKey.issue(cook, "tool")
+    bot_client = Client()
+    bot_response = bot_client.post(
+        f"{url}/permanent",
+        json.dumps({"is_permanent": False}),
+        content_type="application/json",
+        HTTP_AUTHORIZATION=f"Bearer {bot_key}",
+    )
+    assert bot_response.status_code == 403
     refused = post(client, f"{url}/close")
     assert refused.status_code == 409 and "permanent" in refused.json()["detail"]
     other = get_user_model().objects.create_user("other-permanence", password="pw")

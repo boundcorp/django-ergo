@@ -1901,6 +1901,10 @@ class PermanentSessionIn(Schema):
 
 @router.post("/sessions/{session_id}/permanent", response=SessionOut)
 async def set_session_permanent(request, session_id: str, data: PermanentSessionIn):
+    # API keys are also used by bot tools and carry only a user's identity.
+    # Require an interactive session to remove a protection.
+    if not data.is_permanent and request.headers.get("Authorization", "").lower().startswith("bearer "):
+        raise HttpError(403, "Remove permanence in the chat UI")
     session = await aget_object_or_404(ConversationSession.objects.select_related("user"), id=uuid_or_404(session_id))
     if not request.auth.is_active or (session.user_id != request.auth.pk and not request.auth.is_superuser):
         raise HttpError(403, "You cannot manage this chat")
