@@ -470,7 +470,13 @@ class Blocks:
         if values is not None and not isinstance(values, dict):
             msg = "form values must be an object"
             raise PageError(msg)
-        _, editable = self._editable_fields(table, fields)
+        from django_ergo.bots.tables import check_generic_writes
+
+        model, editable = self._editable_fields(table, fields)
+        try:
+            check_generic_writes(model, "add")
+        except ValueError as exc:
+            raise PageError(str(exc)) from exc
         caption = f"<h3>{escape(title)}</h3>" if title else ""
         return Markup(  # noqa: S704 — form labels and values are escaped
             f"{caption}{self._form_script()}{self._form(table, editable, values or {}, submit, action='add')}"
@@ -503,7 +509,13 @@ class Blocks:
                 if field not in ("created_at", "updated_at")
             ]
         )
-        can_write = (edit or delete) and getattr(view._model, "page_writes", True)  # noqa: SLF001
+        from django_ergo.bots.tables import generic_write_allowed
+
+        model = view._model  # noqa: SLF001
+        page_writes = getattr(model, "page_writes", True)
+        edit = edit and page_writes and generic_write_allowed(model, "update")
+        delete = delete and page_writes and generic_write_allowed(model, "delete")
+        can_write = edit or delete
         editable = self._editable_fields(table)[1] if can_write and edit else []
         head = "".join(f"<th>{escape(column)}</th>" for column in cols)
         if can_write:

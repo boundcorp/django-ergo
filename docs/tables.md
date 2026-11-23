@@ -76,12 +76,18 @@ fields, then offers:
 | `ergo_table_update(table, id, values)` | change fields of one row |
 | `ergo_table_delete(table, id)` | delete one row, after approval |
 
+Tables can declare `generic_writes = {"add"}` for append-only generic tools and
+pages, or use any collection of `add`, `update`, and `delete`. `True` (the
+default) allows all three; `False` allows none. Upsert requires both add and
+update. The schema reports the allowed operations in `writes`.
+
 Tables reserved for dedicated tools can declare `generic_writes = False`.
 This rejects add, update, delete and batch (including upsert) through generic
 table tools and page actions, while queries remain available. Ordinary tables
 remain writable by default. This is a boundary for those generic interfaces,
 not database authorization: trusted bot code, ORM, shell and custom tools can
-still write and must enforce their own invariants. `page_writes = False` alone
+still write and must enforce their own invariants. Migrations and cascades are
+also unrestricted; this is not storage-level immutability. `page_writes = False` alone
 only disables page actions.
 
 Use `ergo_table_schema` for writable field names. Foreign keys to another
