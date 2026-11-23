@@ -551,7 +551,7 @@ def ergo_portfolio_status(  # noqa: PLR0913
         "session_ids": {
             "type": "array",
             "items": {"type": "string"},
-            "description": "Explicitly selected non-personal session IDs; default empty, maximum 200.",
+            "description": "Optional explicit session IDs (maximum 200); each must classify as non-personal. Omit to discover them automatically.",
         },
     },
     required=["end_utc"],
@@ -559,7 +559,7 @@ def ergo_portfolio_status(  # noqa: PLR0913
 def ergo_self_health_metrics(
     ctx: ToolContext, end_utc: str, session_ids: list[str] | None = None
 ) -> dict:
-    """Aggregate recorded health metrics for explicitly selected accessible non-personal sessions; no message payloads. Empty selection is the default. Counts have source and coverage limits."""
+    """Aggregate recorded health metrics over seven days for accessible sessions the owner classified non-personal (discovered automatically when session_ids is omitted, capped at 200); no message payloads. Reports excluded and truncated counts. Counts have source and coverage limits."""
     from django_ergo.bots.self_health import report
 
     try:

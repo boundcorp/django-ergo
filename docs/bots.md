@@ -2746,15 +2746,36 @@ limited to Fireworks.
 ### Self-health metrics
 
 `ergo_self_health_metrics(end_utc, session_ids)` returns stored aggregate counts
-for an explicit, half-open seven-day UTC window ending at the timezone-aware
-`end_utc`. `session_ids` defaults to an empty selection and is capped at 200;
-each selected session must belong to the current user and to a bot the caller
-may access. Private bots are excluded. There is no personal-chat classification
-in the session model: the caller must select only non-personal conversations.
-The response reports this limitation and does not claim an exhaustive inventory.
-An empty selection is not evidence of zero activity. The caller must be the
-authenticated session owner and have access to the calling bot.
-No message text, titles or tool arguments are returned.
+for a half-open seven-day UTC window ending at the timezone-aware `end_utc`.
+Only sessions the owner positively classified as non-personal are counted.
+
+Classification comes from `bot.yaml`, never from a bot or chat name:
+
+```yaml
+self_health:
+  scope: non_personal        # or personal; unset means unclassified
+  include_sessions: []       # session UUIDs counted although the bot is unclassified
+  exclude_sessions: []       # session UUIDs never counted
+```
+
+A session counts when its bot is not `private`, it is not in `exclude_sessions`,
+and either the bot declares `scope: non_personal` or the session is in
+`include_sessions`. Everything else is excluded: private bots, `scope: personal`
+bots, denied sessions, and unclassified bots (the default). Exclusion wins over
+inclusion.
+
+When `session_ids` is omitted or empty, the tool discovers sessions: the
+caller's own sessions in the calling bot and the bots it may message, with a
+stored message, worker start or completion, fired wake or dispatched recurring
+wake inside the window, that classify as non-personal. They are ordered by
+creation time then id and capped at 200. The response's `scope.discovery`
+reports how many active sessions were considered and included, excluded counts
+by reason (`private_bot`, `personal_bot`, `denied_session`, `unclassified`,
+`out_of_scope`), and whether the cap truncated the list; truncation or any
+exclusion makes coverage "partial". An explicit `session_ids` list (maximum
+200) must pass the same classification and belong to the current user, or the
+call fails. The caller must be the authenticated session owner and have access
+to the calling bot. No message text, titles or tool arguments are returned.
 
 Workers are counted once per stored worker row by creation or completion time,
 with current status for completed rows; one-shot and recurring wakes use separate
