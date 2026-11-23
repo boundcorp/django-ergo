@@ -745,7 +745,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
         <button
           type="button"
           className="thread-option-action thread-option-danger"
-          disabled={archived || busy || detail.session.is_permanent}
+          disabled={archived || closed || busy || detail.session.is_permanent}
           onClick={async () => {
             await api.close(id).catch(e => setError(String(e.message ?? e)))
             closeOptions()
@@ -755,7 +755,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
         >
           <OptionIcon path="m7 12 3 3 7-7M21 12a9 9 0 1 1-9-9" />
           <span>
-            {archived ? 'Resolved' : 'Resolve chat'}
+            {archived || closed ? 'Resolved' : detail.session.role === 'thread' ? 'Resolve thread' : 'Resolve chat'}
             <small>Archives this chat and stops its queued/running workers.</small>
           </span>
         </button>
