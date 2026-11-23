@@ -330,3 +330,26 @@ def test_memory_events_are_counted():
     assert sample("ergonaut_memory_retain_total", **labels, outcome="queued", reason="") - before["retain"] == 1
     # skipped prefetches carry no latency or fact count
     assert sample("ergonaut_memory_prefetch_facts_count", **labels) - before["facts"] == 1
+
+
+def test_pr_sync_events_are_counted():
+    labels = {"bot": "mem-bot"}
+    before = {
+        o: sample("ergonaut_memory_pr_sync_total", **labels, outcome=o, reason=r)
+        for o, r in (("written", ""), ("skipped", "unchanged"), ("failed", "write"))
+    }
+    send = signals.memory_event.send
+    for outcome, reason, count in (("written", "", 3), ("skipped", "unchanged", 2), ("failed", "write", 1)):
+        send(
+            None,
+            plugin="hindsight_memory",
+            bot_name="mem-bot",
+            event="pr_sync",
+            outcome=outcome,
+            reason=reason,
+            duration=0.0,
+            count=count,
+        )
+    for outcome, reason, count in (("written", "", 3), ("skipped", "unchanged", 2), ("failed", "write", 1)):
+        after = sample("ergonaut_memory_pr_sync_total", **labels, outcome=outcome, reason=reason)
+        assert after - before[outcome] == count

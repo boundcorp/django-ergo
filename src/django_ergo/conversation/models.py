@@ -1175,6 +1175,30 @@ class UsageSync(models.Model):
         return f"usage sync {self.succeeded_at or 'never'}"
 
 
+class HindsightPrSync(models.Model):
+    """Where a bot's pull request sync to Hindsight memory got to, per repo
+    (see plugins.hindsight_pr_events). ``cursor`` is the newest ``updatedAt`` fully
+    written; ``hashes`` maps a PR number to the hash of what was last written, so an
+    unchanged PR is skipped. Losing a row only means a re-run of the backfill: the
+    documents are replaced, never duplicated."""
+
+    bot_name = models.CharField(max_length=100)
+    repo = models.CharField(max_length=200)
+    cursor = models.DateTimeField(null=True, blank=True)
+    hashes = models.JSONField(default=dict, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["bot_name", "repo"], name="hindsight_pr_sync_unique"
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.bot_name} {self.repo} {self.cursor or 'never'}"
+
+
 class RoutingPolicy(models.Model):
     """routing.md compiled into routing rules, keyed by the text's hash."""
 

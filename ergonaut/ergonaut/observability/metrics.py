@@ -238,3 +238,9 @@ memory_retain_total = Counter(
     "Hindsight retains queued or skipped (machine turns, config-only turns, empty or failed turns).",
     labelnames=("bot", "outcome", "reason"),
 )
+
+memory_pr_sync_total = Counter(
+    f"{METRIC_PREFIX}_memory_pr_sync_total",
+    "Pull request records synced to Hindsight memory: written, skipped (unchanged, rule, state) or failed (github, write).",
+    labelnames=("bot", "outcome", "reason"),
+)

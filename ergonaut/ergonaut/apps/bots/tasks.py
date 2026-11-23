@@ -790,6 +790,17 @@ def hindsight_retain(bank: str, item: dict) -> None:
     retain_item(bank, item)
 
 
+@shared_task(name="ergonaut.hindsight_sync_pull_requests", ignore_result=True, queue="bot_tasks")
+def hindsight_sync_pull_requests() -> dict:
+    """Write recently updated pull requests to Hindsight memory, one document each
+    (beat runs this every 30 minutes; see docs/hindsight-memory.md)."""
+    from django_ergo.bots import webhooks
+    from django_ergo.plugins.hindsight_pr_events import sync_all
+
+    registry = webhooks.get_registry()
+    return sync_all(registry) if registry is not None else {}
+
+
 def queue_hindsight_retain(bank: str, item: dict) -> None:
     hindsight_retain.delay(bank, item)
 

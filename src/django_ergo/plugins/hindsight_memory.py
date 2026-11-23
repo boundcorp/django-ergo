@@ -267,6 +267,12 @@ class HindsightMemoryPlugin(BotPlugin):
         self.top_k_with_models = max(
             1, int(self.config.get("top_k_with_models", min(3, self.top_k)))
         )
+        from django_ergo.plugins.hindsight_pr_events import PrEventsConfig
+
+        self.pr_events = PrEventsConfig(
+            self.config.get("pr_events") or {},
+            list(getattr(getattr(self.bot, "definition", None), "pull_requests", [])),
+        )
         self.enabled = _service() is not None
         if not self.enabled:
             logger.warning("Hindsight memory disabled: HINDSIGHT_URL is unset")
