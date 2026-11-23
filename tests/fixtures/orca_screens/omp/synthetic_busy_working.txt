@@ -1,4 +1,0 @@
- Reading src/django_ergo/plugins/orca.py
- ⠼ Working… (2m 4s · esc to interrupt)
-╭── π / ◑ Grok 4.7 🙈 / 📁 …ergo / ⑂ leewardbound/some-task ─4%────┃───500K───╮
-╰─                                                                            ─╯

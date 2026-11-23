@@ -173,3 +173,19 @@ def test_snapshot_round_trips_and_ignores_colors():
     assert Snapshot.from_dict(None) is None
     assert clean_lines(["\x1b[1;32m✓ built\x1b[0m", "  "]) == ["✓ built"]
     assert fingerprint(clean_lines(["\x1b[1mhi"])) == fingerprint(["hi"])
+
+
+def test_omp_observed_spinner_advances_freezes_and_returns_to_idle():
+    busy = screen("omp/busy_spinner.txt")
+    advanced = screen("omp/busy_spinner_advanced.txt")
+    idle = screen("omp/done_idle_prompt.txt")
+    first = classify("omp", busy, None, NOW)
+    assert first.state == BUSY
+    frozen = classify("omp", busy, first.snapshot, NOW + 480)
+    assert frozen.state == STALLED
+    moving = classify("omp", advanced, frozen.snapshot, NOW + 481)
+    assert (moving.state, moving.unchanged_for) == (BUSY, 0)
+    assert classify("omp", busy + idle, moving.snapshot, NOW + 482).state == DONE
+    assert (
+        classify("omp", ["⠸ Thinking / not an omp header"], None, NOW).state == UNKNOWN
+    )

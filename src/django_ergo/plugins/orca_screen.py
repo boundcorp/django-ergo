@@ -161,6 +161,9 @@ CODEX = Signatures(
     chrome=_rx(r"OpenAI Codex", r"^\s*›", r"esc to interrupt", r"\d+% context left"),
 )
 
+OMP_HEADER = _rx(r"^\s*╭──\s*(?:π|[⠁-⣿]\s+[^/]+)\s*/\s*⬢")
+OMP_BUSY_HEADER = _rx(r"^\s*╭──\s*[⠁-⣿]\s+[^/]+\s*/\s*⬢")
+
 OMP = Signatures(
     busy=_rx(
         r"esc to (?:interrupt|cancel)",
@@ -183,7 +186,7 @@ OMP = Signatures(
     ),
     exit=_rx(r"^\s*Goodbye[.!]?\s*$"),
     # The turn's "※ recap: ..." summary sits right above the header box.
-    done=_rx(r"^\s*※ recap:"),
+    done=_rx(r"^\s*※ recap:", r"^\s*╭──\s*π\s*/\s*⬢"),
     # "╭── π / ◑ Grok 4.6 👁 / 📁 …vbox / ⑂ main *3 ?1 ──9%──┃──500K──╮"
     chrome=_rx(r"╭── π / ", r"^\s*π / "),
 )
@@ -308,7 +311,18 @@ def classify(  # noqa: C901, PLR0911, PLR0912, PLR0913 — one table-driven deci
         return verdict(WAITING, "waiting on a prompt", asking)
 
     # Working wins over error text: an agent may quote "401 Unauthorized" itself.
-    if working := _search(sig.busy, bottom):
+    # omp redraws its header as the spinner advances and restores π at idle.
+    # Only the newest header describes the current state, not scrollback.
+    omp_header = _search(OMP_HEADER, bottom) if sig is OMP else ""
+    busy_lines = (
+        [line for line in bottom if not OMP_HEADER.search(line)]
+        if sig is OMP
+        else bottom
+    )
+    working = _search(sig.busy, busy_lines)
+    if omp_header and OMP_BUSY_HEADER.search(omp_header):
+        working = omp_header
+    if working:
         if unchanged >= stall_after:
             return verdict(STALLED, "busy indicator frozen", working)
         return verdict(BUSY, "working", working)
