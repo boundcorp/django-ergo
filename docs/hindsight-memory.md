@@ -106,3 +106,24 @@ ergonaut manage hindsight_backfill --scope named --out ~/hindsight-backfill --ba
 ```
 
 `--scope` is `named` (named chats), `top` (plus main chats) or `all` (plus threads). Keep `--out` outside the repo: it holds chat content. Supply each bank explicitly with `--bank`; the command does not read bot bank configuration. Banks that are protected (`personal`) are counted but never exported.
+
+For a separately approved named-chat pilot, review the export first and use the
+operator script against an authenticated Hindsight connection (for example, a
+local port-forward). Set `HINDSIGHT_API_KEY` securely in the environment, then
+run one batch per invocation:
+
+```sh
+python scripts/hindsight_ingest_named.py --export ~/hindsight-backfill-dryrun \
+  --checkpoint ~/hindsight-backfill-dryrun/checkpoint.json
+```
+
+The script only accepts named chats mapped to the `ergonaut` bank, checks each
+ID against Hindsight, and writes a durable intent before submitting. It waits
+for that batch's operation and up to a minute for the shared bank queue to
+settle. Repeat the command after checking the queue and any cost and scope
+limits imposed on the run. The checkpoint contains document and operation IDs;
+keep it private alongside the export. If interrupted with an `intent` or
+`submitted` batch, inspect that operation and reconcile the checkpoint manually
+before continuing; an ambiguous submission must never be blindly replayed.
+Existing IDs are skipped because retain replaces existing documents. This tool
+does not authorize full-history ingestion or establish a spending limit.
