@@ -16,6 +16,10 @@ Who may message whom:
   descriptions (also in the "Bots and threads" context block, bots.overview).
 - ``ergo_thread_list``: a bot's main chat, named chats and threads with this
   user, so the bot can choose where a message should go.
+- ``ergo_portfolio_status``: one read-only call for a stored status snapshot of
+  everything the caller can see: active chats and threads, recently resolved
+  work, workers, pull requests and recent files (``bots.snapshot``). It reads
+  the database only: no GitHub, other-bot or model calls.
 - ``ergo_thread_send``: message a main or named chat, a thread, or a new thread, of
   this bot or one it can message. It returns at once; the recipient's reply
   arrives later as a new message in this session (see
@@ -478,6 +482,63 @@ def ergo_bot_list(ctx: ToolContext) -> str:
         for b in bots
     ]
     return "Bots you can message:\n" + "\n".join(lines)
+
+
+@bot_tool(
+    takes_context=True,
+    parameters={
+        "bot": {
+            "type": "string",
+            "description": "Only this bot (default: this bot and every bot you can message).",
+        },
+        "lookback_hours": {
+            "type": "integer",
+            "description": "How far back resolved work, workers, files and closed PRs reach (default 72, maximum 720).",
+        },
+        "limit": {
+            "type": "integer",
+            "description": "Active chats and threads to return (default 30, maximum 100).",
+        },
+        "offset": {
+            "type": "integer",
+            "description": "Skip this many active chats and threads (use coverage.threads.next_offset).",
+        },
+        "resolved_limit": {
+            "type": "integer",
+            "description": "Recently resolved threads to return (default 10, maximum 30).",
+        },
+        "sources": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Only these parts: threads, resolved, workers, pull_requests, attachments (default all).",
+        },
+    },
+    required=[],
+)
+def ergo_portfolio_status(  # noqa: PLR0913
+    ctx: ToolContext,
+    bot: str = "",
+    lookback_hours: int = 72,
+    limit: int = 0,
+    offset: int = 0,
+    resolved_limit: int = 0,
+    sources: list[str] | None = None,
+) -> dict:
+    """One read-only STORED status snapshot of the user's work across the bots you can message: active chats and threads (with recorded state, stored summary and latest reply), recently resolved threads, workers, pull requests (stored check state; review state is "not stored") and recent files. It never calls GitHub, other bots or a model, so it is as fresh as what was last stored (see snapshot, coverage and freshness in the result). Use it first for "what's going on?" instead of listing and reading threads one by one."""
+    from django_ergo.bots import snapshot
+
+    try:
+        return snapshot.portfolio_status(
+            ctx,
+            bot=bot,
+            lookback_hours=lookback_hours,
+            limit=limit,
+            offset=offset,
+            resolved_limit=resolved_limit,
+            sources=sources,
+        )
+    except ValueError as exc:
+        raise ToolError(str(exc)) from None
 
 
 @bot_tool(
@@ -1166,6 +1227,7 @@ def orchestrator_toolkit(ctx: ToolContext) -> FunctionToolkit:
     functions = [
         ergo_bot_list,
         ergo_thread_list,
+        ergo_portfolio_status,
         ergo_thread_send,
         ergo_thread_forward,
         ergo_thread_stop,
