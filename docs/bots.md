@@ -2745,6 +2745,8 @@ each selected session must belong to the current user and to a bot the caller
 may access. Private bots are excluded. There is no personal-chat classification
 in the session model: the caller must select only non-personal conversations.
 The response reports this limitation and does not claim an exhaustive inventory.
+An empty selection is not evidence of zero activity. The caller must be the
+authenticated session owner and have access to the calling bot.
 No message text, titles or tool arguments are returned.
 
 Workers are counted once per stored worker row by creation or completion time,
@@ -2753,6 +2755,6 @@ fired and dispatch timestamps. Tool failures are stored error result blocks, wit
 stored result blocks as denominator, not a complete count of attempted calls.
 Agent token totals come only from timestamped native usage events linked to the
 selected workers, never cumulative worker totals. When multiple native sessions
-contribute, totals are null because their events may overlap. Null token fields and missing
+contribute, totals are null because their events may overlap. Any token field with missing values is suppressed rather than reported as a partial sum. Null token fields and missing
 or untimestamped events remain unknown, and event coverage is partial. Counts
 are observations of stored data, not a live refresh or a historical status audit.

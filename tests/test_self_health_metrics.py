@@ -180,3 +180,43 @@ def test_multiple_native_sessions_suppress_ambiguous_token_totals(scope):
     usage = report(scope, end.isoformat(), [str(scope.session.pk)])["agent_tokens"]
     assert usage["events"] == 2 and usage["native_sessions"] == 2
     assert usage["input_tokens"] is None
+
+
+def test_authentication_and_caller_access_are_required(scope):
+    from django.contrib.auth.models import AnonymousUser
+
+    end = datetime.now(UTC).isoformat()
+    scope.user = AnonymousUser()
+    with pytest.raises(ValueError, match="authenticated authorized"):
+        report(scope, end, [str(scope.session.pk)])
+    scope.user = scope.session.user
+    scope.bot.definition.allowed_users = ["someone-else"]
+    with pytest.raises(ValueError, match="authenticated authorized"):
+        report(scope, end, [str(scope.session.pk)])
+
+
+def test_partial_token_fields_are_unknown(scope):
+    end = datetime.now(UTC) + timedelta(seconds=1)
+    worker = Worker.objects.create(
+        session=scope.session, bot_name="shop", title="work", function="agent:orca"
+    )
+    native = AgentSession.objects.create(
+        owner=scope.session.user,
+        cli="codex",
+        host_namespace="test",
+        native_session_id="partial",
+    )
+    run = AgentRunSession.objects.create(
+        session=native, worker=worker, launch_key="partial", segment_key="partial"
+    )
+    for key, value in (("one", 12), ("two", None)):
+        AgentUsageEvent.objects.create(
+            session=native,
+            run_session=run,
+            source_event_key=key,
+            occurred_at=end - timedelta(seconds=1),
+            input_tokens=value,
+        )
+    usage = report(scope, end.isoformat(), [str(scope.session.pk)])["agent_tokens"]
+    assert usage["events"] == 2 and usage["known_input"] == 1
+    assert usage["input_tokens"] is None
