@@ -3,6 +3,8 @@ import uuid
 from django import VERSION as DJANGO_VERSION
 from django.contrib.auth import get_user_model
 from django.db import models
+from django.db import router
+from django.db import transaction
 from django.db.models import Q
 
 from django_ergo.mixins import TimeStampedMixin
@@ -50,6 +52,10 @@ def normalize_compaction_mode(mode: str | None) -> str | None:
     return LEGACY_COMPACTION_MODES.get(mode, mode)
 
 
+class PermanentChatError(ValueError):
+    """A permanent chat cannot be closed."""
+
+
 class ConversationSession(TimeStampedMixin):
     """A conversation session with an AI engine."""
 
@@ -84,6 +90,10 @@ class ConversationSession(TimeStampedMixin):
         choices=SessionStatus.choices,
     )
     metadata = models.JSONField(default=dict, blank=True)
+    is_permanent = models.BooleanField(default=False, db_default=False)
+    permanence_initialized = models.BooleanField(
+        default=False, db_default=False, editable=False
+    )
     # Kept separate from metadata so stale metadata writers cannot undo a rename.
     user_title = models.CharField(max_length=200, null=True, blank=True)  # noqa: DJ001 - NULL means automatic
     # Overrides workflow.instructions when set.
@@ -120,6 +130,29 @@ class ConversationSession(TimeStampedMixin):
         # A full save of a stale instance must not overwrite a concurrent rename.
         # Explicit updates to user_title remain possible through update_fields.
         update_fields = kwargs.get("update_fields", args[3] if len(args) > 3 else None)  # noqa: PLR2004
+        if (
+            not self._state.adding
+            and self.status == SessionStatus.COMPLETED
+            and (update_fields is None or "status" in update_fields)
+        ):
+            using = kwargs.get("using") or router.db_for_write(
+                type(self), instance=self
+            )
+            with transaction.atomic(using=using):
+                previous = (
+                    type(self)
+                    .objects.using(using)
+                    .select_for_update()
+                    .only("status", "is_permanent")
+                    .get(pk=self.pk)
+                )
+                if previous.status != SessionStatus.COMPLETED:
+                    previous.require_closable()
+                return self._save_preserving_user_fields(*args, **kwargs)
+        return self._save_preserving_user_fields(*args, **kwargs)
+
+    def _save_preserving_user_fields(self, *args, **kwargs):
+        update_fields = kwargs.get("update_fields", args[3] if len(args) > 3 else None)  # noqa: PLR2004
         preserve = (
             not self._state.adding
             and update_fields is None
@@ -127,12 +160,27 @@ class ConversationSession(TimeStampedMixin):
         )
         if not preserve:
             return super().save(*args, **kwargs)
-        title = self.user_title
+        title, permanent, initialized = (
+            self.user_title,
+            self.is_permanent,
+            self.permanence_initialized,
+        )
         try:
             self.user_title = models.F("user_title")
+            self.is_permanent = models.F("is_permanent")
+            self.permanence_initialized = models.F("permanence_initialized")
             return super().save(*args, **kwargs)
         finally:
-            self.user_title = title
+            self.user_title, self.is_permanent, self.permanence_initialized = (
+                title,
+                permanent,
+                initialized,
+            )
+
+    def require_closable(self):
+        if self.is_permanent:
+            msg = "This chat is permanent; remove permanence before resolving it."
+            raise PermanentChatError(msg)
 
     def __str__(self):
         return f"{self.user} - {self.engine_type} ({self.status})"

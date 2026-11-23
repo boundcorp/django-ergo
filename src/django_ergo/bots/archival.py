@@ -23,6 +23,7 @@ from django.db.models.functions import Greatest
 from django.utils import timezone
 
 from django_ergo.conversation.models import ConversationSession
+from django_ergo.conversation.models import PermanentChatError
 from django_ergo.conversation.models import StructuredCallStatus
 from django_ergo.conversation.models import ThreadMessageStatus
 from django_ergo.conversation.models import Worker
@@ -47,6 +48,7 @@ def archive(session: ConversationSession, reason: str = "") -> None:
 
     with transaction.atomic():
         locked = ConversationSession.objects.select_for_update().get(pk=session.pk)
+        locked.require_closable()
         locked.status = "completed"
         locked.metadata = {
             **(locked.metadata or {}),
@@ -120,6 +122,14 @@ def archive_idle_threads(bots: Iterable[Bot], now: datetime | None = None) -> li
     archived = []
     for bot in bots:
         for session in idle_threads(bot, now):
-            archive(session, reason="idle")
+            try:
+                archive(session, reason="idle")
+            except PermanentChatError:
+                import logging
+
+                logging.getLogger(__name__).info(
+                    "Skipped permanent chat during idle archival"
+                )
+                continue
             archived.append(str(session.id))
     return archived

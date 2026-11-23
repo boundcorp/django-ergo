@@ -149,6 +149,7 @@ class SessionOut(Schema):
     waiting_for: str = ""  # approval, question, failure or blocked (a chat it waits on needs an approval)
     status_line: str = ""
     pinned: bool = False
+    is_permanent: bool = False
     last_activity: datetime | None = None  # when its latest turn moved
     workers_running: int = 0
     workers_total: int = 0
@@ -654,6 +655,7 @@ def session_out(session: ConversationSession) -> dict:
         "parent_id": str(session.parent_id) if session.parent_id else None,
         **started_by(session),
         "status": session.status,
+        "is_permanent": session.is_permanent,
         "username": session.user.get_username() if session.user_id else "",
         "created_at": session.created_at,
         "updated_at": session.updated_at,
@@ -1872,11 +1874,12 @@ async def set_session_effort(request, session_id: str, data: EffortIn):
 
 @router.post("/sessions/{session_id}/close", response=SessionOut)
 async def close_session(request, session_id: str):
-    """Archive a thread (a root chat can't be archived)."""
+    """Archive a chat when it is not permanent."""
     session = await get_session(request, session_id)
-    if roles.is_top(session):
-        raise HttpError(409, "Main and named chats can't be archived")
-    await sync_to_async(archival.archive)(session, "archived by the user")
+    try:
+        await sync_to_async(archival.archive)(session, "archived by the user")
+    except ValueError as exc:
+        raise HttpError(409, str(exc)) from exc
     return await sync_to_async(session_out)(session)
 
 
@@ -1899,6 +1902,27 @@ async def rename_session(request, session_id: str, data: RenameSessionIn):
     await ConversationSession.objects.filter(pk=session.pk).aupdate(user_title=data.title)
     await sync_to_async(notify)(str(session.pk))
     return {"title": data.title}
+
+
+class PermanentSessionIn(Schema):
+    is_permanent: bool
+
+
+@router.post("/sessions/{session_id}/permanent", response=SessionOut)
+async def set_session_permanent(request, session_id: str, data: PermanentSessionIn):
+    # API keys are also used by bot tools and carry only a user's identity.
+    # Require an interactive session to remove a protection.
+    if not data.is_permanent and request.headers.get("Authorization", "").lower().startswith("bearer "):
+        raise HttpError(403, "Remove permanence in the chat UI")
+    session = await aget_object_or_404(ConversationSession.objects.select_related("user"), id=uuid_or_404(session_id))
+    if not request.auth.is_active or (session.user_id != request.auth.pk and not request.auth.is_superuser):
+        raise HttpError(403, "You cannot manage this chat")
+    get_bot(session.bot_name, request.auth)
+    await ConversationSession.objects.filter(pk=session.pk).aupdate(
+        is_permanent=data.is_permanent, permanence_initialized=True
+    )
+    session = await with_open_counts(ConversationSession.objects.filter(pk=session.pk)).select_related("user").aget()
+    return await sync_to_async(session_out)(session)
 
 
 class PinSessionIn(Schema):

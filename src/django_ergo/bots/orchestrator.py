@@ -1078,12 +1078,17 @@ def resolve(
     """Resolve a finished thread (see ``ergo_thread_resolve``)."""
     current = ctx.session
     if not thread_id or thread_id == str(current.id):
-        if roles.is_top(current):
-            msg = "Main and named chats aren't resolved; only threads are."
+        current.refresh_from_db(fields=["is_permanent"])
+        if current.is_permanent:
+            msg = "This chat is permanent; remove permanence before resolving it."
             raise _refused(msg, current)
         thread, own_turn = current, True
     else:
         thread, own_turn = _managed_thread(ctx, bot, thread_id, "resolve"), False
+    try:
+        thread.require_closable()
+    except ValueError as exc:
+        raise _refused(str(exc), thread) from exc
     status = thread_status(thread)
     if not own_turn and status["state"] == "working":
         msg = f"{messaging.label(thread)} is working; stop it with ergo_thread_stop first."
@@ -1093,7 +1098,10 @@ def resolve(
     if blockers := resolve_blockers(status, skip_open=open_here, own_turn=own_turn):
         msg = f"{messaging.label(thread)} isn't finished: " + "; ".join(blockers) + "."
         raise _refused(msg, thread)
-    archival.archive(thread, reason=f"resolved by {messaging.label(current)}")
+    try:
+        archival.archive(thread, reason=f"resolved by {messaging.label(current)}")
+    except ValueError as exc:
+        raise _refused(str(exc), thread) from exc
     meta = {**(thread.metadata or {}), "resolved_by": messaging.label(current)}
     if summary:
         meta["resolved_summary"] = summary[:2000]
