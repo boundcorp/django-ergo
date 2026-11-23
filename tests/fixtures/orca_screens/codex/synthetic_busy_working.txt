@@ -1,5 +1,0 @@
-• Ran pytest -q
-  └ 212 passed in 41.3s
-• Working (1m 12s • esc to interrupt)
-› Summarize recent commits
-  ⏎ send   ⌃J newline   ⌃T transcript   ⌃C quit   82% context left

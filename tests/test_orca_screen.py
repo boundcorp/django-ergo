@@ -152,6 +152,16 @@ def test_a_frozen_spinner_is_stalled_but_background_work_is_not():
     assert "1 shell" in waiting.evidence
 
 
+def test_codex_advancing_busy_footer_resets_stall_timer():
+    lines = screen("codex/busy_working.txt")
+    first = classify("codex", lines, None, NOW)
+    frozen = classify("codex", lines, first.snapshot, NOW + 480)
+    assert frozen.state == STALLED
+    advanced = [line.replace("1m 08s", "1m 09s") for line in lines]
+    moving = classify("codex", advanced, frozen.snapshot, NOW + 481)
+    assert (moving.state, moving.unchanged_for) == (BUSY, 0)
+
+
 def test_unknown_cli_still_sees_shell_return_and_prompts():
     assert classify("", ["Press Enter to continue"], None, NOW).state == WAITING
     assert classify("aider", [], None, NOW).state == UNKNOWN
