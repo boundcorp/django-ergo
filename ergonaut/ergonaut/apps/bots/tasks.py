@@ -97,6 +97,19 @@ def redis_client():
 
 @contextlib.contextmanager
 def session_lock(session_id: str, *, wait: bool = True):
+    """Register admission and hold the session lock for the entire turn."""
+    from django_ergo.bots.admission_drain import execution
+
+    with execution(scope=str(session_id)) as admitted:
+        if not admitted:
+            yield False
+            return
+        with _session_lock(session_id, wait=wait) as acquired:
+            yield acquired
+
+
+@contextlib.contextmanager
+def _session_lock(session_id: str, *, wait: bool = True):
     """Hold the session's turn lock; yields whether it was acquired.
 
     With Redis it's shared by every process; without it, an in-process lock
@@ -614,29 +627,36 @@ def answer_approval(
 def answer_inbox(session) -> None:
     """Run turns, holding the lock, until the inbox is empty."""
     session_id = str(session.id)
+    from django_ergo.bots.admission_drain import execution
+
     while True:
-        clear_stop(session_id)  # a stop meant for an earlier turn
-        items = drain_inbox(session_id)
-        if not items:
-            return
-        message, attachment_ids = combine(items)
-        try:
-            bot = loaded_bot(session)
-            attachments, uploads = take_uploads(session, attachment_ids)
-            control = InboxControl(session)
-            async_to_sync(bot.ask)(
-                session,
-                message,
-                attachments=attachments or None,
-                author=authenticated_author(items, session),
-                control=control,
-            )
-            remove_uploads([*uploads, *control.uploads])
-        except Exception as exc:
-            logger.exception("Turn for session %s failed", session_id)
-            record_failure(session, message, exc)
-        finally:
-            notify(session_id)
+        # Each inbox batch starts another turn. A turn already running may
+        # finish and take steering, but must not claim the next queued batch.
+        with execution(scope=str(session_id)) as admitted:
+            if not admitted:
+                return
+            clear_stop(session_id)  # a stop meant for an earlier turn
+            items = drain_inbox(session_id)
+            if not items:
+                return
+            message, attachment_ids = combine(items)
+            try:
+                bot = loaded_bot(session)
+                attachments, uploads = take_uploads(session, attachment_ids)
+                control = InboxControl(session)
+                async_to_sync(bot.ask)(
+                    session,
+                    message,
+                    attachments=attachments or None,
+                    author=authenticated_author(items, session),
+                    control=control,
+                )
+                remove_uploads([*uploads, *control.uploads])
+            except Exception as exc:
+                logger.exception("Turn for session %s failed", session_id)
+                record_failure(session, message, exc)
+            finally:
+                notify(session_id)
 
 
 async def run_channel_turn(session, run):
@@ -882,12 +902,16 @@ def sync_provider_usage() -> str:
     return state.error or "ok"
 
 
-@shared_task(name="ergonaut.run_bot_task", queue="bot_tasks")
-def run_bot_task(bot_name: str, task_name: str, args: list, kwargs: dict):
+@shared_task(name="ergonaut.run_bot_task", queue="bot_tasks", bind=True, max_retries=None)
+def run_bot_task(self, bot_name: str, task_name: str, args: list, kwargs: dict):
     """Run a bot's @bot_task on a worker (see django_ergo.bots.background)."""
     from django_ergo.bots import background
+    from django_ergo.bots.admission_drain import execution
 
-    return background.execute(bot_name, task_name, args, kwargs)
+    with execution() as admitted:
+        if not admitted:
+            raise self.retry(countdown=5)
+        return background.execute(bot_name, task_name, args, kwargs)
 
 
 @shared_task(name="ergonaut.hindsight_retain", ignore_result=True, queue="bot_tasks")
@@ -1050,12 +1074,16 @@ def run_schedules() -> list[str]:
     return ran
 
 
-@shared_task(name="ergonaut.run_schedule", ignore_result=True)
-def run_schedule(run_id: int) -> None:
+@shared_task(name="ergonaut.run_schedule", ignore_result=True, bind=True, max_retries=None)
+def run_schedule(self, run_id: int) -> None:
     """Carry out one schedule run's actions, in order (see django_ergo.bots.schedules)."""
     from django_ergo.bots import schedules
+    from django_ergo.bots.admission_drain import execution
 
-    schedules.run_actions(run_id)
+    with execution() as admitted:
+        if not admitted:
+            raise self.retry(countdown=5)
+        schedules.run_actions(run_id)
 
 
 def queue_schedule_run(run_id: int) -> None:

@@ -586,6 +586,10 @@ viewer, so the bridge works there too.
 
 ## Workers
 
+Experimental admission-drain integration is default off and refuses external
+upgrade handoff when enabled. See [admission behavior and remaining
+activation requirements](admission-drain.md).
+
 A **Worker** is long-running work a chat or thread started: a build, a data
 pull, a coding agent in Orca. The tool that starts it returns at once, the
 chat shows as busy (a spinner in the sidebar, a strip above the transcript

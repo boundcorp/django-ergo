@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+import tempfile
 
 # A command run next to a live ``ergonaut up`` (``ergonaut manage shell``, ``ergonaut chat``)
 # uses its database, broker and storage (see ergonaut.up.attach). It has to happen here:
@@ -89,10 +90,15 @@ from urllib.parse import parse_qs, urlparse
 for _lc_var in ("LC_ALL", "LANG", "LC_CTYPE", "LC_MESSAGES", "LC_COLLATE"):
     os.environ.setdefault(_lc_var, "C.UTF-8")
 
-DATA_DIR = Path(os.environ.get("DATA_DIR", os.path.expanduser("~/.ergonaut")))
+ISOLATED_TESTS = "pytest" in sys.modules and os.environ.get("ERGO_TEST_ISOLATED") == "1"
+DATA_DIR = (
+    Path(tempfile.mkdtemp(prefix="ergonaut-tests-"))
+    if ISOLATED_TESTS
+    else Path(os.environ.get("DATA_DIR", os.path.expanduser("~/.ergonaut")))
+)
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-_database_url = os.environ.get("DATABASE_URL")
+_database_url = None if ISOLATED_TESTS else os.environ.get("DATABASE_URL")
 if _database_url:
     _parsed = urlparse(_database_url)
     _qs = parse_qs(_parsed.query)
@@ -110,7 +116,7 @@ if _database_url:
 else:
     import pgserver
 
-    _pg = pgserver.get_server(str(DATA_DIR / "pgdata"), cleanup_mode=None)
+    _pg = pgserver.get_server(str(DATA_DIR / "pgdata"), cleanup_mode="delete" if ISOLATED_TESTS else None)
     _parsed = urlparse(_pg.get_uri())
     _qs = parse_qs(_parsed.query)
     DATABASES = {

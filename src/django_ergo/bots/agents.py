@@ -31,6 +31,7 @@ from dataclasses import field
 from typing import TYPE_CHECKING
 from typing import Any
 
+from django_ergo.bots.admission_drain import sync_execution
 from django_ergo.bots.plain_text import check_spacing
 from django_ergo.conversation.budget import forbid
 
@@ -253,6 +254,7 @@ def worker_of(bot: Bot, worker: Worker) -> tuple[AgentManager, dict] | None:
     return None
 
 
+@sync_execution(wait=True)
 def start(ctx: ToolContext, spec: AgentSpec, manager: str = "") -> Worker:
     """Start an agent and the Worker that watches it.
 

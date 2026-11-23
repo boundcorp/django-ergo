@@ -17,6 +17,7 @@ from django.test.signals import setting_changed
 from django.utils.module_loading import import_string
 
 DEFAULTS = {
+    "ADMISSION_DRAIN_ENABLED": False,
     "KNOWLEDGE_REPOSITORIES": {},
     # Opt in to content-free lifecycle observations. Disabled by default.
     "LIFECYCLE_EVENTS_ENABLED": False,

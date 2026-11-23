@@ -35,6 +35,7 @@ from django.utils.module_loading import import_string
 
 from django_ergo.bots import messaging
 from django_ergo.bots import page_actions
+from django_ergo.bots.admission_drain import async_execution
 from django_ergo.bots.definition import MAIN
 from django_ergo.bots.definition import BotDefinition
 from django_ergo.bots.definition import PluginSpec
@@ -1378,6 +1379,7 @@ class Bot:
         spec.pre_seed_each_turn = session is not None and self.is_window(session)
         return spec if budget is None else apply_budget(spec, budget)
 
+    @async_execution
     async def ask(  # noqa: PLR0913
         self,
         session: ConversationSession,
@@ -1485,6 +1487,7 @@ class Bot:
             .afirst()
         )
 
+    @async_execution
     async def resume(
         self,
         session: ConversationSession,
