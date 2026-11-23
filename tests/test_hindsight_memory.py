@@ -12,14 +12,14 @@ from django_ergo.plugins import hindsight_memory as memory
 
 
 def plugin(config=None):
-    bot = SimpleNamespace(name="kitchen")
+    bot = SimpleNamespace(name="helper")
     instance = memory.HindsightMemoryPlugin(bot, config or {})
     instance.on_load()
     return instance
 
 
 def session():
-    return SimpleNamespace(id="chat-1", user_id="lee", parent_id="root")
+    return SimpleNamespace(id="chat-1", user_id="alice", parent_id="root")
 
 
 @override_settings(
@@ -45,20 +45,20 @@ def test_retain_enqueued_without_http_on_turn(monkeypatch):
     assert item["content"] == "User: Please remember tea.\nAssistant: I will do that."
     assert item["document_id"] == "ergonaut-turn-turn-1"
     assert set(item["tags"]) == {
-        "bot:kitchen",
+        "bot:helper",
         "chat:chat-1",
-        "user:lee",
+        "user:alice",
         "thread:chat-1",
         "source:chat",
     }
     assert item["metadata"] == {
-        "bot": "kitchen",
+        "bot": "helper",
         "chat": "chat-1",
-        "user": "lee",
+        "user": "alice",
         "thread": "chat-1",
         "source": "chat",
     }
-    assert "kitchen" in item["context"]
+    assert "helper" in item["context"]
     assert "authoritative" in item["context"]
     assert item["timestamp"]
 
@@ -71,13 +71,13 @@ def test_retain_http_payload(monkeypatch):
     response.json.return_value = {"success": True}
     post = Mock(return_value=response)
     monkeypatch.setattr(httpx, "post", post)
-    memory.retain_item("ergonaut", {"content": "Tea", "tags": ["user:lee"]})
+    memory.retain_item("ergonaut", {"content": "Tea", "tags": ["user:alice"]})
     assert (
         post.call_args.args[0]
         == "http://hindsight.test:8888/v1/default/banks/ergonaut/memories"
     )
     assert post.call_args.kwargs["json"] == {
-        "items": [{"content": "Tea", "tags": ["user:lee"]}],
+        "items": [{"content": "Tea", "tags": ["user:alice"]}],
         "async": True,
     }
     assert post.call_args.kwargs["headers"] == {"Authorization": "Bearer test-key"}
@@ -111,11 +111,11 @@ def test_prefetch_timeout_swallowed(monkeypatch):
 @override_settings(HINDSIGHT_URL="http://hindsight.test:8888", HINDSIGHT_API_KEY="")
 def test_tool_bank_cannot_be_overridden(monkeypatch):
     response = Mock()
-    response.json.return_value = {"results": [{"text": "Lee likes tea"}]}
+    response.json.return_value = {"results": [{"text": "Alice likes tea"}]}
     monkeypatch.setattr(httpx, "post", Mock(return_value=response))
     p = plugin()
     toolkit = p.make_toolkit(ToolContext(bot=p.bot, session=session()))
-    assert "Lee likes tea" in toolkit.execute_tool("memory_recall", {"query": "tea"})
+    assert "Alice likes tea" in toolkit.execute_tool("memory_recall", {"query": "tea"})
     assert "/ergonaut/memories/recall" in httpx.post.call_args.args[0]
     with pytest.raises(TypeError):
         toolkit.execute_tool("memory_recall", {"query": "tea", "bank": "other"})
@@ -188,7 +188,7 @@ def test_prefetch_skipped_on_machine_turns(monkeypatch, events, turn):
     assert (
         plugin().always_context_sources(
             ToolContext(
-                bot=SimpleNamespace(name="kitchen"), session=session(), turn=turn
+                bot=SimpleNamespace(name="helper"), session=session(), turn=turn
             ),
             "Worker finished",
         )
@@ -202,7 +202,7 @@ def test_prefetch_skipped_on_machine_turns(monkeypatch, events, turn):
 @override_settings(HINDSIGHT_URL="http://hindsight.test:8888")
 def test_prefetch_runs_for_human_and_mapped_telegram_turns(monkeypatch):
     monkeypatch.setattr(
-        httpx, "post", Mock(return_value=recall_response("Lee likes tea"))
+        httpx, "post", Mock(return_value=recall_response("Alice likes tea"))
     )
     p = plugin({"telegram_users": [9]})
     for turn in (
@@ -211,7 +211,7 @@ def test_prefetch_runs_for_human_and_mapped_telegram_turns(monkeypatch):
         {"message_author": {"kind": "telegram_user", "ref": "9"}},
     ):
         [section] = rendered(p, turn=turn)
-        assert "Lee likes tea" in section.body
+        assert "Alice likes tea" in section.body
 
 
 @override_settings(HINDSIGHT_URL="http://hindsight.test:8888")
@@ -238,8 +238,8 @@ def test_recall_payload_hygiene_and_bot_first_scope(monkeypatch):
     assert bot_call["query_timestamp"]
     assert bot_call["min_scores"] == {"reranker": 0.4}
     leaves = bot_call["tag_groups"][0]["and"]
-    assert [leaf["tags"] for leaf in leaves] == [["bot:kitchen"], ["user:lee"]]
-    assert shared_call["tags"] == ["user:lee"]
+    assert [leaf["tags"] for leaf in leaves] == [["bot:helper"], ["user:alice"]]
+    assert shared_call["tags"] == ["user:alice"]
     assert shared_call["min_scores"]["reranker"] == 0.8
     lines = section.body.splitlines()
     # duplicate "bot fact one" from the shared pass is dropped
@@ -273,7 +273,7 @@ def test_user_scope_makes_one_user_wide_request(monkeypatch):
     rendered(plugin({"scope": "user", "min_score": 0.3}))
     assert post.call_count == 1
     payload = post.call_args.kwargs["json"]
-    assert payload["tags"] == ["user:lee"]
+    assert payload["tags"] == ["user:alice"]
     assert "tag_groups" not in payload
     assert payload["min_scores"] == {"reranker": 0.3}
 
@@ -321,7 +321,7 @@ def test_mental_models_block_and_cache(monkeypatch):
         gets.append(url)
         response = Mock()
         response.json.return_value = {
-            "name": "Meditate",
+            "name": "App A",
             "content": "Release 1.4 is in review.",
         }
         return response
@@ -334,7 +334,7 @@ def test_mental_models_block_and_cache(monkeypatch):
     )
     p = plugin({"mental_models": ["mm-1"], "top_k": 5})
     [section] = rendered(p)
-    assert section.body.startswith("### Meditate\nRelease 1.4 is in review.")
+    assert section.body.startswith("### App A\nRelease 1.4 is in review.")
     assert section.body.count("\n- ") <= 3
     assert section.details["hindsight"]["mental_models"] == ["mm-1"]
     rendered(p)
@@ -476,14 +476,16 @@ async def test_turn_metadata_reaches_plugin_and_injection_is_persisted(
     from tests.test_bots import make_bot
     from tests.test_bots import say
 
-    post = Mock(side_effect=lambda *a, **k: recall_response("Lee prefers native CLIs"))
+    post = Mock(
+        side_effect=lambda *a, **k: recall_response("Alice prefers native CLIs")
+    )
     monkeypatch.setattr(httpx, "post", post)
     user = await get_user_model().objects.acreate(username="cook")
     bot, engine = make_bot(
         tmp_path,
         say("Noted."),
         say("Worker done."),
-        yaml_text="name: kitchen\nplugins: [{name: hindsight_memory}]\n",
+        yaml_text="name: helper\nplugins: [{name: hindsight_memory}]\n",
         tools="",
     )
     root = await bot.root_session(user)
@@ -491,11 +493,11 @@ async def test_turn_metadata_reaches_plugin_and_injection_is_persisted(
     human = await bot.ask(root, "which CLI for workers?")
     seen = post.call_count
     assert seen >= 1
-    assert "Lee prefers native CLIs" in str(engine._client.calls[0]["messages"])
+    assert "Alice prefers native CLIs" in str(engine._client.calls[0]["messages"])
     sections = human.call.metadata["context"]["sections"]
     [memory_section] = [s for s in sections if s["title"] == memory.TITLE]
     assert memory_section["details"]["hindsight"]["facts"][0]["text"] == (
-        "Lee prefers native CLIs"
+        "Alice prefers native CLIs"
     )
 
     machine = await bot.ask(
