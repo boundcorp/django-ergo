@@ -75,8 +75,9 @@ def keep_last_good(old: BotRegistry, new: BotRegistry) -> None:
     if PROVIDERS_FILE in new.failed and getattr(old, "providers", None):
         # The public models keep working, but private pools fail closed: the
         # broken edit may have disabled a pool or removed a bot from allowed_bots.
-        new.providers = dataclasses.replace(old.providers, private_pools={})
-        logger.warning("Keeping the last good %s, without private pools: it didn't load", PROVIDERS_FILE)
+        pools = {name: dataclasses.replace(pool, enabled=False) for name, pool in old.providers.private_pools.items()}
+        new.providers = dataclasses.replace(old.providers, private_pools=pools)
+        logger.warning("Keeping the last good %s with private pools disabled: it didn't load", PROVIDERS_FILE)
 
 
 class ReloadingRegistry:

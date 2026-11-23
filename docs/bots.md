@@ -2495,7 +2495,7 @@ private_pools:
 | `daily_usd_cap` | Optional, more than 0: US dollars per UTC day (see [Spend cap](#spend-cap))                                                   |
 
 The file is parsed strictly. Any of these is a load error (a reload keeps
-the last good public models but drops every private pool, a fresh start
+the last good public models and disables every previously loaded private pool, a fresh start
 skips the file; admins see the error either way, and `personal` is never
 replaced by a public model):
 
@@ -2517,6 +2517,12 @@ configured: a bot that asks for it fails instead of getting a public model.
 
 A bot listed in `allowed_bots` selects a member in its bot.yaml, as
 `personal` (the pool's `default`) or `personal/<alias>`:
+
+While its pool is configured, chat selections and engine construction reject
+public, auto, and other-pool models, including old session overrides. Use a
+private selector in the bot's own configuration as shown below: membership is
+derived from the loaded pool configuration. Bot access control (`private: true`) is a separate setting and does
+not put a bot in a private inference pool.
 
 ```yaml
 engine:

@@ -58,7 +58,7 @@ def test_one_broken_bot_does_not_stop_the_others(bots_dir):
     assert len(registry.failed) == 1
 
 
-def test_a_broken_providers_reload_keeps_public_models_but_drops_private_pools(bots_dir):
+def test_a_broken_providers_reload_keeps_private_membership_but_disables_pools(bots_dir):
     providers = bots_dir / "providers.yaml"
     public = "providers:\n  openai:\n    type: openai\n    models: [gpt-6-sol]\n"
     pool = (
@@ -72,7 +72,8 @@ def test_a_broken_providers_reload_keeps_public_models_but_drops_private_pools(b
     # An edit meant to disable the pool that also has a mistake must not leave it serving.
     providers.write_text(public + pool.replace("enabled: true", "enabled: false\n    typo: 1"))
     assert [m.id for m in registry.providers.models()] == ["openai/gpt-6-sol"]
-    assert registry.providers.private_pools == {}
+    assert not registry.providers.private_pools["personal"].enabled
+    assert registry.providers.private_pool_for("personal").name == "personal"
     assert "providers.yaml" in registry.failed
 
 

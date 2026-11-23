@@ -592,6 +592,11 @@ class Bot:
         Messages are stored the same way for every engine, so a model on
         another engine just takes the next turn. Runs the ORM.
         """
+        from django_ergo.bots.model_choice import MODEL
+        from django_ergo.bots.model_choice import check
+
+        if self.private_pool:
+            check(self, model, MODEL)
         ref = self.session_model_ref(model)
         if self.providers.is_private(ref):
             self.private_target(ref)  # refuse before changing anything
@@ -633,6 +638,8 @@ class Bot:
 
     def session_model_ref(self, picked) -> str:
         picked = str(picked or "")
+        if picked and self.private_pool:
+            return picked  # Preserve even stale overrides so policy can reject them.
         if picked and self.providers.is_private(picked):
             # Kept even when it can't be used, so the chat fails instead of
             # quietly moving to a public model (engine_spec decides).
@@ -644,6 +651,11 @@ class Bot:
         left on each subscription and remember it (``bots.routing``). Returns
         the model, or "" for a chat with a fixed model. Runs the ORM."""
         ref = self.session_model(session) or self.model_ref()
+        if self.private_pool:
+            from django_ergo.bots.model_choice import MODEL
+            from django_ergo.bots.model_choice import check
+
+            check(self, ref, MODEL)
         if not is_auto(ref):
             if "retry_route" in (session.metadata or {}):
                 session.metadata = {**session.metadata}
@@ -708,6 +720,11 @@ class Bot:
         model to offer a retry on when its provider refused for a limit, or
         "". Never applied on its own (see :meth:`reroute`). Runs the ORM."""
         ref = self.session_model(session) or self.model_ref()
+        if self.private_pool:
+            from django_ergo.bots.model_choice import MODEL
+            from django_ergo.bots.model_choice import check
+
+            check(self, ref, MODEL)
         if not is_auto(ref):
             return ""
         failed = self.resolve_ref(ref, session)
@@ -718,6 +735,12 @@ class Bot:
         """Move an ``auto/<tier>`` chat to a tier candidate for its next turn.
         Later turns use normal routing. Runs the ORM."""
         ref = self.session_model(session) or self.model_ref()
+        if self.private_pool:
+            from django_ergo.bots.model_choice import MODEL
+            from django_ergo.bots.model_choice import check
+
+            check(self, ref, MODEL)
+            check(self, model, MODEL)
         if (
             not is_auto(ref)
             or model not in self.providers.routing.tiers.get(tier_of(ref), [])
@@ -747,12 +770,23 @@ class Bot:
                 picked = tier[0] if tier else ""
         return self.providers.check_public(picked, where=ref) if picked else ""
 
-    def engine_spec(
+    def engine_spec(  # noqa: C901
         self, session: ConversationSession | None = None, model: str = ""
     ) -> EngineSpec:
         """The engine for a chat: the model picked for it (or ``model``), else the bot's."""
         default = get_default_engine_spec()
         ref = model or self.session_model(session) or self.model_ref()
+        configured = str(self.definition.engine_config.get("model") or "")
+        if not self.private_pool and self.providers.is_private(configured):
+            self.private_target(configured)
+        if self.private_pool:
+            from django_ergo.bots.model_choice import MODEL
+            from django_ergo.bots.model_choice import check
+
+            if not ref:
+                msg = f"Bot {self.name!r} needs a private pool model"
+                raise PolicyError(msg)
+            check(self, ref, MODEL)
         if self.providers.is_private(ref):
             return self._private_spec(ref)
         ref = self.resolve_ref(ref, session)
@@ -891,6 +925,9 @@ class Bot:
     ) -> Engine:
         spec = self.engine_spec(session, model)
         if self._engine_factory is not None:
+            if self.private_pool:
+                msg = "Private pool engines cannot use an engine factory override"
+                raise PolicyError(msg)
             engine = self._engine_factory()
         else:
             engine = build_engine(spec)

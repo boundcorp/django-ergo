@@ -1415,3 +1415,56 @@ def test_a_browser_task_takes_a_model_checked_for_its_bot(found, monkeypatch):
         with pytest.raises(PolicyError):
             plugin.task(SimpleNamespace(session=None), "read the page", model=model)
     assert browser("other").skill_requires == ["models"]
+
+
+@pytest.mark.parametrize(
+    "unsafe",
+    [
+        "openai/gpt-6-sol",
+        "auto/small",
+        "subscription/claude-haiku-5-5",
+        "retired/model",
+        "family/flash",
+    ],
+)
+def test_private_chat_rejects_persisted_and_explicit_public_models(found, unsafe):
+    personal = bots(found, personal={"config": {"model": "personal"}})["personal"]
+    session = SimpleNamespace(
+        model=unsafe, metadata={"routed_model": "openai/gpt-6-luna", "retry_route": {}}
+    )
+    assert personal.session_model(session) == unsafe
+    for action in (
+        lambda: personal.engine_spec(session),
+        lambda: personal.make_engine(session),
+        lambda: personal.engine_spec(model=unsafe),
+        lambda: personal.pick_model(session, unsafe),
+        lambda: personal.route(session),
+        lambda: personal.retry_model(session, "429 rate limit"),
+        lambda: personal.reroute(session, "openai/gpt-6-luna", "retry"),
+    ):
+        with pytest.raises(PolicyError):
+            action()
+    assert session.model == unsafe
+
+
+def test_private_chat_accepts_pool_alias_and_rejects_factory_override(found):
+    personal = bots(found, personal={"config": {"model": "personal"}})["personal"]
+    assert personal.engine_spec(model="personal/heavy").config["model"] == KIMI
+    personal._engine_factory = lambda: object()
+    with pytest.raises(PolicyError, match="factory override"):
+        personal.make_engine()
+
+
+def test_private_chat_rejects_public_default_and_missing_selector(found):
+    for config in ({}, {"config": {"model": "openai/gpt-6-sol"}}):
+        personal = bots(found, personal=config)["personal"]
+        with pytest.raises(PolicyError):
+            personal.engine_spec()
+
+
+def test_missing_personal_pool_cannot_use_a_persisted_public_override():
+    found = providers_from(PROVIDERS.split("private_pools:")[0])
+    personal = bots(found, personal={"config": {"model": "personal"}})["personal"]
+    session = SimpleNamespace(model="openai/gpt-6-sol", metadata={})
+    with pytest.raises(PolicyError):
+        personal.engine_spec(session)
