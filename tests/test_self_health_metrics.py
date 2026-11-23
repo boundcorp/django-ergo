@@ -153,3 +153,30 @@ def test_recurring_wake_count_uses_dispatch_time(scope):
     result = report(scope, end.isoformat(), [str(scope.session.pk)])
     assert result["wakes"]["recurring_dispatched"] == 1
     assert "sensitive-note-value" not in str(result)
+
+
+def test_multiple_native_sessions_suppress_ambiguous_token_totals(scope):
+    end = datetime.now(UTC) + timedelta(seconds=1)
+    worker = Worker.objects.create(
+        session=scope.session, bot_name="shop", title="work", function="agent:orca"
+    )
+    for native_id in ("one", "two"):
+        native = AgentSession.objects.create(
+            owner=scope.session.user,
+            cli="codex",
+            host_namespace="test",
+            native_session_id=native_id,
+        )
+        run = AgentRunSession.objects.create(
+            session=native, worker=worker, launch_key=native_id, segment_key=native_id
+        )
+        AgentUsageEvent.objects.create(
+            session=native,
+            run_session=run,
+            source_event_key="same",
+            occurred_at=end - timedelta(seconds=1),
+            input_tokens=12,
+        )
+    usage = report(scope, end.isoformat(), [str(scope.session.pk)])["agent_tokens"]
+    assert usage["events"] == 2 and usage["native_sessions"] == 2
+    assert usage["input_tokens"] is None

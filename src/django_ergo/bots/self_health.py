@@ -72,7 +72,18 @@ def report(ctx, end_utc: str, session_ids: list[str] | None = None) -> dict:
         known_output=Count("output_tokens"),
         events=Count("id"),
         covered_workers=Count("run_session__worker_id", distinct=True),
+        native_sessions=Count("session_id", distinct=True),
     )
+    # Session-local event keys cannot prove two native sessions contain different
+    # requests. Suppress sums when cross-session duplication cannot be excluded.
+    if totals["native_sessions"] > 1:
+        for key in (
+            "input_total",
+            "output_total",
+            "cache_read_total",
+            "cache_write_total",
+        ):
+            totals[key] = None
     return {
         "window": {
             "start_inclusive": start.isoformat(),
@@ -123,6 +134,6 @@ def report(ctx, end_utc: str, session_ids: list[str] | None = None) -> dict:
             "cache_write_tokens": totals.pop("cache_write_total"),
             **totals,
             "basis": "uniquely stored timestamped native usage events linked to selected workers; cumulative worker totals excluded",
-            "coverage": "partial or unknown; missing events and null timestamps are not zero",
+            "coverage": "partial or unknown; missing events and null timestamps are not zero; totals suppressed for multiple native sessions because cross-session duplicates cannot be ruled out",
         },
     }

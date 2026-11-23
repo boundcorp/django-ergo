@@ -2752,6 +2752,7 @@ with current status for completed rows; one-shot and recurring wakes use separat
 fired and dispatch timestamps. Tool failures are stored error result blocks, with
 stored result blocks as denominator, not a complete count of attempted calls.
 Agent token totals come only from timestamped native usage events linked to the
-selected workers, never cumulative worker totals. Null token fields and missing
+selected workers, never cumulative worker totals. When multiple native sessions
+contribute, totals are null because their events may overlap. Null token fields and missing
 or untimestamped events remain unknown, and event coverage is partial. Counts
 are observations of stored data, not a live refresh or a historical status audit.
