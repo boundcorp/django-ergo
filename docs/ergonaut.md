@@ -944,10 +944,21 @@ Run the `release` image as separate workloads with external Postgres
 | Workload | Command | Replicas |
 | --- | --- | --- |
 | web | `ergonaut web` (or `infra/prod/start-uvicorn.sh`) | any (two or more for rolling updates) |
-| worker | `ergonaut worker -Q celery,bot_tasks` (or `infra/prod/start-celery-worker.sh`) | any |
+| worker | `ergonaut worker -Q turns,celery,bot_tasks` (or `infra/prod/start-celery-worker.sh`) | any |
+| turn worker (recommended) | `celery -A ergonaut worker -Q turns --prefetch-multiplier 1` with `ERGONAUT_TURN_QUEUE=turns` on every workload | any |
 | beat | `ergonaut beat` | exactly one |
 | bots | `ergonaut bots` | exactly one |
 | RunPod maintenance (opt-in) | `celery -A ergonaut worker -Q runpod_maintenance --concurrency=1` (or `infra/prod/start-runpod-maintenance.sh`) | one independent supervised consumer on the rental host |
+
+Turns (a user's message, an approval answer, a bot-to-bot delivery) go to
+`ERGONAUT_TURN_QUEUE`, default `celery`. Set it to `turns` on every workload,
+together with a worker consuming `turns`, so a message never waits behind
+maintenance tasks or the `celery` queue's backlog: each turn holds a worker slot
+for its whole model run, so size that worker's concurrency for the turns you
+expect at once. At most one inbox turn and one delivery per session wait in the
+broker at a time, a turn task is killed after `ERGONAUT_TURN_TIME_LIMIT_SECONDS`
+(default 3600), and beat's `redispatch-inboxes` gives a turn to any message left
+over a minute in an idle chat's inbox with none queued (its task was lost).
 
 Enabling the [native RunPod plugin](runpod.md) additionally requires its private
 server policy, migrations and the same durable rental filesystem/credential

@@ -66,7 +66,7 @@ Env files loaded via `.envrc`: `infra/common/.env` → `infra/dev/.env` → `.en
 
 Production: separate workloads from the same image:
 - `main` via `infra/prod/start-uvicorn.sh`
-- `celery` via `infra/prod/start-celery-worker.sh` (queues `celery` and `bot_tasks`)
+- `celery` via `infra/prod/start-celery-worker.sh` (queues `turns`, `celery` and `bot_tasks`; turns route to `ERGONAUT_TURN_QUEUE`, see `../docs/ergonaut.md#production`)
 - `beat` via `infra/prod/start-celery-beat.sh` (one replica)
 - `bots` via `ergonaut bots` (one replica)
 

@@ -147,7 +147,7 @@ TELEMETRY_STATE_COLLECTOR = os.environ.get("TELEMETRY_STATE_COLLECTOR", "auto").
 TELEMETRY_STATE_TTL_SECONDS = float(os.environ.get("TELEMETRY_STATE_TTL_SECONDS", "30"))
 TELEMETRY_CELERY_QUEUES = [
     queue.strip()
-    for queue in os.environ.get("TELEMETRY_CELERY_QUEUES", "celery,bot_tasks,runpod_maintenance").split(",")
+    for queue in os.environ.get("TELEMETRY_CELERY_QUEUES", "turns,celery,bot_tasks,runpod_maintenance").split(",")
     if queue.strip()
 ]
 # Multi-process metrics (Celery prefork children): the client needs the directory to exist.
@@ -460,6 +460,18 @@ DEFAULT_AUTO_FIELD = "django.db.models.AutoField"
 
 # Celery
 CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL")
+# Turns (a user's message, an approval answer, a bot-to-bot delivery) go to their own
+# queue, so a message never waits behind maintenance or another queue's backlog. The
+# default keeps them on "celery" until a worker consumes the turn queue: set
+# ERGONAUT_TURN_QUEUE=turns on every workload together with a `-Q turns` worker.
+ERGONAUT_TURN_QUEUE = os.environ.get("ERGONAUT_TURN_QUEUE", "").strip() or "celery"
+CELERY_TASK_ROUTES = {
+    name: {"queue": ERGONAUT_TURN_QUEUE}
+    for name in ("ergonaut.run_turn", "ergonaut.revalidate_pending", "ergonaut.deliver_thread_message")
+}
+# A worker reserves one task per free slot, not four: a task behind a long turn in one
+# slot's buffer would wait for that turn even with other slots free.
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 from celery.schedules import crontab  # noqa: E402
 
 CELERY_BEAT_SCHEDULE = {
@@ -467,6 +479,8 @@ CELERY_BEAT_SCHEDULE = {
     "archive-idle-threads": {"task": "ergonaut.archive_idle_threads", "schedule": 60 * 60},
     # Thread messages that waited for a busy recipient and were missed.
     "redispatch-thread-messages": {"task": "ergonaut.redispatch_thread_messages", "schedule": 60},
+    # Inbox messages whose turn task was lost (a killed worker child, a restart).
+    "redispatch-inboxes": {"task": "ergonaut.redispatch_inboxes", "schedule": 60},
     # Turns whose worker or shell died mid-turn: their chats stop showing busy.
     "recover-dead-turns": {"task": "ergonaut.recover_dead_turns", "schedule": 60},
     # Workers whose next step got lost (a restart) start again.

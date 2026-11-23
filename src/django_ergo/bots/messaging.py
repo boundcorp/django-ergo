@@ -614,8 +614,14 @@ def redispatch_waiting(
     registry: BotRegistry | None = None,
 ) -> int:
     """Dispatch queued messages again: one session's next one (after its turn;
-    nothing while it is busy, since its turn's end does this), or any queued longer
-    than ``older_than`` seconds (a periodic sweep). Returns how many were dispatched."""
+    nothing while it is busy, since its turn's end does this), or, as a periodic
+    sweep, the oldest message queued longer than ``older_than`` seconds for each
+    recipient that isn't busy. Returns how many were dispatched.
+
+    One per recipient is enough (delivery serves the oldest and dispatches the next),
+    and a busy recipient's turn end sends its queue on: dispatching every waiting
+    message each sweep only fills the broker with deliveries that find nothing to do,
+    in front of other sessions' turns."""
     queued = ThreadMessage.objects.filter(status=ThreadMessageStatus.QUEUED)
     limit = 50
     if session is not None:
@@ -629,17 +635,32 @@ def redispatch_waiting(
         queued = queued.filter(
             updated_at__lt=timezone.now() - timedelta(seconds=older_than)
         )
-    ids = [
-        str(i)
-        for i in queued.order_by("created_at", "id").values_list("id", flat=True)[
-            :limit
-        ]
-    ]
+    ids = _oldest_per_idle_recipient(queued, limit, check_busy=session is None)
     for message_id in ids:
         transaction.on_commit(
             lambda message_id=message_id: dispatch(message_id, registry)
         )
     return len(ids)
+
+
+def _oldest_per_idle_recipient(queued, limit: int, *, check_busy: bool) -> list[str]:
+    """Ids of the oldest queued message of each recipient (skipping busy ones)."""
+    ids: list[str] = []
+    seen = set()
+    for message_id, recipient_id in queued.order_by("created_at", "id").values_list(
+        "id", "recipient_session_id"
+    ):
+        if recipient_id in seen:
+            continue
+        seen.add(recipient_id)
+        if check_busy:
+            recipient = ConversationSession.objects.filter(id=recipient_id).first()
+            if recipient is None or busy(recipient):
+                continue
+        ids.append(str(message_id))
+        if len(ids) >= limit:
+            break
+    return ids
 
 
 def fail(message: ThreadMessage, error: str) -> None:
