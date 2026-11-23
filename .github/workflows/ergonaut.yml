@@ -3,8 +3,7 @@ name: Ergonaut
 on:
   push:
     branches: [main, master, develop]
-  pull_request:
-    branches: [main, master, develop]
+  # Pull requests run the fast checks in pr.yml instead.
   # Nightly full run on main catches PRs that passed alone but break together.
   schedule:
     - cron: "0 9 * * *"
@@ -13,21 +12,19 @@ on:
 permissions:
   contents: read
 
-# Pull requests: a newer push cancels the older run. Branch pushes (main):
-# a running build is never cancelled; GitHub keeps at most one run waiting
+# A running build is never cancelled; GitHub keeps at most one run waiting
 # and replaces it with the newest push, so a burst of merges builds the
 # running commit and then only the latest one.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: false
 
 jobs:
   # Tests run on GitHub-hosted runners (free for this public repo, and several
-  # times faster than the self-hosted ones), on pull requests, nightly and by
-  # hand. A merge to main doesn't rerun them: the PR already passed, and the
-  # image job below is what main needs.
+  # times faster than the self-hosted ones), on pushes to main, nightly and by
+  # hand, not on pull requests (pr.yml). They run beside the image job and do
+  # not gate it: a red test shows on main without blocking the deploy.
   test:
-    if: github.event_name != 'push'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     defaults:
@@ -59,7 +56,6 @@ jobs:
   # A separate environment is required: the native voice SDK pins OpenAI 3,
   # while the normal web/library environment deliberately remains on OpenAI <3.
   native-voice:
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     services:
@@ -107,7 +103,6 @@ jobs:
   # The web app: type check and every *.test.ts(x) under src (bun runs the
   # node:test suites too).
   frontend:
-    if: github.event_name != 'push'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     defaults:

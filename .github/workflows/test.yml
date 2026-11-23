@@ -3,8 +3,7 @@ name: Tests
 on:
   push:
     branches: [main, master, develop]
-  pull_request:
-    branches: [main, master, develop]
+  # Pull requests run the fast checks in pr.yml instead.
   # Nightly full run on main catches PRs that passed alone but break together.
   schedule:
     - cron: "0 9 * * *"
@@ -13,20 +12,20 @@ on:
 permissions:
   contents: read
 
-# A newer push to a PR cancels the older run. Branch pushes are never
-# cancelled; GitHub keeps at most one waiting and replaces it with the newest.
+# Branch pushes are never cancelled; GitHub keeps at most one waiting and
+# replaces it with the newest.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: false
 
 jobs:
   # GitHub-hosted runners: free for this public repo, and the suite runs in a
   # few minutes there against 20+ on the self-hosted runners.
   #
-  # Tests run on pull requests, nightly and by hand. A merge to main doesn't
-  # rerun them: the PR already passed.
+  # Full suite: on every push to main (a red main is the signal), nightly and
+  # by hand. Not on pull requests (see pr.yml). Nothing deploys from this
+  # workflow, so it never gates the image build.
   test:
-    if: github.event_name != 'push'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
@@ -78,7 +77,7 @@ jobs:
           path: test-results.xml
           retention-days: 30
 
-  # Packaging check: pushes only, so PRs don't queue another job on the runner.
+  # Packaging check: pushes only.
   minimal-wheel:
     if: github.event_name == 'push'
     runs-on: ubuntu-24.04
