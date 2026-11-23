@@ -340,6 +340,9 @@ class Bot:
         from django_ergo.bots.wakes import wake_skills
 
         defs.extend(wake_skills())
+        from django_ergo.bots.live_watch import live_skills
+
+        defs.extend(live_skills())
         from django_ergo.bots.agents import AGENTS_INSTRUCTIONS
         from django_ergo.bots.agents import agent_toolkit
         from django_ergo.bots.agents import managers

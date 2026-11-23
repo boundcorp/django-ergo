@@ -28,3 +28,8 @@ start_pulling()
 from ergonaut.observability.exporter import start_exporter  # noqa: E402
 
 start_exporter("web")
+
+# The web role reports the revision it runs (migrations ran before uvicorn started).
+from ergonaut.runtime_report import start as start_runtime_report  # noqa: E402
+
+start_runtime_report(["web"], ready=True)

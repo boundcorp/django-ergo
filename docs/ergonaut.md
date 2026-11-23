@@ -780,6 +780,49 @@ real work runs outside Ergonaut (an Orca agent in another pod) isn't touched
 at all. Such a deployment can stop the automatic upgrade from waiting for
 workers with `ERGONAUT_UPGRADE_WAIT_FOR_WORKERS=0`.
 
+## Deploy watches
+
+Bots can ask to be told when a commit is running on this server
+(`ergo_notify_when_live`, see [deploy watches](bots.md#deploy-watches)).
+Every long-running process reports the revision it was built from
+(`ergonaut/runtime_report.py`):
+
+| Role | Process | Ready when |
+| --- | --- | --- |
+| `web` | uvicorn (`ergonaut.asgi`) | the app has loaded (migrations ran before it) |
+| `celery` | a Celery worker consuming `celery`, `turns` or `ERGONAUT_TURN_QUEUE` | the worker is consuming (`worker_ready`) |
+| `bot-tasks` | a Celery worker consuming `bot_tasks` | the same |
+| `beat` | Celery beat | beat has started |
+| `bots` | `ergonaut bots` | every bot has loaded |
+
+A worker on any other queue reports that queue's name with dashes as its role
+(`runpod-maintenance`), which watches don't require. A worker consuming several
+kinds of queue (`ergonaut up`) reports each role.
+The revision is `/app/BUILD_REVISION`, which the image's build writes from the
+`ERGONAUT_VERSION` build argument (the image also carries it as the
+`org.opencontainers.image.revision` label); without that file, the same lookup
+as upgrades (`ERGONAUT_VERSION`, pip's `git+` record, the checkout's HEAD).
+Reports are refreshed every 30 seconds and withdrawn on a clean shutdown; a
+process killed without one stops counting after two minutes.
+
+A short SHA is resolved with GitHub (the upgrade repository and token), and
+an image digest (`sha256:...`) by reading that image's config from the
+registry (`ERGONAUT_IMAGE`, default `ghcr.io/boundcorp/ergonaut`; for GHCR the
+GitHub token is used to pull). A running commit newer than the target counts
+when GitHub's compare API says it contains the target.
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `ERGONAUT_LIVE_ROLES` | `web,celery,bot-tasks,beat,bots` with a broker, else `web,bots` | roles that must all run a revision; empty turns watches off |
+| `ERGONAUT_ROLE` | from the process | comma-separated roles this process reports instead |
+| `ERGONAUT_RUNTIME_REPORT_SECONDS` | `30` | report interval; `0` stops this process reporting |
+| `ERGONAUT_BUILD_REVISION_FILE` | `/app/BUILD_REVISION` | where the baked revision is read |
+| `ERGONAUT_IMAGE` | `ghcr.io/boundcorp/ergonaut` | registry and repository for digest lookups |
+
+A deployment that runs a role not in the list (the voice bridge, RunPod
+maintenance) doesn't hold watches back; one that leaves out a listed role must
+set `ERGONAUT_LIVE_ROLES`, or no revision is ever live there.
+
 ## Upgrading
 
 Ergonaut can upgrade itself when a new release of django-ergo is published

@@ -205,6 +205,18 @@ DJANGO_ERGO = {
     # Telegram's turns hold the session's turn lock too, and the app's messages steer them.
     "CHANNEL_TURN_RUNNER": "ergonaut.apps.bots.tasks.run_channel_turn",
     "SESSION_NOTIFIER": "ergonaut.apps.bots.tasks.notify",
+    # Deploy watches: a revision is live when every one of these roles' running
+    # processes reports it (ergonaut.runtime_report). Empty turns watches off.
+    "LIVE_ROLES": [
+        r.strip()
+        for r in (
+            os.environ.get("ERGONAUT_LIVE_ROLES")
+            or ("web,celery,bot-tasks,beat,bots" if os.environ.get("CELERY_BROKER_URL") else "web,bots")
+        ).split(",")
+        if r.strip()
+    ],
+    "REVISION_RESOLVER": "ergonaut.upgrades.revisions.resolve",
+    "REVISION_ANCESTRY": "ergonaut.upgrades.revisions.contains",
     # The orchestrator block's open PRs come from the PRs bots and workers reported
     # (django_ergo.conversation.links), not a gh call per repo.
     "OPEN_PRS": "django_ergo.conversation.links.open_pull_requests",
@@ -490,6 +502,8 @@ CELERY_BEAT_SCHEDULE = {
     "reconcile-runpod": {"task": "ergonaut.reconcile_runpod", "schedule": 60},
     # Due one-shot and recurring thread wakes; occurrence failures are never retried automatically.
     "fire-wakes": {"task": "ergonaut.fire_wakes", "schedule": 30},
+    # Deploy watches whose revision every role now runs, or whose time is up.
+    "check-live-watches": {"task": "ergonaut.check_live_watches", "schedule": 30},
     # Each bot's schedules (bot.yaml); the task checks which are due this minute.
     "run-bot-schedules": {"task": "ergonaut.run_schedules", "schedule": crontab()},
     # Pull requests bots and workers reported: their state for thread cards and chips.
