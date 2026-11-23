@@ -16,6 +16,7 @@ django-environ = "*"
 django-cors-headers = "*"
 django-ninja = "*"
 django-ninja-jwt = "*"
+pyjwt = {extras = ["crypto"], version = ">=2.10,<3"}
 django-extensions = "*"
 django-filter = "*"
 django-storages = {extras = ["s3"], version = "*"}

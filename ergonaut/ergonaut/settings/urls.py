@@ -16,10 +16,12 @@ urlpatterns = [
     path("hooks/", include("django_ergo.bots.urls")),
     # Staff-only re-login of a bot's CLI logins (server-rendered, not the web app).
     path("relogin/", include("ergonaut.apps.relogin.urls")),
+    # Human-only Google OAuth connect for private bots (server-rendered, not the web app).
+    path("oauth/", include("ergonaut.apps.google_oauth.urls")),
     path(f"{settings.TELEMETRY_METRICS_PATH}/", metrics_view),
 ]
 # Uploads are not served from MEDIA_URL: chat files go through the API, which
 # checks who may see them.
 
 # Everything else is the web app.
-urlpatterns += [re_path(r"^(?P<path>(?!api/|mgmt/|hooks/|relogin/|dj-static/).*)$", frontend)]
+urlpatterns += [re_path(r"^(?P<path>(?!api/|mgmt/|hooks/|relogin/|oauth/|dj-static/).*)$", frontend)]
