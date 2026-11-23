@@ -248,6 +248,32 @@ afterEach(() => {
 
 for (const kind of ['chat', 'new-thread'] as const) {
   describe(`${kind} voice composer`, () => {
+    for (const [draft, speech, expected] of [
+      ['https://example.com/message/123', 'spoken words', 'https://example.com/message/123 spoken words'],
+      ['', 'spoken words', 'spoken words'],
+      ['existing ', 'spoken words', 'existing spoken words'],
+      ['existing\n', 'spoken words', 'existing\nspoken words'],
+      ['existing', ' spoken words', 'existing spoken words'],
+      ['existing', '', 'existing'],
+    ]) {
+      test(`inserts transcription at the draft boundary: ${JSON.stringify([draft, speech])}`, async () => {
+        api.transcribeVoice = async () => ({ text: speech })
+        const { input } = await mountConsumer(kind, draft)
+        await click('Record voice message')
+        await click('Stop recording')
+        expect(input.value).toBe(expected)
+      })
+    }
+
+    test('separates repeated transcriptions', async () => {
+      const { input } = await mountConsumer(kind, '')
+      await click('Record voice message')
+      await click('Stop recording')
+      await click('Record voice message')
+      await click('Stop recording')
+      expect(input.value).toBe('spoken words spoken words')
+    })
+
     test('Stop waits for final speech and only updates the editable draft', async () => {
       const pending = Promise.withResolvers<{ text: string }>()
       api.transcribeVoice = () => pending.promise
