@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="referrer" content="same-origin">
+        <title>Connect Google · {{ connector.label }} · Ergonaut</title>
+        <style>
+:root{--fg:#18181b;--muted:#71717a;--bg:#fafafa;--card:#fff;--line:#e4e4e7;--accent:#2563eb;--bad:#b91c1c;--good:#15803d}
+@media (prefers-color-scheme: dark){:root{--fg:#f4f4f5;--muted:#a1a1aa;--bg:#09090b;--card:#18181b;--line:#3f3f46;--accent:#60a5fa;--bad:#f87171;--good:#4ade80}}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 system-ui,sans-serif}
+main{max-width:720px;margin:0 auto;padding:24px 16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px;margin:16px 0}
+.muted{color:var(--muted)} .bad{color:var(--bad)} .good{color:var(--good)}
+button{font:inherit;padding:8px 16px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--fg);cursor:pointer}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+button:disabled{opacity:.5;cursor:not-allowed}
+input[type=text],input[type=email]{font:inherit;width:100%;box-sizing:border-box;padding:8px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--fg)}
+label{display:block;margin:12px 0 4px;font-size:14px}
+code{font-family:ui-monospace,monospace;font-size:14px}
+table{border-collapse:collapse;width:100%} td,th{text-align:left;padding:4px 8px;border-bottom:1px solid var(--line);font-size:14px;vertical-align:top}
+        </style>
+    </head>
+    <body>
+        <main>
+            <h1>Connect Google to {{ connector.label }}</h1>
+            <p class="muted">
+                Only you can do this, and nothing here goes through a chat. Sign-in happens at Google; this server keeps the long-lived access encrypted.
+            </p>
+            {% if message %}
+                <p class="{% if message_ok %}good{% else %}bad{% endif %}" role="status">{{ message }}</p>
+            {% endif %}
+            <div class="card">
+                <h2>Connected accounts</h2>
+                {% if accounts %}
+                    <table>
+                        <tr>
+                            <th>Account</th>
+                            <th>Permissions</th>
+                            <th>Mail sync</th>
+                            <th>Calendar sync</th>
+                            <th></th>
+                        </tr>
+                        {% for a in accounts %}
+                            <tr>
+                                <td>
+                                    {{ a.email }}
+                                    {% if a.status and a.status != "active" %}
+                                        <br>
+                                        <span class="bad">{{ a.status }}</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% for s in a.scopes %}
+                                        <code>{{ s }}</code>
+                                        <br>
+                                    {% endfor %}
+                                </td>
+                                <td>
+                                    {{ a.gmail_status|default:"–" }}
+                                    <br>
+                                    <span class="muted">{{ a.gmail_last_sync }}</span>
+                                </td>
+                                <td>
+                                    {{ a.calendar_status|default:"–" }}
+                                    <br>
+                                    <span class="muted">{{ a.calendar_last_sync }}</span>
+                                </td>
+                                <td>
+                                    <form method="post"
+                                          action="{% url 'google-oauth-disconnect' %}"
+                                          onsubmit="return confirm('Disconnect {{ a.email|escapejs }}? This revokes access at Google and deletes the stored token.')">
+                                        {% csrf_token %}
+                                        <input type="hidden" name="bot" value="{{ connector.bot_name }}">
+                                        <input type="hidden" name="email" value="{{ a.email }}">
+                                        <button type="submit">Disconnect</button>
+                                    </form>
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    </table>
+                {% else %}
+                    <p class="muted">No account connected.</p>
+                {% endif %}
+            </div>
+            <div class="card">
+                <h2>Connect an account</h2>
+                {% if not configured %}
+                    <p class="bad">
+                        Not configured: the server has no <code>{{ client_id_env }}</code> and <code>{{ client_secret_env }}</code>. They are set in the server's environment, never pasted into a chat. See docs/google-oauth.md.
+                    </p>
+                {% elif not redirect_uri %}
+                    <p class="bad">
+                        Not configured: this server has no public https address (<code>ERGONAUT_PUBLIC_URL</code>) to use as the redirect.
+                    </p>
+                {% endif %}
+                <p>
+                    Requests:
+                    {% for s in scopes %}
+                        <code>{{ s }}</code>
+                        {% if not forloop.last %},{% endif %}
+                    {% endfor %}
+                    .
+                </p>
+                <form method="post" action="{% url 'google-oauth-start' %}">
+                    {% csrf_token %}
+                    <input type="hidden" name="bot" value="{{ connector.bot_name }}">
+                    <label for="hint">Expected account (optional; the sign-in is refused if another account signs in)</label>
+                    <input id="hint"
+                           type="email"
+                           name="login_hint"
+                           autocomplete="off"
+                           placeholder="you@example.com">
+                    <label for="hd">
+                        Account type (optional): a Workspace domain such as <code>boundcorp.net</code>, or <code>consumer</code> for a personal Gmail
+                    </label>
+                    <input id="hd" type="text" name="hd" autocomplete="off" placeholder="any">
+                    <p>
+                        <button class="primary" type="submit"{% if not ready %} disabled{% endif %}>Sign in with Google</button>
+                    </p>
+                </form>
+                {% if redirect_uri %}
+                    <p class="muted">
+                        Redirect URI registered with Google: <code>{{ redirect_uri }}</code>
+                    </p>
+                {% endif %}
+            </div>
+        </main>
+    </body>
+</html>

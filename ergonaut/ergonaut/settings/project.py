@@ -175,6 +175,7 @@ INSTALLED_APPS = [
     "ergonaut.apps.users",
     "ergonaut.apps.bots",
     "ergonaut.apps.relogin",
+    "ergonaut.apps.google_oauth",
 ]
 
 # The built web app (npm run build in frontend/), served for unknown paths.
