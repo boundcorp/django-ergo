@@ -15,7 +15,7 @@ classifiers = [
   "Programming Language :: Python :: 3.12",
 ]
 dependencies = [
-    "django>=4.2",
+    "django>=5.0",
     "django-environ",
 ]
 
@@ -56,7 +56,7 @@ dev = [
     "twine",
     "wheel",
     "build",
-    "django>=4.2",
+    "django>=5.0",
     "django-environ",
     "django-extensions",
     "pip-freezer",

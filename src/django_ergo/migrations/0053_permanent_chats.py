@@ -19,7 +19,7 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name="conversationsession",
             name="is_permanent",
-            field=models.BooleanField(default=False),
+            field=models.BooleanField(default=False, db_default=False),
         ),
         migrations.RunPython(mark_configured_chats, migrations.RunPython.noop),
     ]

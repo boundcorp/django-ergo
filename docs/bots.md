@@ -2682,8 +2682,8 @@ limited to Fireworks.
 
 A bot can list session UUIDs under `permanent_chats` in `bot.yaml`. Loading the
 bot initializes matching sessions belonging to that bot as permanent, including
-threads. An explicit user choice persists across configuration reloads. Main chats, named chats and channel chats start
-permanent; ordinary task threads do not, even when titled. Permanence is
+threads. An explicit user choice persists across configuration reloads. Main
+chats, named chats and channel chats start permanent; ordinary task threads do not, even when titled. Permanence is
 separate from pinning and prevents resolving or idle archival. Existing
 archived chats are marked where applicable but stay archived, with their
 history and status unchanged.

@@ -4531,38 +4531,48 @@ def test_configured_permanence_respects_explicit_unmark_after_reload(tmp_path):
 
 
 @pytest.mark.django_db(transaction=True)
-def test_closure_waits_for_concurrent_permanence_change():
+def test_closure_waits_for_concurrent_permanence_change(monkeypatch):
     import threading
     from concurrent.futures import ThreadPoolExecutor
 
+    from django.db import DatabaseError
     from django.db import close_old_connections
     from django.db import transaction
-
-    from django_ergo.conversation.models import PermanentChatError
 
     user = User.objects.create(username="closure-race-owner")
     session = ConversationSession.objects.create(
         user=user, status="active", engine_type="claude"
     )
-    started = threading.Event()
+    guarded = threading.Event()
+    release = threading.Event()
+    original_guard = ConversationSession.require_closable
+
+    def pause_after_guard(row):
+        original_guard(row)
+        guarded.set()
+        assert release.wait(10)
+
+    monkeypatch.setattr(ConversationSession, "require_closable", pause_after_guard)
 
     def close():
         try:
             stale = ConversationSession.objects.get(pk=session.pk)
             stale.status = "completed"
-            started.set()
-            with pytest.raises(PermanentChatError):
-                stale.save(update_fields=["status"])
+            stale.save(update_fields=["status"])
         finally:
             close_old_connections()
 
     with ThreadPoolExecutor(max_workers=1) as executor:
-        with transaction.atomic():
-            row = ConversationSession.objects.select_for_update().get(pk=session.pk)
-            row.is_permanent = True
-            row.save(update_fields=["is_permanent"])
-            future = executor.submit(close)
-            assert started.wait(5)
-        future.result(timeout=10)
+        future = executor.submit(close)
+        try:
+            assert guarded.wait(10)
+            # NOWAIT proves the guard is still inside the row-locked section.
+            with pytest.raises(DatabaseError), transaction.atomic():
+                ConversationSession.objects.select_for_update(nowait=True).get(
+                    pk=session.pk
+                )
+        finally:
+            release.set()
+            future.result(timeout=10)
     session.refresh_from_db()
-    assert session.is_permanent and session.status == "active"
+    assert session.status == "completed"

@@ -9,6 +9,6 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name="conversationsession",
             name="permanence_initialized",
-            field=models.BooleanField(default=False, editable=False),
+            field=models.BooleanField(default=False, db_default=False, editable=False),
         ),
     ]

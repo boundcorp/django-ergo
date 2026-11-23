@@ -90,8 +90,10 @@ class ConversationSession(TimeStampedMixin):
         choices=SessionStatus.choices,
     )
     metadata = models.JSONField(default=dict, blank=True)
-    is_permanent = models.BooleanField(default=False)
-    permanence_initialized = models.BooleanField(default=False, editable=False)
+    is_permanent = models.BooleanField(default=False, db_default=False)
+    permanence_initialized = models.BooleanField(
+        default=False, db_default=False, editable=False
+    )
     # Kept separate from metadata so stale metadata writers cannot undo a rename.
     user_title = models.CharField(max_length=200, null=True, blank=True)  # noqa: DJ001 - NULL means automatic
     # Overrides workflow.instructions when set.
