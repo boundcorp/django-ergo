@@ -35,6 +35,7 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 - [x] **Forwarded-message identity**: message author and provenance snapshots separate the actual Django/Telegram author from the forwarding bot and original chat/time; unprefixed API/UI content, generated model attribution, and distinct mobile-safe cards. Shared-chat membership and permissions remain future work.
 - [x] **System event identity**: PR checks, worker updates/results, schedules and Resume notifications wake bots as source-labeled events, not the owner; provider attribution, event cards and history/search preserve the distinction.
 - [x] **Opt-in passive Telegram groups**: attributed untrusted context, sender-only authorization, explicit-tag routing, atomic message sequencing and first-thread creation; single-poller deployment boundary documented.
+- [x] **Permanent chats**: protect configured and user-selected chats from resolution and idle archival independently of pinning.
 - [x] **Thread inactivity and archival**: beat archives threads idle `sessions.archive_after_days` (default 7); archived threads collapse in the sidebar; messaging one reopens it.
 - [x] **`@bot_task` for custom tools**: run a bot-folder function on a worker and wait for or await its result.
 

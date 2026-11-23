@@ -77,6 +77,30 @@ def find_bot_folders(directory: str | Path) -> list[Path]:
 logger = logging.getLogger(__name__)
 
 
+def _sync_permanent_chats(bot: Bot) -> None:
+    """Apply configured IDs on load, including when a registry loads in async code."""
+    import asyncio
+    from concurrent.futures import ThreadPoolExecutor
+
+    def sync():
+        from django.db import close_old_connections
+
+        try:
+            bot.sessions().filter(pk__in=bot.definition.permanent_chats).update(
+                is_permanent=True
+            )
+        finally:
+            close_old_connections()
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        sync()
+    else:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            executor.submit(sync).result()
+
+
 class BotRegistry:
     def __init__(self):
         self.bots: dict[str, Bot] = {}
@@ -89,6 +113,8 @@ class BotRegistry:
         if bot.name in self.bots:
             msg = f"Duplicate bot name {bot.name!r}"
             raise ValueError(msg)
+        if bot.definition.permanent_chats:
+            _sync_permanent_chats(bot)
         bot.registry = self
         self.bots[bot.name] = bot
         self._link_parents()

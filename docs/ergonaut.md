@@ -1078,3 +1078,9 @@ The Costs page also shows a passive cost-ledger panel from `GET /api/costs/ledge
 per category and currency, unknown amounts shown as unknown, reservations and
 subscription/API-equivalent values marked not spend, plus the declared source
 coverage. See [cost-ledger.md](cost-ledger.md).
+
+Chats can be marked permanent or have permanence removed from the chat options
+menu. Permanent chats cannot be resolved or automatically archived; pinning,
+activity state, and clearing completed todos are independent. Configured
+`permanent_chats` IDs are reapplied on bot load, so remove an ID from the bot
+configuration before unmarking it in the UI.

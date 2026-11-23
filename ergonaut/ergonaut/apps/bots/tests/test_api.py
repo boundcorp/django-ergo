@@ -2482,3 +2482,26 @@ def test_session_search_only_recent_content_but_all_titles(client, cook, search_
     assert [row["id"] for row in client.get("/api/bots/session-search", {"q": "Old title needle"}).json()] == [
         str(old.id)
     ]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_permanence_toggle_and_close_permissions(client, cook, bot_folder, use_bots):
+    (bot_folder / "bot.yaml").write_text(textwrap.dedent(BOT).replace("orchestration: false", "orchestration: true"))
+    use_bots(say("hello"))
+    thread = post(client, "/api/bots/kitchen/threads", {"title": "Task"}).json()
+    url = f"/api/sessions/{thread['id']}"
+    assert not thread["is_permanent"]
+    assert post(client, f"{url}/permanent", {"is_permanent": True}).json()["is_permanent"]
+    refused = post(client, f"{url}/close")
+    assert refused.status_code == 409 and "permanent" in refused.json()["detail"]
+    other = get_user_model().objects.create_user("other-permanence", password="pw")
+    client.force_login(other)
+    assert post(client, f"{url}/permanent", {"is_permanent": False}).status_code == 403
+    client.force_login(cook)
+    assert not post(client, f"{url}/permanent", {"is_permanent": False}).json()["is_permanent"]
+    assert post(client, f"{url}/close").json()["status"] == "completed"
+    main = post(client, "/api/bots/kitchen/root").json()
+    main_url = f"/api/sessions/{main['id']}"
+    assert post(client, f"{main_url}/close").status_code == 409
+    assert not post(client, f"{main_url}/permanent", {"is_permanent": False}).json()["is_permanent"]
+    assert post(client, f"{main_url}/close").json()["status"] == "completed"

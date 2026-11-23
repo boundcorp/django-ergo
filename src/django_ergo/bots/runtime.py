@@ -1082,6 +1082,7 @@ class Bot:
             or self.engine_spec(model=model).engine_type,
             transport_type=getattr(engine, "transport_type", "api"),
             status="active",
+            is_permanent=role in roles.TOP or bool(metadata.get("telegram_thread")),
             metadata={**(metadata or {}), "bot_role": role},
             compaction_mode=compaction_mode,
             compaction_config=compaction_config or {},
@@ -1096,6 +1097,8 @@ class Bot:
         return session
 
     async def close_session(self, session: ConversationSession) -> None:
+        await session.arefresh_from_db(fields=["is_permanent"])
+        session.require_closable()
         session.status = "completed"
         await session.asave(update_fields=["status", "updated_at"])
         for plugin in self.plugins:

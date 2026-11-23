@@ -50,6 +50,10 @@ def normalize_compaction_mode(mode: str | None) -> str | None:
     return LEGACY_COMPACTION_MODES.get(mode, mode)
 
 
+class PermanentChatError(ValueError):
+    """A permanent chat cannot be closed."""
+
+
 class ConversationSession(TimeStampedMixin):
     """A conversation session with an AI engine."""
 
@@ -84,6 +88,7 @@ class ConversationSession(TimeStampedMixin):
         choices=SessionStatus.choices,
     )
     metadata = models.JSONField(default=dict, blank=True)
+    is_permanent = models.BooleanField(default=False)
     # Kept separate from metadata so stale metadata writers cannot undo a rename.
     user_title = models.CharField(max_length=200, null=True, blank=True)  # noqa: DJ001 - NULL means automatic
     # Overrides workflow.instructions when set.
@@ -120,6 +125,14 @@ class ConversationSession(TimeStampedMixin):
         # A full save of a stale instance must not overwrite a concurrent rename.
         # Explicit updates to user_title remain possible through update_fields.
         update_fields = kwargs.get("update_fields", args[3] if len(args) > 3 else None)  # noqa: PLR2004
+        if (
+            not self._state.adding
+            and self.status == SessionStatus.COMPLETED
+            and (update_fields is None or "status" in update_fields)
+        ):
+            previous = type(self).objects.only("status", "is_permanent").get(pk=self.pk)
+            if previous.status != SessionStatus.COMPLETED:
+                previous.require_closable()
         preserve = (
             not self._state.adding
             and update_fields is None
@@ -127,12 +140,18 @@ class ConversationSession(TimeStampedMixin):
         )
         if not preserve:
             return super().save(*args, **kwargs)
-        title = self.user_title
+        title, permanent = self.user_title, self.is_permanent
         try:
             self.user_title = models.F("user_title")
+            self.is_permanent = models.F("is_permanent")
             return super().save(*args, **kwargs)
         finally:
-            self.user_title = title
+            self.user_title, self.is_permanent = title, permanent
+
+    def require_closable(self):
+        if self.is_permanent:
+            msg = "This chat is permanent; remove permanence before resolving it."
+            raise PermanentChatError(msg)
 
     def __str__(self):
         return f"{self.user} - {self.engine_type} ({self.status})"

@@ -56,6 +56,8 @@ class SessionManager:
         return engine
 
     async def close_session(self, session: ConversationSession) -> None:
+        await session.arefresh_from_db(fields=["is_permanent"])
+        session.require_closable()
         if engine := self._active_engines.pop(session.id, None):
             await engine.close_session(session)
         session.status = "completed"

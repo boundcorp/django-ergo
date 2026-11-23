@@ -2665,3 +2665,12 @@ these checks. The planned second phase moves private inference into a
 separate, credential-isolated service: its own workload and service user,
 the key mounted only there, signed short-lived grants, and network egress
 limited to Fireworks.
+
+A bot can list session UUIDs under `permanent_chats` in `bot.yaml`. Loading the
+bot marks matching sessions belonging to that bot permanent, including threads;
+remove an ID from config before removing its permanence in the UI, since the
+next load reapplies the list. Main chats, named chats and channel chats start
+permanent; ordinary task threads do not, even when titled. Permanence is
+separate from pinning and prevents resolving or idle archival. Existing
+archived chats are marked where applicable but stay archived, with their
+history and status unchanged.
