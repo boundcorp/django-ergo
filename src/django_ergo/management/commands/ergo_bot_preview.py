@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import uuid
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
@@ -48,6 +49,7 @@ def sample_value(field: models.Field, index: int, *, empty: bool):
         (models.FloatField, 1.5 + index),
         (models.IntegerField, 10 + index),  # includes the other integer fields
         (models.JSONField, {}),
+        (models.UUIDField, uuid.UUID(int=index + 1)),
         (models.CharField, f"sample {field.name} {index + 1}"),
         (models.TextField, f"sample {field.name} {index + 1}"),
     ]
@@ -64,9 +66,35 @@ def sample_value(field: models.Field, index: int, *, empty: bool):
     raise ValueError(msg)
 
 
-def add_samples(table) -> int:
+def seed_order(tables) -> list:
+    """Tables with the ones they point to first; self-references and cycles are tolerated
+    (what can't be ordered keeps its place at the end)."""
+    mine = set(tables)
+    deps = {
+        t: {
+            f.related_model
+            for f in t._meta.concrete_fields  # noqa: SLF001
+            if f.is_relation and f.related_model in mine and f.related_model is not t
+        }
+        for t in tables
+    }
+    ordered: list = []
+    pending = list(tables)
+    while pending:
+        ready = [t for t in pending if deps[t] <= set(ordered)]
+        if not ready:  # a cycle: take the first and carry on
+            ready = [pending[0]]
+        ordered.extend(ready)
+        pending = [t for t in pending if t not in ready]
+    return ordered
+
+
+def add_samples(table) -> tuple[int, str]:
     """Four rows: all filled in, every optional field empty, and each half of them empty,
-    so a page meets missing values alone and next to present ones."""
+    so a page meets missing values alone and next to present ones.
+
+    Foreign keys point at rows the target table already has (sample or real). Returns
+    the number of rows added and, when none could be, why not."""
     fields = [
         f
         for f in table._meta.concrete_fields  # noqa: SLF001
@@ -76,14 +104,40 @@ def add_samples(table) -> int:
     patterns = [set(), set(optional), set(optional[0::2]), set(optional[1::2])]
     added = 0
     for index, empty in enumerate(patterns):
-        values = {f.name: sample_value(f, index, empty=f.name in empty) for f in fields}
+        values = {}
+        usable = True
+        for f in fields:
+            if not (f.is_relation and (f.many_to_one or f.one_to_one)):
+                values[f.name] = sample_value(f, index, empty=f.name in empty)
+                continue
+            if f.null and f.name in empty:
+                values[f.name] = None
+                continue
+            target = f.related_model
+            rows = list(target._default_manager.order_by("pk"))  # noqa: SLF001
+            # A unique link (one-to-one) needs a different target per row.
+            n = index if f.unique else (index % len(rows) if rows else 0)
+            if n < len(rows):
+                values[f.name] = rows[n]
+            elif f.null:
+                values[f.name] = None
+            elif not rows and not added:
+                return (
+                    0,
+                    f"{f.name} needs a {target.__name__} and there are none to point at",
+                )
+            else:
+                usable = False  # unique and the targets ran out
+                break
+        if not usable:
+            continue
         try:
             with transaction.atomic():
                 table.objects.create(**values)
         except IntegrityError:
             continue  # clashes with an earlier sample under a unique constraint
         added += 1
-    return added
+    return added, ""
 
 
 class Command(BaseCommand):
@@ -146,9 +200,18 @@ class Command(BaseCommand):
                         verbosity=0,
                         interactive=False,
                     )
-                for table in tables if samples else []:
-                    if not table.objects.exists():
-                        added = add_samples(table)
+                for table in seed_order(tables) if samples else []:
+                    if table.objects.exists():
+                        continue
+                    try:
+                        added, why = add_samples(table)
+                    except Exception as exc:  # noqa: BLE001 — one table's gap must not stop the render
+                        added, why = 0, f"{type(exc).__name__}: {exc}"
+                    if why:
+                        notes.append(
+                            f"{table.__name__} was empty and got no sample rows: {why}"
+                        )
+                    else:
                         notes.append(
                             f"{table.__name__} was empty, so it has {added} sample rows (some optional fields empty)"
                         )

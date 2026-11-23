@@ -1855,6 +1855,10 @@ def test_private_pool_models_are_only_for_allowlisted_bots(client, cook, use_bot
     ]
     picked = post(client, f"/api/sessions/{root['id']}/model", {"model": "personal/flash"}).json()
     assert (picked["model"], picked["engine_type"]) == ("personal/flash", "fireworks")
+    for model in ("openai/gpt-6-sol", "auto/small"):
+        refused = post(client, f"/api/sessions/{root['id']}/model", {"model": model})
+        assert refused.status_code == 403
+    assert ConversationSession.objects.get(pk=root["id"]).model == "personal/flash"
 
 
 @pytest.mark.django_db(transaction=True)

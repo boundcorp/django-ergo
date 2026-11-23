@@ -1740,6 +1740,15 @@ def private_models_out(bot: Bot) -> list[dict]:
 
 
 def check_model(bot: Bot, model: str) -> None:
+    if bot.private_pool:
+        from django_ergo.bots.model_choice import MODEL, check
+
+        try:
+            check(bot, model, MODEL)
+        except PolicyError as exc:
+            raise HttpError(403, str(exc)) from exc
+        except ValueError as exc:
+            raise HttpError(400, str(exc)) from exc
     if bot.providers.is_private(model):
         try:
             bot.private_target(model)

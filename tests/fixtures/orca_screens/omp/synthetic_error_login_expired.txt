@@ -1,0 +1,4 @@
+ Error: 401 {"type":"error","error":{"type":"authentication_error","message":"OAuth token has expired"}}
+ Your anthropic login has expired. Run /login to sign in again.
+╭── π / ◔ Sonnet 5.5 🙈 / 📁 …ergo / ⑂ main ─1%────────────────────┃───200K───╮
+╰─                                                                            ─╯

@@ -1,0 +1,59 @@
+name: PR checks
+
+# Fast checks only, so a pull request is green in about a minute. The full
+# test suites, the migration drift checks, the native-voice tests and the
+# release image run on main (test.yml, ergonaut.yml), nightly, and by hand
+# from the Actions tab (Run workflow) on any branch.
+on:
+  pull_request:
+    branches: [main, master, develop]
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  # Same ruff version as .pre-commit-config.yaml and the dev extra.
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: false
+      - run: uvx ruff@0.12.5 check .
+      - run: uvx ruff@0.12.5 format --check .
+
+  # tsc only (about 30s with the npm cache); the frontend unit tests run on main.
+  # Skipped unless the PR touches the frontend.
+  frontend:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Did the frontend change?
+        id: changed
+        run: |
+          if git diff --quiet "origin/${{ github.base_ref }}...HEAD" -- ergonaut/frontend; then
+            echo "frontend=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "frontend=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/setup-node@v4
+        if: steps.changed.outputs.frontend == 'true'
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: ergonaut/frontend/package-lock.json
+      - if: steps.changed.outputs.frontend == 'true'
+        working-directory: ergonaut/frontend
+        run: npm ci && npx tsc -b
