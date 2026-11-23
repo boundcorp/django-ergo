@@ -356,3 +356,115 @@ def test_pages_cannot_read_dotfiles_or_code_from_the_bot_folder(realty_bot):
         with pytest.raises(ValueError, match="No page"):
             plugin.preview(ctx, page=name)
     assert "houses" in str(plugin.preview(ctx, page="pages/board.jhtml"))
+
+
+ORCHARD_TABLES = '''
+from django.db import models
+from django_ergo.bots import BotTable
+
+
+class Grove(BotTable):
+    """Groves."""
+
+    name = models.CharField(max_length=50)
+
+
+class Tree(BotTable):
+    """Trees, each in a grove."""
+
+    species = models.CharField(max_length=50)
+    grove = models.ForeignKey(Grove, on_delete=models.CASCADE)
+    moved_from = models.ForeignKey(Grove, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
+
+
+class Plaque(BotTable):
+    """One plaque per tree."""
+
+    text = models.CharField(max_length=50)
+    tree = models.OneToOneField(Tree, on_delete=models.CASCADE)
+
+
+class Visit(BotTable):
+    """Visits by a user who may not exist."""
+
+    note = models.CharField(max_length=50)
+    who = models.ForeignKey("auth.User", on_delete=models.CASCADE)
+'''
+
+
+@pytest.fixture
+def orchard(tmp_path):
+    from tests.test_bots import write_bot
+
+    folder = write_bot(tmp_path, "name: orchard\ntables: [tables.py]\n", name="orchard")
+    (folder / "tables.py").write_text(ORCHARD_TABLES)
+    call_command("ergo_bot_makemigrations", str(folder))
+    (folder / "pages").mkdir()
+    (folder / "pages" / "trees.jhtml").write_text(
+        "{% for t in table('Tree').order_by('id') %}{{ t.species }} in {{ table('Grove').filter(id=t.grove).first().name }}"
+        "{% if t.moved_from %} from {{ table('Grove').filter(id=t.moved_from).first().name }}{% endif %};{% endfor %}"
+        "|{{ table('Plaque').count() }} plaques"
+    )
+    return folder
+
+
+def run_preview(folder, page):
+    from io import StringIO
+
+    out = StringIO()
+    call_command("ergo_bot_preview", str(folder), page, stdout=out)
+    return json.loads(out.getvalue().strip().splitlines()[-1])
+
+
+@pytest.mark.django_db(transaction=True)
+def test_preview_points_required_foreign_keys_at_sample_rows(orchard):
+    from django.db import connection
+
+    result = run_preview(orchard, "pages/trees.jhtml")
+    assert result["ok"], result
+    assert "sample species 1 in sample name 1 from sample name 1;" in result["preview"]
+    assert (
+        "sample species 2 in sample name 2;" in result["preview"]
+    )  # nullable FK left empty
+    assert "|4 plaques" in result["preview"]  # one-to-one: a distinct tree each
+    assert any("Grove was empty, so it has 4 sample rows" in n for n in result["notes"])
+    # A required FK to a table with no rows: that table is skipped, the page still renders.
+    assert any(
+        "Visit was empty and got no sample rows" in n and "User" in n
+        for n in result["notes"]
+    )
+    assert "ergo_bot_orchard_grove" not in connection.introspection.table_names()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_preview_uses_existing_rows_of_a_foreign_table(orchard, django_user_model):
+    django_user_model.objects.create(username="lee")
+    (orchard / "pages" / "visits.jhtml").write_text(
+        "{% for v in table('Visit').order_by('id') %}{{ v.note }};{% endfor %}"
+    )
+    result = run_preview(orchard, "pages/visits.jhtml")
+    assert result["ok"], result
+    assert "sample note 1;sample note 2;" in result["preview"]
+    assert django_user_model.objects.count() == 1  # nothing added or kept
+
+
+def test_preview_seeds_referenced_tables_first_and_tolerates_cycles():
+    from django.db import models
+
+    from django_ergo.management.commands.ergo_bot_preview import seed_order
+
+    class A(models.Model):  # noqa: DJ008
+        me = models.ForeignKey("self", null=True, on_delete=models.CASCADE)
+
+        class Meta:
+            app_label = "seedorder"
+
+    class B(models.Model):  # noqa: DJ008
+        a = models.ForeignKey(A, on_delete=models.CASCADE)
+
+        class Meta:
+            app_label = "seedorder"
+
+    assert seed_order([B, A]) == [A, B]
+    A.add_to_class("b", models.ForeignKey(B, null=True, on_delete=models.CASCADE))
+    assert sorted(seed_order([B, A]), key=lambda m: m.__name__) == [A, B]
