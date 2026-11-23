@@ -82,6 +82,10 @@ def memory_event(sender, bot_name, event, outcome, reason="", duration=0.0, coun
             metrics.memory_prefetch_facts.labels(bot=bot).observe(count)
     elif event == "retain":
         metrics.memory_retain_total.labels(bot=bot, outcome=_label(outcome), reason=str(reason)[:40]).inc()
+    elif event == "pr_sync":
+        metrics.memory_pr_sync_total.labels(bot=bot, outcome=_label(outcome), reason=str(reason)[:40]).inc(
+            max(count, 1)
+        )
 
 
 def _worker_labels(worker) -> dict:

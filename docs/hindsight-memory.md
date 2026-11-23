@@ -58,6 +58,37 @@ The skill offers `memory_recall(query)`, `memory_reflect(question)` (slower), an
 
 `mental_models: [id, ...]` fetches those Hindsight mental models (content cached for 10 minutes) and injects them as a stable "Working memory" block before the recalled facts, which then drop to `top_k_with_models` (default 3). A cold fetch never waits past `timeout_seconds`: it finishes in the background and the next turn uses the cache (a stale copy is used if a refresh fails). Models are bank-wide; keep config and rules out of them.
 
+## Pull request outcomes
+
+Memory only keeps turns a person wrote, so a merged pull request would otherwise stay "open" in recalled summaries. An opt-in job writes pull request outcomes straight to memory, not as chat messages. Add a `pr_events` block to the plugin:
+
+```yaml
+plugins:
+  - name: hindsight_memory
+    bank: ergonaut
+    pr_events:
+      users: [alice]               # usernames; their ids become the user: tags recall needs
+      repos: [acme/widget]         # default: the bot's pull_requests list
+      lookback_days: 14            # first run backfills this far
+      states: [merged, closed]     # default: open, merged, closed
+      apps:                        # optional repo to app: tag
+        acme/widget: app-a
+      rules:                       # first match wins
+        - title_prefix: "docs"     # or files_under: docs/ (every changed file is under it)
+          repo: acme/widget        # optional
+          action: skip             # skip (default), or: action: bank + bank: other
+```
+
+Ergonaut's beat runs `ergonaut.hindsight_sync_pull_requests` every 30 minutes. For each bot whose `hindsight_memory` has `pr_events`, it lists the pull requests updated since the last run with the `gh` CLI (the same access as the open pull requests context; no new credentials) and writes one document per pull request into the bot's bank.
+
+- **One document per PR.** `document_id` is `pr:<owner>/<repo>#<number>` with `update_mode: replace`, so every change replaces the same document.
+- **Idempotent.** A per-bot, per-repo cursor (the `HindsightPrSync` table) and a hash of the last write skip unchanged pull requests. The cursor only advances when every write worked, so failures retry. Losing the table just re-runs the backfill; replacing is harmless.
+- **Content is one factual line**: repo, number, title, state, merged or closed time in UTC, merge commit short sha, draft flag. Never the body, comments or diff. Tags are `source:github`, `repo:`, `bot:`, one `user:` per listed user (so the bot's normal recall finds it) and `app:` when the repo is in `apps`. The `context` says it is a GitHub record whose source of truth is GitHub.
+- **Banks.** Records go to the plugin's `bank`. The `personal` bank is never written, whatever the config. A rule can skip a pull request or send it to another bank; `files_under` needs every changed file under the path.
+- **Extraction.** A bank's retain mission can drop what it calls in-progress status. Check with `memories/dry-run-extract` that open pull request records survive, and if they do not, set `states: [merged, closed]`.
+
+Metric: `ergonaut_memory_pr_sync_total{bot,outcome,reason}` with outcome `written`, `skipped` (reasons `unchanged`, `rule`, `state`, `protected_bank`, `no_users`) or `failed` (reasons `github`, `write`, `error`).
+
 ## Metrics
 
 Ergonaut exposes `ergonaut_memory_prefetch_total{bot,outcome,reason}` (outcome `ok`, `empty`, `timeout`, `error`, `skipped`), `ergonaut_memory_prefetch_duration_seconds{bot}`, `ergonaut_memory_prefetch_facts{bot}` and `ergonaut_memory_retain_total{bot,outcome,reason}` (outcome `queued` or `skipped`; reasons such as `config_only`, `provenance`, `author`, `recurring_wake`, `telegram_unmapped`, `empty`, `failed`). The library emits `django_ergo.signals.memory_event`; Ergonaut turns it into the metrics above.

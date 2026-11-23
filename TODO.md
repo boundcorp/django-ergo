@@ -12,6 +12,7 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 - [x] **Bots that learn**: `ergo_kb` `write: true` gives `ergo_kb_write` (kb/*.md only, committed and pushed). Kitchen turned on in ergo-bots.
 - [x] **Optional Hindsight working memory**: plugin with asynchronous retain, bounded recall prefetch, and scoped tools; bot activation remains a separate review step.
 - [x] **Hindsight hygiene** (audit 2026-11-23): machine-turn prefetch skip, reranker floors, bot-scoped recall with shared fallback, retain pre-filter, memory metrics, optional mental models. Follow-ups: measure the new prefetch metrics after deploy, tune `min_score`, bank missions and cleanup (separate worker).
+- [x] **Pull request outcomes in Hindsight**: a periodic job writes one replaceable document per pull request (`pr_events` in the plugin config, `docs/hindsight-memory.md`). Follow-up: confirm after deploy that recall finds merged records.
 - [ ] **Deploy plan** for Ergonaut on the octo cluster (modeled on kitchen-mgmt's infra/octo).
 - [x] **Schedules in each bot's bot.yaml** (`schedules:`, run every minute by Celery beat; bot page lists them with the next run). PR from `claude/bot-schedules`.
 - [x] **Auditable schedule workflows**: trusted Python steps, named JSON context, safe conditions, message-only prompts, fixed timezones, silent no-op runs and failure notices.

@@ -479,6 +479,8 @@ CELERY_BEAT_SCHEDULE = {
     "run-bot-schedules": {"task": "ergonaut.run_schedules", "schedule": crontab()},
     # Pull requests bots and workers reported: their state for thread cards and chips.
     "refresh-pull-requests": {"task": "ergonaut.refresh_pull_requests", "schedule": 60},
+    # Pull request outcomes into Hindsight memory, for bots with pr_events set.
+    "hindsight-pr-sync": {"task": "ergonaut.hindsight_sync_pull_requests", "schedule": 30 * 60},
 }
 # Subscription usage windows (omp usage): the Routing page and the router read
 # them. 0 turns the periodic sync off (the Routing page's Refresh still works).
