@@ -540,6 +540,9 @@ class ScheduleRun(models.Model):
 
     bot_name = models.CharField(max_length=100)
     schedule = models.CharField(max_length=100)
+    # The schedule's stable id (bot.yaml ``id``); "" on rows from before ids
+    # existed, whose key was their name.
+    schedule_key = models.CharField(max_length=100, blank=True, default="")
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="+")
     minute = models.DateTimeField()
     created_at = models.DateTimeField(auto_now_add=True)

@@ -468,6 +468,9 @@ def schedules_out(bot: Bot, user) -> list[dict]:
         out.append(
             {
                 "name": schedule.name,
+                "id": schedule.key,
+                "continuity": schedule.continuity,
+                "continuity_runs": schedule.continuity_runs,
                 "cron": schedule.cron.expression,
                 "users": list(schedule.users),
                 "enabled": schedule.enabled,

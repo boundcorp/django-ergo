@@ -1214,6 +1214,16 @@ def test_bot_page_lists_schedules(client, cook, bot_folder, use_bots):
     [action] = schedule["actions"]
     assert (action["kind"], action["to"], action["thread_title"]) == ("prompt", "thread", "plan %b %d")
     assert schedule["next_run"]
+    assert (schedule["id"], schedule["continuity"], schedule["continuity_runs"]) == ("plan", False, 5)
+
+    (bot_folder / "bot.yaml").write_text(
+        BOT
+        + 'schedules:\n  - {id: plan-key, name: Plan, cron: "0 17 * * sun", message: Plan, to: new,'
+        + " continuity: true, continuity_runs: 3}\n"
+    )
+    use_bots(say("hi"))
+    [schedule] = client.get("/api/bots/kitchen").json()["schedules"]
+    assert (schedule["id"], schedule["continuity"], schedule["continuity_runs"]) == ("plan-key", True, 3)
 
 
 @pytest.mark.django_db(transaction=True)

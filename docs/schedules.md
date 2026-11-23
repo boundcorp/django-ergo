@@ -239,6 +239,55 @@ interpreted as an empty catalog. Subscription sources never substitute an
 API account's membership for the subscription's catalog. Official requests
 use fixed HTTPS list endpoints, never redirects or billable inference.
 
+## Identity and continuity
+
+Each schedule has a stable identity and, optionally, memory of its earlier runs.
+
+```yaml
+schedules:
+  - id: weekly-report # stable key; defaults to name
+    name: Monday review # what people see; rename it freely
+    cron: "0 8 * * mon"
+    message: Review the week.
+    to: { thread: "Report {date:%b %d}" }
+    continuity: true # default false
+    continuity_runs: 5 # default 5, at most 20
+```
+
+- **`id`** is letters, digits, `-`, `_` and `.` (at most 100). Without it the
+  schedule's key is its `name`, so existing schedules keep the identity they
+  had. Set `id` before renaming a schedule; renaming one without an `id`
+  starts a new identity, and its older threads are no longer found.
+- **Links.** Every thread a run creates (`to: {thread: ...}`) records
+  `schedule_id`, `schedule` (the name then) and `schedule_run` (the
+  `ScheduleRun` id) in its metadata, and the run row records `schedule_key`.
+  Threads created before this (which only had `schedule`) are matched by name.
+  Links are never rewritten, so they survive renames, disabling a schedule and
+  removing it from `bot.yaml`; a run that can't find its schedule fails as
+  before and creates no thread. A run is claimed once, so a retried task does
+  not create a second thread.
+- **Continuity** (`continuity: true`) ends the prompt that opens each new
+  thread with a list of that person's earlier threads from the same schedule:
+  title, UTC time, state (`active`, `resolved`...), chat id and `/s/<id>` link,
+  and the first 400 characters of the thread's latest compaction summary if it
+  has one. It is newest first, at most `continuity_runs` entries and about
+  6,000 characters, leaves out the current run and threads since deleted,
+  includes resolved and archived threads, and is left out when there are none.
+  It reads stored rows only: no model call. It applies to prompts that go to
+  a new thread and call a model (`llm: true`); prompts to main or named chats
+  and `llm: false` messages get no list.
+- **Reading earlier runs.** The bot opens a listed chat with the history tools
+  (`ergo_chat_history_open_link`, `_tail`, `_read`, `_search`). Those already
+  cover all of the same person's chats with the same bot, resolved ones
+  included, and nobody else's, so there is no separate schedule tool. A run's
+  list only ever names that person's threads with that bot.
+
+With `continuity` unset nothing changes: no list is added.
+
+The bot page in Ergonaut shows each schedule's name, its `id` when different,
+and "remembers last N runs" for continuity schedules. It is read-only: change
+a schedule by editing `bot.yaml` (or its PR).
+
 ## How schedules run
 
 `django_ergo.bots.schedules.run_due(bots)` checks every bot's schedules and
