@@ -97,10 +97,12 @@ The API uses the [Hindsight retain](https://hindsight.vectorize.io/developer/api
 
 ## Backfilling past chats (dry run only)
 
-`django_ergo.plugins.hindsight_backfill` rebuilds the items live retain would have sent for past turns: same human-turn filters (`machine_turn`), same `User:`/`Assistant:` text and tags, `document_id` `ergonaut-turn-<call id>` (so a replay or a turn also retained live replaces one document), the turn's original `timestamp`, and `metadata.source_link` (`https://<host>/s/<chat>#m-<line>`). It reads only text blocks (no tool calls, output or reasoning) and drops turns that look like secrets. It never calls Hindsight.
+`django_ergo.plugins.hindsight_backfill` reconstructs candidate items from completed chat turns with the live `ergonaut-turn-<call id>` document ID, chat tags, original timestamp and `metadata.source_link` (`https://<host>/s/<chat>#m-<line>`). It reads text blocks, not tool calls, tool output or reasoning, and drops turns matching a best-effort secret pattern. This pattern cannot guarantee removal of all secrets. Telegram authors are excluded unless mapped explicitly; the command currently passes no mappings. Missing spans and requests that do not match the first user message are excluded. Reconstruction of the last assistant message is not proof it exactly matches live retain. Review the export before use.
+
+The command makes no Hindsight calls. Its character-based token and chunk counts are rough size estimates, not a cost estimate or upper bound. Reusing an ID targets the same document, but reprocessing can cost money and replace facts or invalidate derived observations. Do not ingest until downstream extraction, consolidation, refreshes, fallback and retries can all be bounded and tracked.
 
 ```sh
 ergonaut manage hindsight_backfill --scope named --out ~/hindsight-backfill --bank boundcorp=ergonaut ...
 ```
 
-`--scope` is `named` (named chats), `top` (plus main chats) or `all` (plus threads). Keep `--out` outside the repo: it holds chat content. Banks that are protected (`personal`) are counted but never exported.
+`--scope` is `named` (named chats), `top` (plus main chats) or `all` (plus threads). Keep `--out` outside the repo: it holds chat content. Supply each bank explicitly with `--bank`; the command does not read bot bank configuration. Banks that are protected (`personal`) are counted but never exported.

@@ -5,8 +5,8 @@
 ``--scope named`` is the permanent named chats (``bot_role == "chat"``),
 ``top`` adds each bot's main chat, ``all`` adds threads. Writes one JSONL file
 of retain items per chat plus ``summary.json`` under ``--out`` (keep it outside
-the repo: it holds chat content). Banks come from each bot's ``hindsight_memory``
-config (``--bank bot=bank`` to override); a bot with no bank, or the protected
+the repo: it holds chat content). Banks must be supplied explicitly via
+``--bank bot=bank``; a bot with no bank, or the protected
 ``personal`` bank, is listed but exported nowhere.
 """
 

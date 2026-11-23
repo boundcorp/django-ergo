@@ -2,17 +2,18 @@
 
 Read-only on the Ergonaut database. ``turn_items`` yields the same item the
 ``hindsight_memory`` plugin sends after a turn (``User:``/``Assistant:`` text,
-the same filters and tags), with three differences that make a replay safe:
+similar filters and tags), with these differences:
 
 - ``document_id`` is ``ergonaut-turn-<call id>``, the id live retain uses, so
-  replaying a turn (or a turn that was also retained live) replaces one
-  document instead of duplicating it.
+  a repeated retain targets the same document, but may incur cost and change
+  derived facts or observations.
 - ``timestamp`` is the turn's original time, not now.
 - ``metadata.source_link`` links to the message (``<host>/s/<chat>#m-<line>``).
 
 Tool calls, tool output and reasoning are never read (only ``text`` blocks),
-and turns containing something that looks like a secret are dropped whole.
-Nothing here calls Hindsight; ``estimate`` only counts.
+and turns matching a best-effort secret pattern are dropped whole. This is not
+a guarantee that the remaining text contains no secrets. Nothing here calls
+Hindsight; ``estimate`` is a rough size estimate, not a spending bound.
 """
 
 from __future__ import annotations
@@ -95,21 +96,30 @@ def turns(session, *, telegram_users=()):
         if call.status != "completed":
             yield skip("not_completed")
             continue
+        if call.last_sequence is None or call.last_sequence < call.first_sequence:
+            yield skip("missing_span")
+            continue
         if reason := machine_turn(call.metadata, {str(u) for u in telegram_users}):
             yield skip(reason)
             continue
         history = SessionSource(
             session,
             first_line=call.first_sequence,
-            before_line=(call.last_sequence or call.first_sequence) + 1,
+            before_line=call.last_sequence + 1,
             include_attribution=False,
         ).load()
-        user = next((m for m in history if m.role == "user" and m.text().strip()), None)
+        user = next(
+            (m for m in history if m.line == call.first_sequence and m.role == "user"),
+            None,
+        )
         replies = [m for m in history if m.role == "assistant" and m.text().strip()]
         if user is None or not replies:
             yield skip("empty")
             continue
         message = user.text().strip()
+        if not message or message != (call.request or "").strip():
+            yield skip("request_mismatch")
+            continue
         tools = _tools(session, call)
         if tools and tools <= CONFIG_READ_TOOLS and not has_decision(message):
             yield skip("config_only")
@@ -121,7 +131,7 @@ def turns(session, *, telegram_users=()):
             continue
         yield Turn(
             str(call.pk),
-            call.first_sequence,
+            user.line,
             user.timestamp or call.created_at,
             content,
         )
