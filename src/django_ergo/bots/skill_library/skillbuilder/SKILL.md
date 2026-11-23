@@ -293,7 +293,9 @@ total="sum:amount") %} {{ row.category }}: {{ row.total | money }}<br />
 - For table writes on a page, use `blocks.form(table="Receipt")` and
   `blocks.table(table="Receipt", edit=true, delete=true)`: inputs and errors
   match the Django model and delete asks the viewer to approve. Set
-  `page_writes = False` on an import-only table.
+  `page_writes = False` on an import-only table. For append-only generic
+  tools and pages, set `generic_writes = {"add"}`; trusted ORM writes,
+  migrations, and cascades remain unrestricted.
 - Use `blocks.button(label="Review", ask="Review these receipts")` or
   `ergo.ask(text, {chat})` to hand a request to the bot; the reply belongs in
   that chat, not the page.

@@ -118,6 +118,19 @@ def _execute(model, manager, using: str, operation: dict) -> dict:
     return _row(obj)
 
 
+def _check_permissions(model, operations):
+    for index, operation in enumerate(operations):
+        if isinstance(operation, dict):
+            op = operation.get("op")
+            for required in ("add", "update") if op == "upsert" else (op,):
+                if required in ("add", "update"):
+                    try:
+                        check_generic_writes(model, required)
+                    except ValueError as exc:
+                        msg = f"operation {index}: {exc}"
+                        raise ValueError(msg) from exc
+
+
 def batch(model: type[BotTable], operations: list[dict]) -> list[dict]:
     """Apply up to 100 operations in order; any failure rolls back the whole batch.
 
@@ -132,13 +145,13 @@ def batch(model: type[BotTable], operations: list[dict]) -> list[dict]:
     ):
         msg = "model must be a concrete bot table"
         raise ValueError(msg)
-    check_generic_writes(model)
     if (
         not isinstance(operations, list)
         or not 1 <= len(operations) <= MAX_BATCH_OPERATIONS
     ):
         msg = f"operations must be a list of 1 to {MAX_BATCH_OPERATIONS} items"
         raise ValueError(msg)
+    _check_permissions(model, operations)
     using = router.db_for_write(model)
     manager = model._base_manager.db_manager(using)  # noqa: SLF001
     results = []

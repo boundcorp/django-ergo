@@ -468,3 +468,23 @@ def test_preview_seeds_referenced_tables_first_and_tolerates_cycles():
     assert seed_order([B, A]) == [A, B]
     A.add_to_class("b", models.ForeignKey(B, null=True, on_delete=models.CASCADE))
     assert sorted(seed_order([B, A]), key=lambda m: m.__name__) == [A, B]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_append_only_page_controls(realty_bot):
+    from django_ergo.bots.pages import render_page
+
+    bot, user = realty_bot
+    house = bot.table("House")
+    house.generic_writes = {"add"}
+    try:
+        html = render_page(
+            bot,
+            '{{ blocks.form(table="House") }}{{ blocks.table(table="House", edit=True, delete=True) }}',
+            user=user,
+        )
+        assert 'data-ergo-action="add"' in html
+        assert 'data-ergo-action="update"' not in html
+        assert "data-ergo-delete data-ergo-table=" not in html
+    finally:
+        del house.generic_writes

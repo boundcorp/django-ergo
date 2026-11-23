@@ -42,6 +42,7 @@ import contextvars
 import re
 import sys
 import types
+from collections.abc import Collection
 from typing import TYPE_CHECKING
 from typing import Any
 
@@ -82,6 +83,27 @@ class BotTableBase(ModelBase):
     """Gives each bot table its bot's app label and a namespaced table name."""
 
     def __new__(mcs, name, bases, attrs, **kwargs):
+        policy = attrs.get(
+            "generic_writes",
+            next(
+                (
+                    base.generic_writes
+                    for base in bases
+                    if hasattr(base, "generic_writes")
+                ),
+                True,
+            ),
+        )
+        if not isinstance(policy, bool) and (
+            not isinstance(policy, Collection)
+            or isinstance(policy, str | bytes | dict)
+            or any(
+                not isinstance(op, str) or op not in {"add", "update", "delete"}
+                for op in policy
+            )
+        ):
+            msg = f"{name}: generic_writes must be a bool or collection of add, update, delete"
+            raise ValueError(msg)
         meta = attrs.get("Meta")
         abstract = bool(meta and getattr(meta, "abstract", False))
         if not abstract and attrs.get("__module__") != __name__:
@@ -98,7 +120,7 @@ class BotTableBase(ModelBase):
 
 
 class BotTable(models.Model, metaclass=BotTableBase):
-    """Base class for a bot's tables. Subclass it in a file listed under ``tables:``."""
+    """Base for bot tables; generic write limits do not restrict ORM writes, migrations or cascades."""
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -227,6 +249,9 @@ def describe(table: type[BotTable]) -> str:
             ": "
         )
     ]
+    allowed = [op for op in WRITE_OPERATIONS if generic_write_allowed(table, op)]
+    if len(allowed) != len(WRITE_OPERATIONS):
+        lines[0] += f" (generic writes: {', '.join(allowed) or 'none'})"
     for field in table._meta.concrete_fields:
         if field.is_relation and not safe_relation(table, field):
             continue
@@ -283,7 +308,8 @@ def table_schema(model: type[BotTable]) -> dict:
 
     from django.core.serializers.json import DjangoJSONEncoder
 
-    writable = set(writable_fields(model)) if model.generic_writes else set()
+    writes = [op for op in WRITE_OPERATIONS if generic_write_allowed(model, op)]
+    writable = set(writable_fields(model)) if {"add", "update"} & set(writes) else set()
     fields = []
     for field in model._meta.concrete_fields:
         if field.is_relation and not safe_relation(model, field):
@@ -330,7 +356,12 @@ def table_schema(model: type[BotTable]) -> dict:
                 unique.append([field.attname for field in fields_for_key])
     return json.loads(
         json.dumps(
-            {"table": model.__name__, "fields": fields, "unique_keys": unique},
+            {
+                "table": model.__name__,
+                "fields": fields,
+                "unique_keys": unique,
+                "writes": writes,
+            },
             cls=DjangoJSONEncoder,
         )
     )
@@ -412,10 +443,28 @@ def full_clean(obj: BotTable) -> None:
         raise ValidationError(errors) from None
 
 
-def check_generic_writes(model: type[BotTable]) -> None:
-    """Reject generic mutations of tables reserved for dedicated tools."""
-    if not model.generic_writes:
-        msg = f"{model.__name__} does not allow generic table writes"
+WRITE_OPERATIONS = ("add", "update", "delete")
+
+
+def generic_write_allowed(model: type[BotTable], operation: str) -> bool:
+    """Return whether a generic tool or page may perform this operation."""
+    if operation not in WRITE_OPERATIONS:
+        msg = f"Unknown generic write operation: {operation}"
+        raise ValueError(msg)
+    policy = model.generic_writes
+    return policy if isinstance(policy, bool) else operation in policy
+
+
+def check_generic_writes(model: type[BotTable], operation: str | None = None) -> None:
+    """Reject forbidden generic mutations; without an operation require any write."""
+    allowed = [op for op in WRITE_OPERATIONS if generic_write_allowed(model, op)]
+    if (operation is None and not allowed) or (
+        operation is not None and operation not in allowed
+    ):
+        if operation is None:
+            msg = f"{model.__name__} does not allow generic table writes"
+            raise ValueError(msg)
+        msg = f"{model.__name__} does not allow generic {operation} (allowed: {', '.join(allowed) or 'none'})"
         raise ValueError(msg)
 
 
@@ -423,7 +472,7 @@ def add_row(model: type[BotTable], values: dict) -> dict:
     """Create one row with the same validation used by table tools and page forms."""
     from django_ergo.bots.table_query import _safe
 
-    check_generic_writes(model)
+    check_generic_writes(model, "add")
     obj = model(**clean_values(model, values))
     full_clean(obj)
     obj.save()
@@ -434,7 +483,7 @@ def update_row(model: type[BotTable], id: int, values: dict) -> dict:  # noqa: A
     """Update one row with the same validation used by table tools and page forms."""
     from django_ergo.bots.table_query import _safe
 
-    check_generic_writes(model)
+    check_generic_writes(model, "update")
     try:
         obj = model.objects.get(pk=id)
     except model.DoesNotExist:
@@ -449,7 +498,7 @@ def update_row(model: type[BotTable], id: int, values: dict) -> dict:  # noqa: A
 
 def delete_row(model: type[BotTable], id: int) -> str:  # noqa: A002
     """Delete one row, reporting a clear missing-row error to a page or tool."""
-    check_generic_writes(model)
+    check_generic_writes(model, "delete")
 
     try:
         obj = model.objects.get(pk=id)
@@ -504,6 +553,7 @@ def page_delete(bot, table: str, id: int) -> dict:  # noqa: A002
 
 def page_delete_preview(bot, table: str, id: int) -> str:  # noqa: A002
     model = page_model(bot, table)
+    check_generic_writes(model, "delete")
     try:
         row = model.objects.get(pk=id)
     except model.DoesNotExist:
