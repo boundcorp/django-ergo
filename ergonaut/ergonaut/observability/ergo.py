@@ -72,6 +72,18 @@ def tool_finished(sender, tool, is_error, duration, **kwargs):
     metrics.tool_call_duration_seconds.labels(tool=tool).observe(duration)
 
 
+@_safe
+def memory_event(sender, bot_name, event, outcome, reason="", duration=0.0, count=0, **kwargs):  # noqa: PLR0913
+    bot = _label(bot_name)
+    if event == "prefetch":
+        metrics.memory_prefetch_total.labels(bot=bot, outcome=_label(outcome), reason=str(reason)[:40]).inc()
+        if outcome != "skipped":
+            metrics.memory_prefetch_duration_seconds.labels(bot=bot).observe(duration)
+            metrics.memory_prefetch_facts.labels(bot=bot).observe(count)
+    elif event == "retain":
+        metrics.memory_retain_total.labels(bot=bot, outcome=_label(outcome), reason=str(reason)[:40]).inc()
+
+
 def _worker_labels(worker) -> dict:
     state = worker.state if isinstance(worker.state, dict) else {}
     return {
@@ -152,6 +164,7 @@ def connect() -> None:
     signals.structured_call_started.connect(call_started, dispatch_uid="ergonaut-metrics-call-started")
     signals.structured_call_finished.connect(call_finished, dispatch_uid="ergonaut-metrics-call-finished")
     signals.tool_call_finished.connect(tool_finished, dispatch_uid="ergonaut-metrics-tool")
+    signals.memory_event.connect(memory_event, dispatch_uid="ergonaut-metrics-memory")
     for model, receiver in (
         (ergo_models.Worker, worker_saved),
         (ergo_models.ThreadMessage, thread_message_saved),
