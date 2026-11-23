@@ -169,11 +169,15 @@ def _sessions(ctx: ToolContext, names: list[str]):
 def _annotated(qs):
     """Latest reply, compaction summary and last activity of each session, as
     subqueries of the one sessions query (no per-session reads)."""
-    replies = StructuredCall.objects.filter(
-        session=OuterRef("pk"),
-        kind="chat_reply",
-        status=StructuredCallStatus.COMPLETED,
-    ).order_by("-created_at")
+    replies = (
+        StructuredCall.objects.filter(
+            session=OuterRef("pk"),
+            kind="chat_reply",
+            status=StructuredCallStatus.COMPLETED,
+        )
+        .exclude(Q(response__text__isnull=True) | Q(response__text=""))
+        .order_by("-updated_at", "-id")
+    )
     calls = StructuredCall.objects.filter(session=OuterRef("pk")).order_by(
         "-updated_at"
     )
@@ -189,7 +193,7 @@ def _annotated(qs):
         reply_type=Subquery(
             replies.annotate(t=KeyTextTransform("type", "response")).values("t")[:1]
         ),
-        reply_at=Subquery(replies.values("created_at")[:1]),
+        reply_at=Subquery(replies.values("updated_at")[:1]),
         compaction=Subquery(
             summaries.annotate(t=Left("summary", 1200)).values("t")[:1]
         ),
@@ -369,7 +373,22 @@ def _workers(ctx, names, *, limit, cutoff, **_) -> tuple[list, dict]:
         session__user_id=ctx.session.user_id, session__bot_name__in=names
     ).filter(Q(status__in=ACTIVE_WORKERS) | Q(updated_at__gte=cutoff))
     total = qs.count()
-    page = list(qs.select_related("session").order_by("-updated_at", "id")[:limit])
+    from django.db.models import Case
+    from django.db.models import IntegerField
+    from django.db.models import Value
+    from django.db.models import When
+
+    page = list(
+        qs.select_related("session")
+        .annotate(
+            priority=Case(
+                When(status__in=ACTIVE_WORKERS, then=Value(0)),
+                default=Value(1),
+                output_field=IntegerField(),
+            )
+        )
+        .order_by("priority", "-updated_at", "id")[:limit]
+    )
     rows = [
         {
             "id": str(w.id),

@@ -442,6 +442,56 @@ def test_text_fields_are_clipped(world):
     assert len(row["latest_reply"]["text"]) <= snapshot.EVIDENCE_CHARS
 
 
+def test_quiet_reply_does_not_hide_substantive_reply_and_uses_completion_time(world):
+    ctx = ctx_for(world, "boundcorp")
+    session = thread(world, "design", "wake")
+    reply = StructuredCall.objects.create(
+        session=session,
+        kind="chat_reply",
+        status="completed",
+        response={"type": "question", "text": "Choose?"},
+    )
+    completed = timezone.now() - timedelta(minutes=2)
+    StructuredCall.objects.filter(pk=reply.pk).update(
+        created_at=completed - timedelta(hours=1), updated_at=completed
+    )
+    StructuredCall.objects.create(
+        session=session,
+        kind="chat_reply",
+        status="completed",
+        response={"type": "message", "text": "", "unchanged": True},
+    )
+    row = next(
+        r
+        for r in snapshot.portfolio_status(ctx)["threads"]
+        if r["session_id"] == str(session.id)
+    )
+    assert row["latest_reply"]["text"] == "Choose?"
+    assert row["latest_reply"]["at"] == snapshot._iso(completed)
+    assert row["recorded"]["asks_user"]
+
+
+def test_running_workers_are_selected_before_recent_completed_workers(world):
+    ctx = ctx_for(world, "boundcorp")
+    running = Worker.objects.create(
+        session=ctx.session,
+        bot_name="boundcorp",
+        title="running",
+        function="task:x",
+        status="running",
+    )
+    for i in range(20):
+        Worker.objects.create(
+            session=ctx.session,
+            bot_name="boundcorp",
+            title=f"done {i}",
+            function="task:x",
+            status="completed",
+        )
+    rows = snapshot.portfolio_status(ctx, sources=["workers"])["workers"]
+    assert rows[0]["id"] == str(running.id)
+
+
 def test_the_tool_is_one_call_for_orchestrating_bots_only(world):
     ctx = ctx_for(world, "boundcorp")
     thread(world, "design", "Logo")
