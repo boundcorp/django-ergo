@@ -4509,3 +4509,60 @@ async def test_session_managers_refuse_permanent_and_close_ordinary_threads(tmp_
         await manager.close_session(thread)
         await thread.arefresh_from_db()
         assert thread.status == "completed"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_configured_permanence_respects_explicit_unmark_after_reload(tmp_path):
+    user = User.objects.create(username="config-override-owner")
+    bot, _ = make_bot(tmp_path, say("ok"))
+    thread = ConversationSession.objects.create(
+        user=user, bot_name=bot.name, status="active", engine_type="claude"
+    )
+    bot.definition.permanent_chats = [str(thread.id)]
+    BotRegistry().add(bot)
+    thread.refresh_from_db()
+    assert thread.is_permanent
+    ConversationSession.objects.filter(pk=thread.pk).update(
+        is_permanent=False, permanence_initialized=True
+    )
+    BotRegistry().add(bot)
+    thread.refresh_from_db()
+    assert not thread.is_permanent
+
+
+@pytest.mark.django_db(transaction=True)
+def test_closure_waits_for_concurrent_permanence_change():
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    from django.db import close_old_connections
+    from django.db import transaction
+
+    from django_ergo.conversation.models import PermanentChatError
+
+    user = User.objects.create(username="closure-race-owner")
+    session = ConversationSession.objects.create(
+        user=user, status="active", engine_type="claude"
+    )
+    started = threading.Event()
+
+    def close():
+        try:
+            stale = ConversationSession.objects.get(pk=session.pk)
+            stale.status = "completed"
+            started.set()
+            with pytest.raises(PermanentChatError):
+                stale.save(update_fields=["status"])
+        finally:
+            close_old_connections()
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        with transaction.atomic():
+            row = ConversationSession.objects.select_for_update().get(pk=session.pk)
+            row.is_permanent = True
+            row.save(update_fields=["is_permanent"])
+            future = executor.submit(close)
+            assert started.wait(5)
+        future.result(timeout=10)
+    session.refresh_from_db()
+    assert session.is_permanent and session.status == "active"

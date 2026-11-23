@@ -2512,6 +2512,13 @@ def test_permanence_toggle_and_close_permissions(client, cook, bot_folder, use_b
     assert post(client, f"{url}/permanent", {"is_permanent": False}).status_code == 403
     client.force_login(cook)
     assert not post(client, f"{url}/permanent", {"is_permanent": False}).json()["is_permanent"]
+    from django_ergo.bots.registry import BotRegistry
+    from django_ergo.conversation.models import ConversationSession
+
+    bot = webhooks.get_registry().get("kitchen")
+    bot.definition.permanent_chats = [thread["id"]]
+    BotRegistry().add(bot)
+    assert not ConversationSession.objects.get(pk=thread["id"]).is_permanent
     assert post(client, f"{url}/close").json()["status"] == "completed"
     main = post(client, "/api/bots/kitchen/root").json()
     main_url = f"/api/sessions/{main['id']}"

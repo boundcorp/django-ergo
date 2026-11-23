@@ -86,9 +86,9 @@ def _sync_permanent_chats(bot: Bot) -> None:
         from django.db import close_old_connections
 
         try:
-            bot.sessions().filter(pk__in=bot.definition.permanent_chats).update(
-                is_permanent=True
-            )
+            bot.sessions().filter(
+                pk__in=bot.definition.permanent_chats, permanence_initialized=False
+            ).update(is_permanent=True, permanence_initialized=True)
         finally:
             close_old_connections()
 

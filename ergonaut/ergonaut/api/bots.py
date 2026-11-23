@@ -1909,7 +1909,9 @@ async def set_session_permanent(request, session_id: str, data: PermanentSession
     if not request.auth.is_active or (session.user_id != request.auth.pk and not request.auth.is_superuser):
         raise HttpError(403, "You cannot manage this chat")
     get_bot(session.bot_name, request.auth)
-    await ConversationSession.objects.filter(pk=session.pk).aupdate(is_permanent=data.is_permanent)
+    await ConversationSession.objects.filter(pk=session.pk).aupdate(
+        is_permanent=data.is_permanent, permanence_initialized=True
+    )
     session = await with_open_counts(ConversationSession.objects.filter(pk=session.pk)).select_related("user").aget()
     return await sync_to_async(session_out)(session)
 
