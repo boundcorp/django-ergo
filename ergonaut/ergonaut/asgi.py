@@ -2,6 +2,9 @@ import os
 
 from django.core.asgi import get_asgi_application
 
+from ergonaut.access_logging import install_access_log_filter
+
+install_access_log_filter()
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "ergonaut.settings")
 
 application = get_asgi_application()

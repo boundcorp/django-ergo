@@ -133,3 +133,10 @@ client type is **Web application** (not Desktop: the redirect is Ergonaut's own 
    functions, and `google_sync.decrypt` call `credential_box.unseal` (not part of this PR).
 3. Do the console steps above and create the three env secrets in `infra-octo`.
 4. Connect the accounts on the page.
+
+Access logging removes the entire query string from `/oauth/google/callback/` while
+retaining the request method, path, and status. If this change needs rollback,
+revert the commit that introduced the callback access-log filter and allow the
+normal image build and deployment to roll out; do not restart Ergonaut manually.
+The earlier ingress redaction remains in place, but callback queries can again
+appear in application access logs after rollback, so leave Google OAuth inactive.
