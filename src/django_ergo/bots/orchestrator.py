@@ -544,6 +544,33 @@ def ergo_portfolio_status(  # noqa: PLR0913
 @bot_tool(
     takes_context=True,
     parameters={
+        "end_utc": {
+            "type": "string",
+            "description": "Timezone-aware end of the seven-day window (exclusive).",
+        },
+        "session_ids": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Explicitly selected non-personal session IDs; default empty, maximum 200.",
+        },
+    },
+    required=["end_utc"],
+)
+def ergo_self_health_metrics(
+    ctx: ToolContext, end_utc: str, session_ids: list[str] | None = None
+) -> dict:
+    """Aggregate recorded health metrics for explicitly selected accessible non-personal sessions; no message payloads. Empty selection is the default. Counts have source and coverage limits."""
+    from django_ergo.bots.self_health import report
+
+    try:
+        return report(ctx, end_utc, session_ids)
+    except ValueError as exc:
+        raise ToolError(str(exc)) from None
+
+
+@bot_tool(
+    takes_context=True,
+    parameters={
         "bot": {"type": "string", "description": "Bot name; defaults to this bot."},
         "query": {
             "type": "string",
@@ -1236,6 +1263,7 @@ def orchestrator_toolkit(ctx: ToolContext) -> FunctionToolkit:
         ergo_bot_list,
         ergo_thread_list,
         ergo_portfolio_status,
+        ergo_self_health_metrics,
         ergo_thread_send,
         ergo_thread_forward,
         ergo_thread_stop,
