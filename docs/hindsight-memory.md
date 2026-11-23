@@ -94,3 +94,13 @@ Metric: `ergonaut_memory_pr_sync_total{bot,outcome,reason}` with outcome `writte
 Ergonaut exposes `ergonaut_memory_prefetch_total{bot,outcome,reason}` (outcome `ok`, `empty`, `timeout`, `error`, `skipped`), `ergonaut_memory_prefetch_duration_seconds{bot}`, `ergonaut_memory_prefetch_facts{bot}` and `ergonaut_memory_retain_total{bot,outcome,reason}` (outcome `queued` or `skipped`; reasons such as `config_only`, `provenance`, `author`, `recurring_wake`, `telegram_unmapped`, `empty`, `failed`). The library emits `django_ergo.signals.memory_event`; Ergonaut turns it into the metrics above.
 
 The API uses the [Hindsight retain](https://hindsight.vectorize.io/developer/api/retain), [recall](https://hindsight.vectorize.io/developer/api/recall), and [reflect](https://hindsight.vectorize.io/developer/api/reflect) endpoints.
+
+## Backfilling past chats (dry run only)
+
+`django_ergo.plugins.hindsight_backfill` rebuilds the items live retain would have sent for past turns: same human-turn filters (`machine_turn`), same `User:`/`Assistant:` text and tags, `document_id` `ergonaut-turn-<call id>` (so a replay or a turn also retained live replaces one document), the turn's original `timestamp`, and `metadata.source_link` (`https://<host>/s/<chat>#m-<line>`). It reads only text blocks (no tool calls, output or reasoning) and drops turns that look like secrets. It never calls Hindsight.
+
+```sh
+ergonaut manage hindsight_backfill --scope named --out ~/hindsight-backfill --bank boundcorp=ergonaut ...
+```
+
+`--scope` is `named` (named chats), `top` (plus main chats) or `all` (plus threads). Keep `--out` outside the repo: it holds chat content. Banks that are protected (`personal`) are counted but never exported.

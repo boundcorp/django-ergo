@@ -168,6 +168,32 @@ def clean_assistant_text(text: str) -> str:  # noqa: C901
     return "\n".join(lines).strip()
 
 
+def machine_turn(meta: dict | None, telegram_users=()) -> str:
+    """Why a turn was not written by a person, or "" for a human turn."""
+    meta = meta or {}
+    author = meta.get("message_author") or {}
+    kind = author.get("kind")
+    if kind == "telegram_user":
+        if str(author.get("ref")) not in telegram_users:
+            return "telegram_unmapped"
+    elif author and kind != "django_user":
+        return "author"
+    if meta.get("message_provenance"):
+        return "provenance"
+    if meta.get("recurring_wake") or meta.get("periodic_checkins"):
+        return "recurring_wake"
+    return ""
+
+
+def chat_tags(bot: str, session, source: str = "chat") -> list[str]:
+    """The tags every memory of this chat carries (recall scopes on them)."""
+    tags = [f"bot:{bot}", f"chat:{session.id}", f"user:{session.user_id}"]
+    if session.parent_id:
+        tags.append(f"thread:{session.id}")
+    tags.append(f"source:{source}")
+    return tags
+
+
 def has_decision(message: str) -> bool:
     """Whether a user message looks like it carries a decision or preference."""
     return bool(_DECISION.search(message))
@@ -301,28 +327,12 @@ class HindsightMemoryPlugin(BotPlugin):
 
     def machine_turn(self, meta: dict | None) -> str:
         """Why this turn was not written by a person, or "" for a human turn."""
-        meta = meta or {}
-        author = meta.get("message_author") or {}
-        kind = author.get("kind")
-        if kind == "telegram_user":
-            if str(author.get("ref")) not in self.telegram_users:
-                return "telegram_unmapped"
-        elif author and kind != "django_user":
-            return "author"
-        if meta.get("message_provenance"):
-            return "provenance"
-        if meta.get("recurring_wake") or meta.get("periodic_checkins"):
-            return "recurring_wake"
-        return ""
+        return machine_turn(meta, self.telegram_users)
 
     # -- tags and items --------------------------------------------------------
 
     def _tags(self, session, source: str = "chat") -> list[str]:
-        tags = [f"bot:{self.bot.name}", f"chat:{session.id}", f"user:{session.user_id}"]
-        if session.parent_id:
-            tags.append(f"thread:{session.id}")
-        tags.append(f"source:{source}")
-        return tags
+        return chat_tags(self.bot.name, session, source)
 
     def _item(
         self,
