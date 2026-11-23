@@ -810,3 +810,23 @@ def test_launch_supersedes_only_this_chats_worker(instruction_worker, monkeypatc
     with pytest.raises(ValueError, match="Superseded worker"):
         env.plugin._launch_agent(env.ctx, spec, "site", None)
     assert len(calls) == 1
+
+
+def test_authority_reference_rejects_missing_and_other_author(instruction_worker):
+    from django_ergo.conversation.models import SessionMessage
+
+    env = instruction_worker
+    with pytest.raises(ValueError, match="authenticated user"):
+        agents.authority_reference(env.ctx, "00000000-0000-0000-0000-000000000000")
+    message = SessionMessage.objects.create(
+        session=env.ctx.session,
+        role="user",
+        sequence=1,
+        author={
+            "kind": "django_user",
+            "ref": "another-user",
+            "authenticated_by": "ergonaut_session",
+        },
+    )
+    with pytest.raises(ValueError, match="authenticated user"):
+        agents.authority_reference(env.ctx, str(message.pk))
