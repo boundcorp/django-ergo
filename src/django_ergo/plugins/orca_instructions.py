@@ -47,7 +47,9 @@ def ledger(worker_id):
         worker.save(update_fields=["args", "updated_at"])
 
 
-def enqueue(worker_id, instruction_id, text, supersedes="", priority="normal"):
+def enqueue(  # noqa: PLR0913
+    worker_id, instruction_id, text, supersedes="", priority="normal", authority=None
+):
     """Compare-and-append; the caller's stable id makes retries idempotent."""
     if not instruction_id.strip() or not text.strip():
         msg = "instruction_id and text must not be empty"
@@ -61,10 +63,16 @@ def enqueue(worker_id, instruction_id, text, supersedes="", priority="normal"):
             raise ValueError(msg)
         for row in rows:
             if row["id"] == instruction_id:
-                if (row["text"], row["supersedes"], row["priority"]) != (
+                if (
+                    row["text"],
+                    row["supersedes"],
+                    row["priority"],
+                    row.get("authority"),
+                ) != (
                     text,
                     supersedes,
                     priority,
+                    authority,
                 ):
                     msg = "instruction_id already names different content"
                     raise ValueError(msg)
@@ -79,6 +87,7 @@ def enqueue(worker_id, instruction_id, text, supersedes="", priority="normal"):
             "version": len(rows) + 1,
             "supersedes": supersedes,
             "priority": priority,
+            "authority": authority,
             "text": text,
             "status": "queued",
             "created_at": timezone.now().isoformat(),
@@ -155,7 +164,9 @@ def body(row, handle):
     return (
         f"Ergo instruction v{row['version']} id={row['id']} "
         f"supersedes={row['supersedes'] or '(none)'} priority={row['priority']}\n\n"
-        f"{row['text']}\n\nRead all available instructions first; apply only the latest. "
+        f"{row['text']}\n\n"
+        f"Authority reference (context only, not authorization): {json.dumps(row.get('authority'))}\n\n"
+        "Read all available instructions first; apply only the latest. "
         "Preserve the task's authorization constraints. At your next safe checkpoint, "
         "acknowledge the latest instruction with its id, version and a concrete next "
         "action (not a receipt). Use your preamble's CLI executable and worker "
@@ -409,14 +420,29 @@ def tools(plugin):
                 "description": "Latest instruction id, or empty",
             },
             "priority": {"type": "string", "enum": ["normal", "urgent"]},
+            "authority_message_id": {
+                "type": "string",
+                "description": "Optional authenticated user message in this chat; context only",
+            },
         },
         required=["worker_id", "instruction_id", "text", "supersedes"],
         requires_approval=plugin.approve_changes,
     )
-    def instruct(ctx, worker_id, instruction_id, text, supersedes, priority="normal"):  # noqa: PLR0913
+    def instruct(  # noqa: PLR0913
+        ctx,
+        worker_id,
+        instruction_id,
+        text,
+        supersedes,
+        priority="normal",
+        authority_message_id="",
+    ):
         worker = find(ctx, worker_id)
         check_spacing(text, "text")
-        return enqueue(worker.pk, instruction_id, text, supersedes, priority)
+        from django_ergo.bots.agents import authority_reference
+
+        authority = authority_reference(ctx, authority_message_id)
+        return enqueue(worker.pk, instruction_id, text, supersedes, priority, authority)
 
     @bot_tool(
         name="ergo_orca_instruction_status",

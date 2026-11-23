@@ -469,3 +469,34 @@ def test_a_reply_to_a_question_never_asked_names_the_open_one(tmp_path, workers)
     assert "queued" in kit.execute_tool(
         "ergo_agent_reply", {**reply, "question_id": "job:2"}
     )
+
+
+@pytest.mark.django_db(transaction=True)
+def test_agent_authority_reference_validated_before_launch(tmp_path, workers):  # noqa: F811
+    from django_ergo.conversation.models import SessionMessage
+    from django_ergo.conversation.models import Worker
+
+    _, session, manager, kit = setup(tmp_path)
+    message = SessionMessage.objects.create(
+        session=session,
+        role="user",
+        sequence=1,
+        author={
+            "kind": "django_user",
+            "ref": str(session.user_id),
+            "authenticated_by": "ergonaut_session",
+        },
+    )
+    args = {
+        "brief": "Review",
+        "workspace": "site",
+        "authority_message_id": str(message.pk),
+    }
+    launched = start(kit, args)
+    assert manager.started[0].authority_message_id == str(message.pk)
+    assert Worker.objects.get(pk=launched["id"]).args["handle"]["authority"][
+        "message_id"
+    ] == str(message.pk)
+    with pytest.raises(ValueError, match="Invalid authority"):
+        start(kit, {**args, "authority_message_id": "bad"})
+    assert len(manager.started) == 1
