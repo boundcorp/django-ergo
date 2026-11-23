@@ -4,7 +4,9 @@ import logging
 import types
 from urllib.parse import parse_qs, urlparse
 
+import jwt
 import pytest
+from cryptography.hazmat.primitives.asymmetric import rsa
 from django.urls import reverse
 from django_ergo.bots import credential_box
 
@@ -20,6 +22,7 @@ GM = "https://www.googleapis.com/auth/gmail.readonly"
 CAL = "https://www.googleapis.com/auth/calendar.events"
 CALLIST = "https://www.googleapis.com/auth/calendar.calendarlist.readonly"
 SCOPES = [GM, CAL, CALLIST]
+PRIVATE_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 
 
 class Store:
@@ -112,6 +115,7 @@ class Google:
             "iss": "https://accounts.google.com",
             "aud": CLIENT_ID,
             "exp": 4102444800,
+            "iat": 1700000000,
             "nonce": entry_nonce,
             "sub": "sub-" + self.email,
             "email": self.email,
@@ -120,8 +124,7 @@ class Google:
         if self.hd:
             claims["hd"] = self.hd
         claims.update(over)
-        body = base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip("=")
-        return f"x.{body}.y"
+        return jwt.encode(claims, PRIVATE_KEY, algorithm="RS256", headers={"kid": "test"})
 
     def __call__(self, url, data):
         self.sent.append((url, dict(data)))
@@ -142,6 +145,13 @@ class Google:
 def google(monkeypatch):
     fake = Google()
     monkeypatch.setattr(flow, "post", fake)
+    monkeypatch.setattr(
+        flow.jwt,
+        "PyJWKClient",
+        lambda *a, **kw: types.SimpleNamespace(
+            get_signing_key_from_jwt=lambda token: types.SimpleNamespace(key=PRIVATE_KEY.public_key())
+        ),
+    )
     return fake
 
 
@@ -268,7 +278,7 @@ def test_start_is_post_only_and_callback_get_only(client, owner, bots):
 def test_missing_scope_rejected_and_grant_revoked(client, owner, bots, google, store):
     google.granted = f"{GM} openid email"
     response = finish(client, google, begin(client))
-    assert store.rows == {} and google.revoked == [REFRESH]
+    assert store.rows == {} and google.revoked == []
     assert client.get(response["Location"]).context["message"] == flow.REASONS["scope"]
 
 
@@ -301,7 +311,7 @@ def test_two_accounts_stored_separately(client, owner, bots, google, store):
 def test_account_that_doesnt_match_the_request_is_refused(client, owner, bots, google, store, hd, hint, email, domain):
     google.email, google.hd = email, domain
     finish(client, google, begin(client, hd=hd, login_hint=hint))
-    assert store.rows == {} and google.revoked == [REFRESH]
+    assert store.rows == {} and google.revoked == []
 
 
 @pytest.mark.parametrize(
@@ -369,7 +379,7 @@ def test_status_page_never_shows_secrets(client, owner, bots, google, store):
     assert "lee@gmail.com" in body and "gmail.readonly" in body and "ok" in body
     for secret in (REFRESH, CLIENT_SECRET, CODE, "ya29.access", store.rows[(OWNER, "lee@gmail.com")]["token"]):
         assert secret not in body
-    assert "no-store" in page["Cache-Control"] and page["Referrer-Policy"] == "same-origin"
+    assert "no-store" in page["Cache-Control"] and page["Referrer-Policy"] == "no-referrer"
 
 
 def test_nothing_sensitive_is_logged_or_stored_in_session(client, owner, bots, google, store, caplog):
@@ -391,10 +401,10 @@ def test_nothing_sensitive_is_logged_or_stored_in_session(client, owner, bots, g
     assert "ya29.access" not in json.dumps(dict(client.session.items()), default=str)
 
 
-def test_store_failure_revokes_and_says_only_that(client, owner, bots, google, store):
+def test_store_failure_does_not_revoke_and_says_only_that(client, owner, bots, google, store):
     bots["personal"].tool_modules[0].module.google_store_account = lambda ctx, account: 1 / 0
     response = finish(client, google, begin(client))
-    assert google.revoked == [REFRESH]
+    assert google.revoked == []
     assert client.get(response["Location"]).context["message"] == flow.REASONS["store"]
 
 
@@ -456,3 +466,27 @@ def test_read_only_connector_shows_no_write_warning(client, owner, bots):
     bots["personal"].tool_modules[0].module.GOOGLE_OAUTH["scopes"] = [GM]
     body = client.get(reverse("google-oauth-page"), {"bot": "personal"}).content.decode()
     assert "write access" not in body
+
+
+def test_unsigned_and_wrong_key_tokens_rejected(client, owner, bots, google, store, monkeypatch):
+    original = google.id_token
+
+    def invalid(nonce, **kwargs):
+        token = original(nonce, **kwargs)
+        claims = jwt.decode(token, options={"verify_signature": False})
+        return jwt.encode(claims, rsa.generate_private_key(public_exponent=65537, key_size=2048), algorithm="RS256")
+
+    monkeypatch.setattr(google, "id_token", invalid)
+    finish(client, google, begin(client))
+    assert not store.rows and not google.revoked
+    monkeypatch.setattr(
+        google, "id_token", lambda nonce, **kwargs: jwt.encode({"nonce": nonce}, "secret", algorithm="HS256")
+    )
+    finish(client, google, begin(client))
+    assert not store.rows and not google.revoked
+
+
+def test_anonymous_callback_does_not_redirect_query(client, db):
+    response = client.get(reverse("google-oauth-callback"), {"code": CODE, "state": "secret-state"})
+    assert response.status_code == 403 and "Location" not in response
+    assert response["Referrer-Policy"] == "no-referrer"

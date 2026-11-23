@@ -35,15 +35,19 @@ ACCOUNT_FIELDS = (
 
 
 def human_only(view):
-    """Signed in, no-store, and a same-origin referrer policy (as relogin: no-referrer would make
-    browsers send "Origin: null" on form POSTs, which CSRF refuses)."""
+    """Require a signed-in user and prevent caching and referrer leakage."""
 
     @wraps(view)
     def wrapped(request, *args, **kwargs):
         if not request.user.is_authenticated:
+            if request.path == reverse("google-oauth-callback"):
+                response = HttpResponse("Sign-in session expired. Start again.", status=403)
+                response["Referrer-Policy"] = "no-referrer"
+                response["Cache-Control"] = "no-store"
+                return response
             return HttpResponseRedirect("/login?" + urlencode({"next": request.get_full_path()}))
         response = view(request, *args, **kwargs)
-        response.headers.setdefault("Referrer-Policy", "same-origin")
+        response.headers["Referrer-Policy"] = "no-referrer"
         response["Cache-Control"] = "no-store"
         return response
 
@@ -195,7 +199,6 @@ def _finish(request, connector, entry, code) -> str:
     try:
         connector.hook("google_store_account")(_ctx(request, connector), account)
     except Exception:  # noqa: BLE001 - the error could carry the token; say only that it failed
-        flow.revoke(account["refresh_token"])
         return "store"
     return "connected"
 

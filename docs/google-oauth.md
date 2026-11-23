@@ -67,33 +67,32 @@ the refresh token (and the client secret); its sync code unseals with the same `
 3. **Callback** (`/oauth/google/callback/`): the state is removed from the session first (so a
    replay, another session or another user finds nothing), then the code is exchanged server
    side with the verifier. It checks that every requested scope was granted, a refresh token came
-   back, and the id_token (straight from Google's token endpoint over TLS, so not re-verified
-   by signature) has the right issuer, audience, expiry and nonce, and a verified email. The
+   back, and the ID token has an RS256 signature verified against Google’s fixed JWKS endpoint, the right issuer, audience, expiry, issued-at time and nonce, and a verified email. The
    account must match `login_hint`/`hd` if given, so two accounts (a boundcorp.net Workspace one
-   and a consumer Gmail one) connect separately. On any failure the grant is revoked at Google.
-   The callback always answers with a redirect to the page, so no code stays in a page URL.
+   and a consumer Gmail one) connect separately. On validation or storage failure the newly returned token is discarded without revoking: revocation can invalidate an existing grant belonging to the account that actually signed in. Successful callbacks redirect to a clean page; invalid state and expired sessions return an error.
 4. **Disconnect** (POST, CSRF): revokes the refresh token at Google, then deletes the stored
    account whether or not Google confirmed (the page says if it didn't).
 
 Errors are fixed sentences (`flow.REASONS`). Logs carry only `google-oauth <bot>: <reason code>`;
 codes, tokens, secrets and Google's responses are never logged, shown or kept in the session.
-Pages send `Cache-Control: no-store` and `Referrer-Policy: same-origin`.
+Pages send `Cache-Control: no-store` and `Referrer-Policy: no-referrer`.
 
-One caveat: Google redirects with the code in the callback's query string, so a reverse proxy
-or access log that records URLs will see it. It is single use and bound to the PKCE verifier,
-which only the session holds, so a logged code is useless; still, don't ship query strings of
-`/oauth/google/callback/` to third-party log services.
+Google sends the authorization code and state in the callback query string. Configure ingress,
+proxy, application access logs, tracing and error reporting to omit or redact query strings for
+`/oauth/google/callback/` before enabling the feature. PKCE limits code misuse but does not make
+logging codes harmless. Confirm this sanitization in the actual deployment; this PR does not
+change infrastructure logging.
 
 ## Storage paths (proposed, nothing created yet)
 
 | What | Name | Where it would go |
 | --- | --- | --- |
-| OAuth client id | `PERSONAL_GOOGLE_OAUTH_CLIENT_ID` | Ergonaut's environment, new key in `infra-octo/kubernetes/apps/ergonaut/app/runtime-secret.sops.yaml` (SOPS; the deployment loads it with `envFrom`) |
+| OAuth client id | `PERSONAL_GOOGLE_OAUTH_CLIENT_ID` | Proposed Ergonaut environment key in `infra-octo/kubernetes/apps/ergonaut/app/runtime-secret.sops.yaml` (SOPS; the deployment loads it with `envFrom`) |
 | OAuth client secret | `PERSONAL_GOOGLE_OAUTH_CLIENT_SECRET` | same |
-| Token encryption key (Fernet) | `PERSONAL_GOOGLE_TOKEN_KEY` | same; generate with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` and keep a copy: without it stored tokens can't be read |
-| Public address | `ERGONAUT_PUBLIC_URL` | not a secret: check `infra-octo/kubernetes/apps/ergonaut/app/configmap.yaml` has it, as the `https://` host |
+| Token encryption key (Fernet) | `PERSONAL_GOOGLE_TOKEN_KEY` | same (proposed); generate with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` and keep a copy: without it stored tokens can't be read |
+| Public address | `ERGONAUT_PUBLIC_URL` | not a secret: existing `infra-octo/kubernetes/apps/ergonaut/app/configmap.yaml` contains the `https://` host |
 
-The Celery worker running the sync jobs needs the same key. Lee or the infra owner sets these
+The files and envFrom wiring exist in the inspected infra checkout; the new keys and their deployment are proposals and have not been provisioned. The Celery worker running the sync jobs needs the same key. Lee or the infra owner sets these
 (edit the SOPS file with `sops`, as for the other Ergonaut secrets); this PR creates none of them.
 
 ## Redirect URI to register in Google Cloud
@@ -114,11 +113,10 @@ client type is **Web application** (not Desktop: the redirect is Ergonaut's own 
      cannot sign in a separate consumer Gmail.
    - **External** is needed to connect a consumer Gmail. While the app is in **Testing**, add each
      account under Test users, and Google **expires refresh tokens after 7 days** for the
-     sensitive/restricted Gmail scopes, so the account drops to `reauth_required` weekly and
+     sensitive/restricted Gmail scopes for both Workspace and consumer accounts, so each account drops to `reauth_required` weekly and
      must be reconnected here. Publishing to production removes that but shows an
      unverified-app warning until Google verification (Gmail scopes are restricted).
-   - Using one External project for both accounts is simplest; or an Internal project for
-     boundcorp.net and an External one for Gmail, each with its own env secret names.
+   - This connector supports one configured client per bot. Use one External client for both accounts; separate Internal and External clients are not supported by this configuration.
 4. Data access / Scopes: add `openid`, `email`, `.../auth/gmail.readonly`,
    `.../auth/gmail.compose`, `.../auth/calendar.events`,
    `.../auth/calendar.calendarlist.readonly`. (`gmail.compose` technically allows sending mail; the

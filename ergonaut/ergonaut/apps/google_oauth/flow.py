@@ -13,11 +13,13 @@ import secrets
 import time
 from urllib.parse import urlencode
 
+import jwt
 import requests
 from django.conf import settings
 
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"  # noqa: S105 - public endpoint
+JWKS_URL = "https://www.googleapis.com/oauth2/v3/certs"
 REVOKE_URL = "https://oauth2.googleapis.com/revoke"
 ISSUERS = {"https://accounts.google.com", "accounts.google.com"}
 STATE_TTL = 600  # seconds a started sign-in stays valid
@@ -142,15 +144,21 @@ def post(url: str, data: dict) -> tuple[int, dict]:
         return 0, {}
 
 
-def id_token_claims(id_token) -> dict | None:
-    """The claims of an id_token that came straight from Google's token endpoint over TLS (so,
-    per OpenID Connect Core 3.1.3.7, its signature needn't be checked again)."""
+def id_token_claims(id_token, client_id: str) -> dict | None:
+    """Verify Google's signed ID token using only its fixed JWKS endpoint and RS256."""
     try:
-        payload = id_token.split(".")[1]
-        claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
-    except Exception:  # noqa: BLE001
+        key = jwt.PyJWKClient(JWKS_URL, timeout=HTTP_TIMEOUT).get_signing_key_from_jwt(id_token)
+        claims = jwt.decode(
+            id_token,
+            key.key,
+            algorithms=["RS256"],
+            audience=client_id,
+            issuer=list(ISSUERS),
+            options={"require": ["iss", "aud", "exp", "iat", "sub"]},
+        )
+        return claims if isinstance(claims, dict) else None
+    except Exception:  # noqa: BLE001 - key and token failures are deliberately indistinguishable
         return None
-    return claims if isinstance(claims, dict) else None
 
 
 def exchange(entry: dict, connector, client_id: str, client_secret: str, code: str, now: float | None = None):
@@ -171,13 +179,11 @@ def exchange(entry: dict, connector, client_id: str, client_secret: str, code: s
         return None, "exchange"
     refresh = body.get("refresh_token")
     if not isinstance(refresh, str) or not refresh:
-        _revoke_quietly(body.get("access_token"))
         return None, "no_refresh"
     granted = set(str(body.get("scope") or "").split())
     if not set(connector.scopes) <= granted:
-        _revoke_quietly(refresh)
         return None, "scope"
-    claims = id_token_claims(body.get("id_token") or "")
+    claims = id_token_claims(body.get("id_token") or "", client_id)
     email = claims.get("email") if claims else None
     ok = (
         claims is not None
@@ -192,7 +198,6 @@ def exchange(entry: dict, connector, client_id: str, client_secret: str, code: s
         and claims.get("email_verified") in (True, "true")
     )
     if not ok:
-        _revoke_quietly(refresh)
         return None, "identity"
     email = email.lower()
     domain = claims.get("hd") if isinstance(claims.get("hd"), str) else ""
@@ -202,7 +207,6 @@ def exchange(entry: dict, connector, client_id: str, client_secret: str, code: s
         or (wanted == "consumer" and domain)
         or (wanted not in ("", "consumer") and domain.lower() != wanted)
     ):
-        _revoke_quietly(refresh)
         return None, "account"
     return {
         "email": email,
@@ -214,11 +218,6 @@ def exchange(entry: dict, connector, client_id: str, client_secret: str, code: s
         "google_sub": claims["sub"],
         "hd": domain,
     }, None
-
-
-def _revoke_quietly(token) -> None:
-    if isinstance(token, str) and token:
-        post(REVOKE_URL, {"token": token})
 
 
 def revoke(token: str) -> bool:
