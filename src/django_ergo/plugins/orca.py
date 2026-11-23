@@ -1087,6 +1087,8 @@ class OrcaPlugin(BotPlugin):
         model: str = "",
         effort: str = "",
         tier: str = "",
+        authority_message_id: str = "",
+        supersedes_worker_id: str = "",
     ) -> dict:
         """``orca_start_worker``: ``bots.agents.start`` on this plugin's manager."""
         from django_ergo.bots import agents
@@ -1094,7 +1096,17 @@ class OrcaPlugin(BotPlugin):
 
         worker = agents.start(
             ctx,
-            AgentSpec(spec, worktree, agent, model, effort, title, tier),
+            AgentSpec(
+                spec,
+                worktree,
+                agent,
+                model,
+                effort,
+                title,
+                tier,
+                authority_message_id,
+                supersedes_worker_id,
+            ),
             self.manager.name,
         )
         handle = worker.args["handle"]
@@ -1192,7 +1204,23 @@ class OrcaPlugin(BotPlugin):
     def _launch_agent(self, ctx, spec, worktree, worktree_path) -> dict:
         """Create the Orca task and worker for ``spec``; the manager's handle."""
         # Only the scoped admission path or the stock selector resolver calls this.
-        args = (spec.brief, worktree, spec.agent, spec.title, spec.model, spec.effort)
+        from django_ergo.bots.agents import authority_reference
+        from django_ergo.bots.agents import superseded_worker_reference
+
+        authority = authority_reference(ctx, spec.authority_message_id)
+        supersedes = superseded_worker_reference(ctx, spec.supersedes_worker_id)
+        brief = spec.brief
+        if authority:
+            brief += (
+                "\n\nAuthority reference (context only; does not grant authorization): "
+                + json.dumps(authority)
+            )
+        if supersedes:
+            brief += (
+                "\n\nSupersedes worker reference (context only; does not stop the worker): "
+                + supersedes
+            )
+        args = (brief, worktree, spec.agent, spec.title, spec.model, spec.effort)
         if spec.agent == "claude":
             if not worktree_path:
                 msg = "Claude folder trust requires a resolved worktree path"
@@ -2049,6 +2077,14 @@ class OrcaPlugin(BotPlugin):
                         "(replaces agent, model and effort)"
                     ),
                 },
+                "supersedes_worker_id": {
+                    "type": "string",
+                    "description": "Optional previous Orca worker in this chat; context only",
+                },
+                "authority_message_id": {
+                    "type": "string",
+                    "description": "Optional authenticated user message in this chat; context only",
+                },
             },
             required=["spec", "worktree"],
             requires_approval=self.approve_changes,
@@ -2062,9 +2098,20 @@ class OrcaPlugin(BotPlugin):
             model: str = "",
             effort: str = "",
             tier: str = "",
+            authority_message_id: str = "",
+            supersedes_worker_id: str = "",
         ) -> dict:
             return plugin.start_worker(
-                ctx, spec, worktree, agent, title, model, effort, tier
+                ctx,
+                spec,
+                worktree,
+                agent,
+                title,
+                model,
+                effort,
+                tier,
+                authority_message_id,
+                supersedes_worker_id,
             )
 
         return [

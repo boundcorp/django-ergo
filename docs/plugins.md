@@ -494,3 +494,14 @@ def test_crm_plugin(tmp_path, monkeypatch):
 
 `ergonaut check` lists each bot's plugins and skills and reports plugins
 that fail to load.
+
+Orca worker starts (`ergo_agent_start` and `orca_start_worker`) and
+`ergo_orca_instruct` accept an optional `authority_message_id`. It must name a
+direct, authenticated owner message in the current chat. Forwarded, legacy
+unverified, and other-chat messages cannot be resolved by this interface. The
+stored reference and validation describe provenance only; they do not assess
+whether the message approves a particular action or change any approval policy.
+Worker starts also accept `supersedes_worker_id` for a previous Orca agent
+worker in this chat; it is descriptive and does not stop or modify that worker.
+Instruction retry identity includes the reference. A transport receipt or
+worker acknowledgement claim remains no proof of model acceptance.

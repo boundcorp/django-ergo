@@ -1887,6 +1887,8 @@ The shared `agents` skill provides launch/reply/stop; load `workers` for chat-ow
 scoped `orca` skill loads both. Questions,
 answers and completion use the existing durable watcher. Worker status/logs in
 Ergonaut remain session-owned; a launch grants no access to another chat's jobs.
+Optional source-message and prior-worker references preserve provenance without
+granting permission or stopping work; see [instruction checkpoints](plugins.md#orca-instruction-checkpoints).
 
 Routing uses the normal tier subscription-pace scorer, filtered before selection.
 Only anthropic, openai, openai-codex and xai-oauth coding identities qualify;
