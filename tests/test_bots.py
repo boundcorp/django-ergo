@@ -4485,3 +4485,27 @@ async def test_permanent_ids_are_applied_when_registry_loads_in_async_context(tm
     BotRegistry().add(bot)
     await thread.arefresh_from_db()
     assert thread.is_permanent
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_session_managers_refuse_permanent_and_close_ordinary_threads(tmp_path):
+    from django_ergo.conversation.manager import SessionManager
+    from django_ergo.conversation.models import PermanentChatError
+
+    user = await User.objects.acreate(username="manager-owner")
+    bot, _ = make_bot(tmp_path, say("ok"))
+    for manager in (bot, SessionManager()):
+        thread = await bot.create_session(user, title="Task")
+        await ConversationSession.objects.filter(pk=thread.pk).aupdate(
+            is_permanent=True
+        )
+        with pytest.raises(PermanentChatError, match="permanent"):
+            await manager.close_session(thread)
+        await thread.arefresh_from_db()
+        assert thread.status == "active"
+        await ConversationSession.objects.filter(pk=thread.pk).aupdate(
+            is_permanent=False
+        )
+        await manager.close_session(thread)
+        await thread.arefresh_from_db()
+        assert thread.status == "completed"
