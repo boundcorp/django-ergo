@@ -1658,7 +1658,12 @@ uncommitted). Use it for things a bot should learn, like preferences; use
 Add `hindsight_memory` for automatic long-term working memory alongside the
 Markdown KB. It retains completed human turns asynchronously, recalls relevant
 facts into the turn context, and provides recall, reflect, and explicit retain
-tools. See [Hindsight working memory](hindsight-memory.md) for configuration,
+tools. Prefetch is skipped on machine turns, recall is bot-scoped first with a
+score floor, and config-only or suggestion-heavy turns are filtered before
+retain (config and docs stay the source of truth). Keys: `bank`, `retain`,
+`prefetch`, `top_k`, `budget`, `timeout_seconds`, `scope`, `min_score`,
+`min_score_shared`, `telegram_users`, `mental_models`, `top_k_with_models`.
+See [Hindsight working memory](hindsight-memory.md) for configuration,
 environment variables, and scope.
 
 ### pages

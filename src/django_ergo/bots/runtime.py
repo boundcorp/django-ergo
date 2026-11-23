@@ -1211,9 +1211,15 @@ class Bot:
         skillset: SkillSet | None = None,
         *,
         incoming: bool = True,
+        turn: dict | None = None,
     ) -> ContextBuilder:
-        """The turn's context. ``incoming`` is False when resuming a stored turn."""
+        """The turn's context. ``incoming`` is False when resuming a stored turn.
+
+        ``turn`` is the turn's metadata (author, provenance), for plugins that
+        treat machine turns differently (``ToolContext.turn``).
+        """
         ctx = self.tool_context(session)
+        ctx.turn = dict(turn or {})
         skills = skillset or self.skillset(session)
         builder = ContextBuilder(budget_tokens=self.definition.budget_tokens)
         from django_ergo.bots.orchestrator import chat_identity
@@ -1258,7 +1264,12 @@ class Bot:
         return builder
 
     async def _prepare(
-        self, session: ConversationSession, message: str, *, incoming: bool = True
+        self,
+        session: ConversationSession,
+        message: str,
+        *,
+        incoming: bool = True,
+        turn: dict | None = None,
     ):
         def build():
             # Touch the user so sync tool code can use ctx.user.
@@ -1267,7 +1278,7 @@ class Bot:
             self._refresh_compaction(session)
             skillset = self.skillset(session)
             return [skillset], self.context_builder(
-                session, message, skillset, incoming=incoming
+                session, message, skillset, incoming=incoming, turn=turn
             )
 
         return await sync_to_async(build, thread_sensitive=True)()
@@ -1378,7 +1389,7 @@ class Bot:
             metadata["message_author"] = author
         for plugin in self.plugins:
             await _maybe_await(plugin.before_turn(session, message))
-        toolkits, builder = await self._prepare(session, message)
+        toolkits, builder = await self._prepare(session, message, turn=metadata)
         if (
             budget is not None
             and thread_message is not None

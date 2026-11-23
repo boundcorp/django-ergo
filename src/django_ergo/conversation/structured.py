@@ -1439,6 +1439,7 @@ async def _extra_system(
                 "tokens": section.tokens,
                 "complete": section.complete,
                 "text": section.body[:20_000],
+                **({"details": section.details} if section.details else {}),
             }
             for section in built.sections
         ]

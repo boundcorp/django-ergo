@@ -281,3 +281,52 @@ def test_archiving_a_dead_child_keeps_totals(tmp_path, monkeypatch):
     names = sorted(p.name for p in tmp_path.glob("*.db"))
     assert names == ["counter_103.db", "counter_archive.db", "histogram_103.db", "histogram_archive.db"]
     assert MultiProcessCollector  # the base reader is what Prometheus' client ships
+
+
+def test_memory_events_are_counted():
+    labels = {"bot": "mem-bot"}
+    before = {
+        "ok": sample("ergonaut_memory_prefetch_total", **labels, outcome="ok", reason=""),
+        "skipped": sample("ergonaut_memory_prefetch_total", **labels, outcome="skipped", reason="provenance"),
+        "retain": sample("ergonaut_memory_retain_total", **labels, outcome="queued", reason=""),
+        "facts": sample("ergonaut_memory_prefetch_facts_count", **labels),
+    }
+    send = signals.memory_event.send
+    send(
+        None,
+        plugin="hindsight_memory",
+        bot_name="mem-bot",
+        event="prefetch",
+        outcome="ok",
+        reason="",
+        duration=0.4,
+        count=3,
+    )
+    send(
+        None,
+        plugin="hindsight_memory",
+        bot_name="mem-bot",
+        event="prefetch",
+        outcome="skipped",
+        reason="provenance",
+        duration=0,
+        count=0,
+    )
+    send(
+        None,
+        plugin="hindsight_memory",
+        bot_name="mem-bot",
+        event="retain",
+        outcome="queued",
+        reason="",
+        duration=0,
+        count=0,
+    )
+    assert sample("ergonaut_memory_prefetch_total", **labels, outcome="ok", reason="") - before["ok"] == 1
+    assert (
+        sample("ergonaut_memory_prefetch_total", **labels, outcome="skipped", reason="provenance") - before["skipped"]
+        == 1
+    )
+    assert sample("ergonaut_memory_retain_total", **labels, outcome="queued", reason="") - before["retain"] == 1
+    # skipped prefetches carry no latency or fact count
+    assert sample("ergonaut_memory_prefetch_facts_count", **labels) - before["facts"] == 1

@@ -27,3 +27,14 @@ structured_call_started = Signal()
 #   is_error: whether the result is an error the model sees
 #   duration: seconds the tool ran
 tool_call_finished = Signal()
+
+# A memory plugin did something observable. Keyword arguments:
+#   bot_name: the bot using the plugin
+#   plugin: the plugin's name (``hindsight_memory``)
+#   event: ``prefetch`` or ``retain``
+#   outcome: prefetch: ok, empty, timeout, error, skipped;
+#     retain: queued, skipped
+#   reason: why it was skipped (a short fixed word), else ""
+#   duration: seconds spent (prefetch only)
+#   count: facts injected (prefetch only)
+memory_event = Signal()

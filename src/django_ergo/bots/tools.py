@@ -98,6 +98,9 @@ class ToolContext:
     user: Any = None
     # The page a page action was called from: a bot-folder path or a chat file's id.
     page: str | None = None
+    # The metadata of the turn this context is built for (``message_author``,
+    # ``message_provenance``, ``recurring_wake`` ...). Empty outside a turn.
+    turn: dict = field(default_factory=dict)
 
     @property
     def auto_approved(self) -> bool:

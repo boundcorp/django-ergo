@@ -212,3 +212,29 @@ schedule_runs_finished_total = Counter(
     "bot.yaml schedule runs that finished, by final status.",
     labelnames=("bot", "schedule", "status"),
 )
+
+memory_prefetch_total = Counter(
+    f"{METRIC_PREFIX}_memory_prefetch_total",
+    "Hindsight memory prefetches by outcome (ok, empty, timeout, error, skipped) and skip reason.",
+    labelnames=("bot", "outcome", "reason"),
+)
+
+memory_prefetch_duration_seconds = Histogram(
+    f"{METRIC_PREFIX}_memory_prefetch_duration_seconds",
+    "Time the turn waited for Hindsight prefetch (not skipped ones).",
+    labelnames=("bot",),
+    buckets=(0.05, 0.1, 0.25, 0.5, 1.0, 1.5, 2.0, 3.0, 5.0, float("inf")),
+)
+
+memory_prefetch_facts = Histogram(
+    f"{METRIC_PREFIX}_memory_prefetch_facts",
+    "Recalled facts injected into a turn (0 when nothing cleared the score floor).",
+    labelnames=("bot",),
+    buckets=(0, 1, 2, 3, 4, 5, 8, float("inf")),
+)
+
+memory_retain_total = Counter(
+    f"{METRIC_PREFIX}_memory_retain_total",
+    "Hindsight retains queued or skipped (machine turns, config-only turns, empty or failed turns).",
+    labelnames=("bot", "outcome", "reason"),
+)
