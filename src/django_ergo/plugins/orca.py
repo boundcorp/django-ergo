@@ -14,7 +14,8 @@
         agents: [codex, claude, omp]  # the agents ergo_agent_start may start here
         worker_poll_seconds: 120   # how often an agent's watcher checks it
         usage_minutes: 10          # minimum minutes between agent-session usage scans
-        stall_minutes: 10          # a running worker with no new output this long shows as stalled
+        stall_minutes: 8           # no new output this long: the card shows stalled and the
+                                   # chat hears it once (see orca_screen)
 
 The bot runs the CLI on the host Ergonaut runs on, as that user. Tools:
 
@@ -93,6 +94,7 @@ from django_ergo.bots.tools import FunctionToolkit
 from django_ergo.bots.tools import bot_tool
 from django_ergo.conversation.context import TextContextSource
 from django_ergo.plugins import orca_instructions as instruction_protocol
+from django_ergo.plugins import orca_screen
 from django_ergo.plugins._common import clip
 from django_ergo.plugins._common import is_secret
 from django_ergo.plugins._common import record_agent_usage
@@ -277,7 +279,8 @@ SETTLED = ("completed", "failed", "cancelled", "abandoned")
 # An agent terminal that has exited or vanished for this long, with no worker_done,
 # fails the worker (Orca keeps such a dispatch "dispatched" indefinitely).
 TERMINAL_GONE_GRACE_SECONDS = 300
-STALL_MINUTES = 10  # no new output for this long: the card says stalled (stall_minutes)
+# No new output this long: stalled on the card, and told to the chat once.
+STALL_MINUTES = 8  # stall_minutes
 EPOCH_MS_FROM = 1e11  # epoch times bigger than this are milliseconds
 ACTIVITY_ENTRIES = 8  # entries kept on the worker for its card
 ACTIVITY_CHARS = 300  # per entry on the card
@@ -352,6 +355,12 @@ def agent_blocked(lines: list, *, checked_in: bool, launched_at: float | None) -
     if clean and started and SHELL_PROMPT.match(clean[-1].strip()):
         return f"the agent exited to a shell prompt ({clean[-1].strip()[:80]})"
     return ""
+
+
+def screen_note(screen: dict | None) -> str:
+    """The progress suffix for the last screen check (``watch_screen``)."""
+    state = (screen or {}).get("state")
+    return f" · screen: {state.replace('_', ' ')}" if state else ""
 
 
 def _tool_input(value) -> str:
@@ -1517,9 +1526,11 @@ class OrcaPlugin(BotPlugin):
             )
         if not ctx.stopping:
             self.fail_if_agent_blocked(handle, shown, status)
+            questions.extend(self.watch_screen(ctx, handle, shown))
             self.fail_if_terminal_gone(ctx, shown)
             self.submit_brief_once(ctx, shown, status)
         progress = state or status or "starting"
+        progress += screen_note(ctx.state.get("screen"))
         if liveness:
             progress += f" · {liveness}"
         if ctx.state.get("terminal_gone_since"):
@@ -1589,6 +1600,81 @@ class OrcaPlugin(BotPlugin):
             "Start it again with ergo_agent_start if the task still needs doing."
         )
         raise RuntimeError(msg)
+
+    def watch_screen(self, ctx, handle: dict, shown: dict) -> list[AgentQuestion]:
+        """Read the agent's terminal and act on what ``orca_screen`` makes of it.
+
+        Runs after ``fail_if_agent_blocked`` (#370), which already fails a worker
+        at a trust dialog or back at a bare shell prompt. A CLI that printed its
+        exit message or its own usage-limit or login error stops the worker at
+        once with the line that shows it. A prompt it is blocked on, an error it keeps retrying
+        and a screen unchanged for ``stall_minutes`` become one escalation each
+        (the id is stable, so ``watch`` tells the chat once). Busy stays quiet.
+        Best effort: an unreadable terminal changes nothing."""
+        terminal = (shown.get("worker") or {}).get("agent_terminal_handle")
+        if not terminal:
+            return []
+        try:
+            read = self.cli_json(
+                ["terminal", "read", "--terminal", terminal, "--limit", "100"]
+            )
+        except (ValueError, OSError, subprocess.SubprocessError):
+            return []  # best effort, like fail_if_agent_blocked
+        tail = (read.get("terminal") or {}).get("tail") or []
+        agent = str(handle.get("agent") or "")
+        verdict = orca_screen.classify(
+            agent,
+            tail,
+            orca_screen.Snapshot.from_dict(ctx.state.get("screen")),
+            time.time(),
+            stall_after=getattr(self, "stall_minutes", STALL_MINUTES) * 60,
+        )
+        ctx.state["screen"] = verdict.snapshot.to_dict()
+        line = f" Its screen: {verdict.evidence}" if verdict.evidence else ""
+        if verdict.fatal:
+            self.end_worker(handle["dispatch"], "running")
+            msg = (
+                f"The {agent or 'agent'} worker is {verdict.state.replace('_', ' ')} "
+                f"({verdict.reason}); it was stopped.{line} Fix the cause and start "
+                "it again with orca_start_worker if the task still needs doing."
+            )
+            raise RuntimeError(msg)
+        if verdict.state not in (
+            orca_screen.WAITING,
+            orca_screen.ERROR,
+            orca_screen.STALLED,
+        ):
+            return []
+        if verdict.state == orca_screen.STALLED:
+            key = verdict.snapshot.fingerprint  # once per frozen screen
+            minutes = round(verdict.unchanged_for / 60)
+            subject = f"no new output for {minutes} minutes"
+        else:
+            # Retry counters and timers move; the message they sit in doesn't.
+            key = hashlib.sha1(  # noqa: S324 — a dedupe key, not security
+                re.sub(r"\d+", "#", verdict.evidence).encode()
+            ).hexdigest()
+            subject = verdict.reason
+        body = (
+            f"Screen check: the {agent or 'agent'} worker looks "
+            f"{verdict.state.replace('_', ' ')} ({verdict.reason}).{line}\n"
+            f"Terminal {terminal}; read it with orca_read "
+            f'["terminal", "read", "--terminal", "{terminal}"].'
+        )
+        action = (
+            "Answer or nudge it with ergo_orca_instruct, or stop it and start a "
+            "successor if it can't go on."
+        )
+        return [
+            AgentQuestion(
+                id=f"screen:{verdict.state}:{key[:16]}",
+                body=body,
+                subject=subject,
+                kind="escalation",
+                reply_supported=False,
+                action=action,
+            )
+        ]
 
     def fail_if_terminal_gone(self, ctx, shown: dict) -> None:
         """Fail the worker when its agent terminal exited or vanished without a

@@ -1,0 +1,11 @@
+  ⎿  Monitor started · task bpxlsghq8 · timeout 10m
+  Ran 3 shell commands · 1 failed
+● I'll wait for the monitor event before continuing.
+  Ran 1 shell command
+● Paging through the vehicle-path actors on rigel (offset 54 of 71, about a minute per page). The monitor will wake me
+  when actors.json is written.
+✻ Brewed for 6m 12s · done 4:36 PM · 1 shell, 2 monitors still running
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on · 1 shell, 2 monitors · ↓ to manage

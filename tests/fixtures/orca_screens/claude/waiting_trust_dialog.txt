@@ -1,0 +1,13 @@
+[LOADING] ~/.zshrc.local...
+# dev@devbox-dbd868579-jjdt9: /home/dev/orca/workspaces/ergo-bots/worker-stall-detection (00:29:12)
+(python) » claude '--dangerously-skip-permissions' '--model' 'claude-opus-5-5'
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Accessing workspace:
+ /home/dev/orca/workspaces/ergo-bots/worker-stall-detection
+ Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source project, or work from your team). If not,
+ take a moment to review what's in this folder first.
+ Claude Code'll be able to read, edit, and execute files here.
+ Security guide
+ ❯ No, exit
+   Yes, I trust this folder
+ Enter to confirm · Esc to cancel

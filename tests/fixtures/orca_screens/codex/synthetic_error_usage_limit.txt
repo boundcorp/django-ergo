@@ -1,0 +1,4 @@
+• Ran git status
+■ You've hit your usage limit. Upgrade to Pro (https://openai.com/chatgpt/pricing) or try again in 2 days 3 hours.
+› Ask Codex to do anything
+  ⏎ send   ⌃J newline   ⌃T transcript   ⌃C quit   64% context left

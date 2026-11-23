@@ -1,0 +1,2 @@
+• Working (1m 08s • esc to interrupt) · 5 background terminals running · /ps to view · /stop to close
+› Ask Codex to do anything
