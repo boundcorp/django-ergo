@@ -1478,3 +1478,112 @@ class PrivateExport(TimeStampedMixin):
                 name="ergo_private_export_once",
             ),
         ]
+
+
+class RuntimeReport(models.Model):
+    """One running process's own report of the code it runs (see
+    django_ergo.bots.live_watch).
+
+    Each long-running process of the host (a web server, a Celery worker, beat,
+    the bots runner) upserts one row per role it serves: the revision baked into
+    its build, and whether it has finished starting. It refreshes ``seen_at`` on
+    an interval and deletes its rows on a clean shutdown; a crashed process's rows
+    go stale and stop counting. Nothing else writes here: a merged PR, a pushed
+    image or a deployment manifest is never a report.
+    """
+
+    instance = models.CharField(max_length=200)
+    role = models.CharField(max_length=50)
+    revision = models.CharField(max_length=100, blank=True, default="")
+    ready = models.BooleanField(default=False)
+    started_at = models.DateTimeField()
+    seen_at = models.DateTimeField(db_index=True)
+
+    class Meta:
+        ordering = ["role", "instance"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["instance", "role"], name="one_runtime_report_per_role"
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.role} {self.instance} at {self.revision[:12] or '?'}"
+
+
+class LiveWatchStatus(models.TextChoices):
+    PENDING = "pending", "Waiting for the revision to be live"
+    LIVE = "live", "Live (the chat was told)"
+    EXPIRED = "expired", "Not live in time (the chat was told)"
+    CANCELLED = "cancelled", "Cancelled"
+    FAILED = "failed", "Sending the event failed (not retried)"
+
+
+class LiveWatch(TimeStampedMixin):
+    """A chat asked to be told when ``revision`` is running everywhere (see
+    django_ergo.bots.live_watch).
+
+    One per (chat, revision), so a chat hears about a revision at most once. The
+    checker claims the pending row with a conditional UPDATE in the same
+    transaction that creates the chat's event message, so two checkers, a
+    double beat tick or a restart send it once. Past ``expires_at`` the chat
+    gets a "not live" event instead.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    session = models.ForeignKey(
+        ConversationSession, on_delete=models.CASCADE, related_name="live_watches"
+    )
+    bot_name = models.CharField(max_length=100, db_index=True)
+    revision = models.CharField(max_length=100)
+    requested = models.CharField(max_length=200, blank=True, default="")
+    note = models.TextField(blank=True, default="")
+    status = models.CharField(
+        max_length=20,
+        choices=LiveWatchStatus.choices,
+        default=LiveWatchStatus.PENDING,
+    )
+    expires_at = models.DateTimeField()
+    depth = models.PositiveIntegerField(default=0)
+    settled_at = models.DateTimeField(null=True, blank=True)
+    evidence = models.JSONField(default=dict, blank=True)
+    thread_message = models.ForeignKey(
+        ThreadMessage,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+    )
+    error = models.TextField(blank=True, default="")
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [models.Index(fields=["status", "expires_at"])]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["session", "revision"], name="one_live_watch_per_chat_revision"
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.bot_name} watch {self.revision[:12]} ({self.status})"
+
+
+class RevisionAncestry(models.Model):
+    """Cached answer to "does ``revision`` contain ``target``?" (``target`` is
+    ``revision`` or one of its ancestors). Only definite answers are kept."""
+
+    target = models.CharField(max_length=100)
+    revision = models.CharField(max_length=100)
+    contains = models.BooleanField()
+    checked_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["target", "revision"], name="one_revision_ancestry_answer"
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.revision[:12]} {'contains' if self.contains else 'lacks'} {self.target[:12]}"

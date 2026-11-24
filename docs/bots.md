@@ -796,6 +796,58 @@ semantic progress verifier. See [recurring thread wakes](recurring-thread-wakes.
 for settings, timezone and cancellation semantics, durability and acceptance.
 
 
+## Deploy watches
+
+A chat that asked for a fix can be told once the fix is actually running,
+instead of polling with self-wakes (`django_ergo.bots.live_watch`). The
+built-in `deploys` skill is offered when the host reports its processes
+(`LIVE_ROLES` is set; Ergonaut does):
+
+- `ergo_notify_when_live(revision, note?, hours?)` arms a watch for a commit
+  (Ergonaut also takes a short SHA or an image digest and resolves it to the
+  commit). The chat gets one automated event from "Deploy watch" when it is
+  live, or one "NOT live after N hours" event naming what was still missing
+  when the watch expires (6 hours by default, at most 48).
+- `ergo_live_watches()` lists the chat's watches and what each role runs now.
+- `ergo_live_watch_cancel(watch_id)` cancels one.
+
+**What counts as live** is only what the running processes say about
+themselves. Each long-running process reports, per role it serves, the
+revision baked into its own build and whether it has finished starting
+(`live_watch.report`), refreshed on an interval and withdrawn on a clean exit.
+A revision is live when every role in `LIVE_ROLES` has at least one process
+that reported within `LIVE_REPORT_STALE_SECONDS`, and every such process is
+ready and runs the revision or a commit containing it. Descendants count only
+when `REVISION_ANCESTRY` can say so (Ergonaut asks GitHub's compare API and
+caches definite answers); otherwise only an exact match is live. A merged pull
+request, a published image or a manifest pin is never evidence: an old pod that
+still runs keeps the revision from being live until it stops, and a role nobody
+reports for is never live.
+
+Delivery follows the self-wake rules. A watch is a `LiveWatch` row, unique per
+(chat, revision), so a chat hears about a revision once; asking again while
+it is pending returns the same watch, and a cancelled or expired one can be
+re-armed. `check_due` claims a pending row with a conditional UPDATE in the
+same transaction that queues the event, so concurrent checkers, a double beat
+tick or a restart send it once and a crash before the commit sends nothing.
+A send that raises marks the watch `failed`, not retried. The event keeps the
+delegation depth of the turn that armed it. Watches belong to the chat whose
+turn created them: the tools take no chat id, and list and cancel only that
+chat's watches. A chat holds at most 5 pending watches.
+
+| `DJANGO_ERGO` key | Default | |
+| --- | --- | --- |
+| `LIVE_ROLES` | `[]` (off) | roles that must all run the revision |
+| `LIVE_REPORT_STALE_SECONDS` | `120` | a report older than this stops counting |
+| `LIVE_WATCH_HOURS` / `LIVE_WATCH_MAX_HOURS` | `6` / `48` | default and longest watch |
+| `REVISION_RESOLVER` | none: full SHAs only | `callable(text) -> full commit` |
+| `REVISION_ANCESTRY` | none: exact match only | `callable(target, revision) -> True/False/None` |
+
+Ergonaut checks watches from beat every 30 seconds (`ergonaut.check_live_watches`).
+Without Ergonaut, have each process call `live_watch.report` every 30 seconds
+and `withdraw` on exit, and call `live_watch.check_due()` every 30-60 seconds.
+
+
 ## Agents
 
 A coding agent (Codex, Claude Code, omp) works on a brief for minutes to
@@ -2750,15 +2802,36 @@ limited to Fireworks.
 ### Self-health metrics
 
 `ergo_self_health_metrics(end_utc, session_ids)` returns stored aggregate counts
-for an explicit, half-open seven-day UTC window ending at the timezone-aware
-`end_utc`. `session_ids` defaults to an empty selection and is capped at 200;
-each selected session must belong to the current user and to a bot the caller
-may access. Private bots are excluded. There is no personal-chat classification
-in the session model: the caller must select only non-personal conversations.
-The response reports this limitation and does not claim an exhaustive inventory.
-An empty selection is not evidence of zero activity. The caller must be the
-authenticated session owner and have access to the calling bot.
-No message text, titles or tool arguments are returned.
+for a half-open seven-day UTC window ending at the timezone-aware `end_utc`.
+Only sessions the owner positively classified as non-personal are counted.
+
+Classification comes from `bot.yaml`, never from a bot or chat name:
+
+```yaml
+self_health:
+  scope: non_personal        # or personal; unset means unclassified
+  include_sessions: []       # session UUIDs counted although the bot is unclassified
+  exclude_sessions: []       # session UUIDs never counted
+```
+
+A session counts when its bot is not `private`, it is not in `exclude_sessions`,
+and either the bot declares `scope: non_personal` or the session is in
+`include_sessions`. Everything else is excluded: private bots, `scope: personal`
+bots, denied sessions, and unclassified bots (the default). Exclusion wins over
+inclusion.
+
+When `session_ids` is omitted or empty, the tool discovers sessions: the
+caller's own sessions in the calling bot and the bots it may message, with a
+stored message, worker start or completion, fired wake or dispatched recurring
+wake inside the window, that classify as non-personal. They are ordered by
+creation time then id and capped at 200. The response's `scope.discovery`
+reports how many active sessions were considered and included, excluded counts
+by reason (`private_bot`, `personal_bot`, `denied_session`, `unclassified`,
+`out_of_scope`), and whether the cap truncated the list; truncation or any
+exclusion makes coverage "partial". An explicit `session_ids` list (maximum
+200) must pass the same classification and belong to the current user, or the
+call fails. The caller must be the authenticated session owner and have access
+to the calling bot. No message text, titles or tool arguments are returned.
 
 Workers are counted once per stored worker row by creation or completion time,
 with current status for completed rows; one-shot and recurring wakes use separate

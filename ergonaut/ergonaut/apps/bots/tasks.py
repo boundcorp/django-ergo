@@ -1062,6 +1062,21 @@ def fire_wakes() -> list[str]:
     return fired
 
 
+@shared_task(name="ergonaut.check_live_watches", ignore_result=True)
+def check_live_watches() -> list[str]:
+    """Tell chats their revision is live (every role's processes report it), or
+    that their watch expired. Each watch is settled once (beat runs this)."""
+    from django_ergo.bots import live_watch, webhooks
+
+    if not live_watch.enabled():
+        return []
+    settled = live_watch.check_due(registry=webhooks.get_registry())
+    live_watch.prune()
+    if settled:
+        logger.info("Settled %d deploy watches", len(settled))
+    return settled
+
+
 @shared_task(name="ergonaut.run_schedules", ignore_result=True)
 def run_schedules() -> list[str]:
     """Send the bots' scheduled messages that are due this minute (beat runs this)."""

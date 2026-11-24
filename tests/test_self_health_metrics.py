@@ -23,7 +23,9 @@ pytestmark = pytest.mark.django_db
 @pytest.fixture
 def scope(tmp_path):
     bot, _ = make_bot(
-        tmp_path, yaml_text="name: shop\norchestration: true\n", name="shop"
+        tmp_path,
+        yaml_text="name: shop\norchestration: true\nself_health: {scope: non_personal}\n",
+        name="shop",
     )
     user = get_user_model().objects.create(username="health-user")
     session = async_to_sync(bot.main_session)(user)
@@ -220,3 +222,190 @@ def test_partial_token_fields_are_unknown(scope):
     usage = report(scope, end.isoformat(), [str(scope.session.pk)])["agent_tokens"]
     assert usage["events"] == 2 and usage["known_input"] == 1
     assert usage["input_tokens"] is None
+
+
+def _session(user, bot_name="shop", created=None):
+    from django_ergo.conversation.models import ConversationSession
+
+    session = ConversationSession.objects.create(
+        user=user,
+        bot_name=bot_name,
+        engine_type="claude",
+        transport_type="api",
+        status="active",
+    )
+    if created:
+        ConversationSession.objects.filter(pk=session.pk).update(created_at=created)
+    return session
+
+
+def _message(session, when, sequence=1):
+    message = SessionMessage.objects.create(
+        session=session, role="user", sequence=sequence
+    )
+    SessionMessage.objects.filter(pk=message.pk).update(created_at=when)
+
+
+def _discovery(scope, end=None):
+    end = end or datetime.now(UTC) + timedelta(seconds=1)
+    return report(scope, end.isoformat())["scope"]["discovery"]
+
+
+def test_classification_defaults_exclude_unknown(tmp_path):
+    from django_ergo.bots.definition import BotDefinitionError
+    from django_ergo.bots.definition import SelfHealth
+    from django_ergo.bots.self_health import classify
+
+    bot, _ = make_bot(tmp_path, yaml_text="name: plain\n", name="plain")
+    sid = "00000000-0000-0000-0000-000000000001"
+    assert bot.definition.self_health == SelfHealth()
+    assert classify(bot, sid) == (False, "unclassified")
+    bot.definition.self_health = SelfHealth(include_sessions=(sid,))
+    assert classify(bot, sid) == (True, "session_allowed")
+    bot.definition.self_health = SelfHealth("non_personal", (sid,), (sid,))
+    assert classify(bot, sid) == (False, "denied_session")
+    bot.definition.self_health = SelfHealth("personal", (sid,))
+    assert classify(bot, sid) == (False, "personal_bot")
+    bot.definition.self_health = SelfHealth("non_personal")
+    bot.definition.private = True
+    assert classify(bot, sid) == (False, "private_bot")
+    from django_ergo.bots.definition import BotDefinition
+
+    for bad in ({"scope": "maybe"}, {"extra": 1}, {"include_sessions": ["x"]}, []):
+        with pytest.raises(BotDefinitionError):
+            BotDefinition.from_dict({"name": "x", "self_health": bad})
+
+
+def test_names_never_classify(scope):
+    from django_ergo.bots.definition import SelfHealth
+    from django_ergo.bots.self_health import classify
+
+    scope.bot.definition.self_health = SelfHealth()
+    scope.bot.definition.name = "public-team-chat"
+    assert classify(scope.bot, scope.session.pk) == (False, "unclassified")
+
+
+def test_automatic_discovery_matches_explicit_and_excludes_unclassified(scope):
+    now = datetime.now(UTC)
+    end = now + timedelta(seconds=1)
+    _message(scope.session, now)
+    quiet = _session(scope.user)
+    assert str(quiet.pk) not in str(_discovery(scope, end))
+    auto = report(scope, end.isoformat())
+    assert auto["scope"]["selection"] == "automatic"
+    assert auto["scope"]["discovery"]["included"] == 1
+    explicit = report(scope, end.isoformat(), [str(scope.session.pk)])
+    assert explicit["scope"]["selection"] == "explicit"
+    for key in ("inventory", "workers", "wakes", "tools", "agent_tokens", "window"):
+        if key == "inventory":
+            assert auto[key]["sessions"] == explicit[key]["sessions"]
+        else:
+            assert auto[key] == explicit[key]
+    assert report(scope, end.isoformat(), []) == auto
+    scope.bot.definition.self_health = type(scope.bot.definition.self_health)()
+    result = report(scope, end.isoformat())
+    assert result["scope"]["discovery"]["excluded_by_reason"] == {"unclassified": 1}
+    assert result["inventory"]["sessions"] == 0
+    with pytest.raises(ValueError, match="not classified"):
+        report(scope, end.isoformat(), [str(scope.session.pk)])
+
+
+def test_discovery_excludes_personal_private_denied_and_other_users(scope):
+    from django_ergo.bots.definition import SelfHealth
+
+    now = datetime.now(UTC)
+    end = now + timedelta(seconds=1)
+    other = get_user_model().objects.create(username="stranger")
+    _message(scope.session, now)
+    foreign = _session(other)
+    _message(foreign, now)
+    denied = _session(scope.user)
+    _message(denied, now)
+    scope.bot.definition.self_health = SelfHealth(
+        "non_personal", exclude_sessions=(str(denied.pk),)
+    )
+    found = _discovery(scope, end)
+    assert found["included"] == 1
+    assert found["excluded_by_reason"] == {"denied_session": 1}
+    assert found["active_sessions_considered"] == 2  # other user's never considered
+    with pytest.raises(ValueError, match="inaccessible"):
+        report(scope, end.isoformat(), [str(foreign.pk)])
+    with pytest.raises(ValueError, match="inaccessible"):
+        report(scope, end.isoformat(), [str(denied.pk)])
+    scope.bot.definition.self_health = SelfHealth("personal")
+    assert _discovery(scope, end)["excluded_by_reason"] == {"personal_bot": 2}
+    scope.bot.definition.self_health = SelfHealth("non_personal")
+    scope.bot.definition.private = True
+    found = _discovery(scope, end)
+    assert found["included"] == 0 and found["excluded_by_reason"] == {"private_bot": 2}
+
+
+def test_session_allow_list_and_out_of_scope_bot(scope):
+    from django_ergo.bots.definition import SelfHealth
+
+    now = datetime.now(UTC)
+    end = now + timedelta(seconds=1)
+    scope.bot.definition.self_health = SelfHealth(
+        include_sessions=(str(scope.session.pk),)
+    )
+    _message(scope.session, now)
+    stray = _session(scope.user, bot_name="not-visible")
+    _message(stray, now)
+    found = _discovery(scope, end)
+    assert found["included"] == 1
+    assert found["excluded_by_reason"] == {"out_of_scope": 1}
+    assert "not-visible" not in str(found)
+
+
+def test_window_boundaries_for_discovery(scope):
+    end = datetime.now(UTC).replace(microsecond=0)
+    start = end - timedelta(days=7)
+    inside = _session(scope.user, created=start - timedelta(days=1))
+    _message(inside, start)
+    at_end = _session(scope.user, created=start - timedelta(days=1))
+    _message(at_end, end)
+    before = _session(scope.user, created=start - timedelta(days=1))
+    _message(before, start - timedelta(microseconds=1))
+    # scope.session itself has no activity in the window
+    found = _discovery(scope, end)
+    assert found["included"] == 1
+    explicit = report(scope, end.isoformat(), [str(inside.pk)])
+    assert report(scope, end.isoformat())["inventory"]["sessions"] == 1
+    assert explicit["inventory"]["sessions"] == 1
+
+
+def test_cap_truncation_is_reported_and_deterministic(scope, monkeypatch):
+    from django_ergo.bots import self_health
+
+    monkeypatch.setattr(self_health, "MAX_SESSIONS", 2)
+    now = datetime.now(UTC)
+    end = now + timedelta(seconds=1)
+    made = [
+        _session(scope.user, created=now - timedelta(hours=3 - n)) for n in range(3)
+    ]
+    for item in made:
+        _message(item, now)
+    first = report(scope, end.isoformat())
+    assert first["scope"]["discovery"]["truncated"] is True
+    assert first["scope"]["discovery"]["included"] == 2
+    assert first["scope"]["discovery"]["not_included_due_to_cap"] == 1
+    assert "truncated" in first["scope"]["coverage"]
+    assert report(scope, end.isoformat()) == first
+    # oldest two by creation time are kept
+    kept = report(scope, end.isoformat(), [str(made[0].pk), str(made[1].pk)])
+    assert kept["workers"] == first["workers"]
+    assert kept["inventory"]["sessions"] == first["inventory"]["sessions"] == 2
+
+
+def test_discovery_returns_no_content(scope):
+    now = datetime.now(UTC)
+    message = SessionMessage.objects.create(
+        session=scope.session, role="user", sequence=1
+    )
+    block = MessageBlock.objects.create(
+        message=message, sequence=1, block_type="text", text="secret chat words"
+    )
+    MessageBlock.objects.filter(pk=block.pk).update(created_at=now)
+    SessionMessage.objects.filter(pk=message.pk).update(created_at=now)
+    result = report(scope, (now + timedelta(seconds=1)).isoformat())
+    assert "secret chat words" not in str(result)
