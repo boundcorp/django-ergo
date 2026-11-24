@@ -83,6 +83,21 @@ DEFAULTS = {
     "RECURRING_WAKE_MIN_INTERVAL_SECONDS": 60,
     "RECURRING_WAKE_MAX_PER_THREAD": 3,
     "RECURRING_WAKE_MAX_GLOBAL": 100,
+    # Deploy watches (bots.live_watch): the roles whose running processes must all
+    # report a revision before a chat is told it is live. Empty = the host doesn't
+    # report its processes, and the ``deploys`` skill is off.
+    "LIVE_ROLES": [],
+    # A process report older than this stops counting (the process is gone).
+    "LIVE_REPORT_STALE_SECONDS": 120,
+    # How long a watch waits by default, and at most, before its "not live" event.
+    "LIVE_WATCH_HOURS": 6,
+    "LIVE_WATCH_MAX_HOURS": 48,
+    # Callable(text) -> full commit SHA for a watch's revision (short SHAs, image
+    # digests); raise ValueError when it can't. None = full 40-character SHAs only.
+    "REVISION_RESOLVER": None,
+    # Callable(target, revision) -> True/False/None: does ``revision`` contain
+    # ``target``? None = can't tell now. Unset = only an exact match is live.
+    "REVISION_ANCESTRY": None,
     # Callable(bot_name, task_name, args, kwargs) -> TaskHandle that runs a
     # @bot_task, e.g. on a Celery worker. None = a thread pool in this process.
     "BOT_TASK_RUNNER": None,
@@ -152,6 +167,8 @@ IMPORT_STRINGS = [
     "CHANNEL_TURN_RUNNER",
     "OPEN_PRS",
     "SESSION_NOTIFIER",
+    "REVISION_RESOLVER",
+    "REVISION_ANCESTRY",
 ]
 
 

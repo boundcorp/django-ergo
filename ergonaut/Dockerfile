@@ -237,3 +237,7 @@ RUN uv pip install --no-cache-dir --no-deps -e . \
 # it with the newest release. CI passes the pushed commit.
 ARG ERGONAUT_VERSION=""
 ENV ERGONAUT_VERSION=${ERGONAUT_VERSION}
+LABEL org.opencontainers.image.revision=${ERGONAUT_VERSION}
+# The same commit as a file no environment setting can override: each process
+# reports it for deploy watches (ergonaut/runtime_report.py).
+RUN printf '%s\n' "${ERGONAUT_VERSION}" > /app/BUILD_REVISION
