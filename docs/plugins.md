@@ -505,3 +505,11 @@ Worker starts also accept `supersedes_worker_id` for a previous Orca agent
 worker in this chat; it is descriptive and does not stop or modify that worker.
 Instruction retry identity includes the reference. A transport receipt or
 worker acknowledgement claim remains no proof of model acceptance.
+
+Orca workers that cannot continue within their authorized scope may send the
+normal failed `worker_done` with a subject beginning `[scope_blocked] `.
+For an explicitly failed report for the exact dispatch, including one observed
+before its dispatch status settles, the watcher retains
+`disposition: scope_blocked` in the worker result. This is the worker's assertion,
+not an authorization decision. Other failures and historical reports have no
+inferred disposition; the underlying dispatch outcome remains failed.
