@@ -69,6 +69,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 from zoneinfo import ZoneInfoNotFoundError
 
+from django_ergo.bots.admission_drain import sync_execution
 from django_ergo.bots.schedule_workflow import WorkflowError
 from django_ergo.bots.schedule_workflow import condition
 from django_ergo.bots.schedule_workflow import condition_tree
@@ -547,6 +548,7 @@ def run_due(bots: Iterable[Bot], now: datetime | None = None) -> list[str]:
 
 
 # Keep claiming, ordered execution and audit transitions in one lifecycle.
+@sync_execution(wait=True, inherit=True)
 def run_actions(run_id: int, registry=None) -> None:  # noqa: C901, PLR0912, PLR0915
     """Claim and audit a run once, including deliveries and quiet stops."""
     from django.utils import timezone
@@ -770,6 +772,7 @@ def _fail_run(run, bot, error):
         )
 
 
+@sync_execution(wait=True, inherit=True)
 def run_code(bot: Bot, action: Action, user, *, name: str):
     """Run a function from the bot's Python files, recorded as a BotJob."""
     import inspect

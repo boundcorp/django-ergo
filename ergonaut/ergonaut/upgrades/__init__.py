@@ -298,6 +298,10 @@ def _run(
     with single_flight() as got:
         if not got:
             return "another upgrade is running"
+        from django_ergo.bots import admission_drain
+
+        if admission_drain.enabled():
+            return prepare_drain(wait_timeout=wait_timeout, quiet_for=quiet_for, poll=poll, workers=workers, log=log)
         if not wait_until_idle(timeout=wait_timeout, quiet_for=quiet_for, poll=poll, workers=workers, log=log):
             return f"{release.tag} is waiting: {'turns or workers are' if workers else 'turns are'} still running"
         save_state(status="upgrading", at=time.time(), error="", release=asdict(release), sha=release.sha)
@@ -358,3 +362,46 @@ def version_info(*, cache_seconds: int = 300) -> dict:
             "tag": (state.get("release") or {}).get("tag", ""),
         },
     }
+
+
+def prepare_drain(*, wait_timeout, quiet_for, poll, workers, log):
+    """Bounded admission/idle preparation; external rollout remains fail closed.
+
+    An upgrader returning after an external PATCH cannot retain fencing through
+    workload replacement. Do not invoke that interface while drain is enabled.
+    """
+    from datetime import timedelta
+
+    from django_ergo.bots import admission_drain as drain
+
+    from ergonaut.apps.bots.management.commands.wait_idle import wait_until_idle
+
+    maximum = min(max(wait_timeout + quiet_for + 30, 1), 1800)
+    ttl = timedelta(seconds=30)
+    token = drain.acquire(ttl, timedelta(seconds=maximum))
+    if token is None:
+        return "another admission drain is active"
+    try:
+
+        def renew_and_observe(*, workers=True):
+            from ergonaut.apps.bots.management.commands.wait_idle import busy
+
+            if not drain.renew(token, ttl):
+                raise NotReady("admission drain lease expired")
+            return busy(workers=workers, draining=True)
+
+        idle = wait_until_idle(
+            timeout=min(wait_timeout, maximum - 1),
+            quiet_for=quiet_for,
+            poll=min(max(poll, 0.01), 5),
+            workers=workers,
+            log=log,
+            observe=renew_and_observe,
+        )
+        if not idle:
+            return "admission drain timed out; queued work retained"
+        if not drain.renew(token, ttl):
+            return "admission drain lease expired; upgrade deferred"
+        return "admission drained; upgrade deferred: fenced rollout handoff is not implemented"
+    finally:
+        drain.release(token)

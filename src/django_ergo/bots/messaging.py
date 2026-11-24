@@ -40,6 +40,7 @@ from django.utils import timezone
 
 from django_ergo.bots import archival
 from django_ergo.bots import wakes
+from django_ergo.bots.admission_drain import execution
 from django_ergo.conversation.budget import ERROR_CATEGORY as BUDGET_ERROR_CATEGORY
 from django_ergo.conversation.budget import NOT_RUN_PREFIX
 from django_ergo.conversation.budget import forbid
@@ -504,11 +505,14 @@ def deliver(
     if lock is not None and not lock.acquire(blocking=False):
         return  # mid-turn here: whoever holds the lock sends on the queue after it
     try:
-        message = _claim_next(recipient_id)
-        if message is None:
-            return
-        registry = registry or webhooks.get_registry()
-        _run_turn(message, registry)
+        with execution(scope=str(recipient_id)) as admitted:
+            if not admitted:
+                return
+            message = _claim_next(recipient_id)
+            if message is None:
+                return
+            registry = registry or webhooks.get_registry()
+            _run_turn(message, registry)
     finally:
         if lock is not None:
             lock.release()

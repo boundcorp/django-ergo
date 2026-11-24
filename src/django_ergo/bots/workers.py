@@ -40,6 +40,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from typing import Any
 
+from django_ergo.bots.admission_drain import enabled
+from django_ergo.bots.admission_drain import execution
 from django_ergo.conversation.budget import forbid
 from django_ergo.settings import api_settings
 
@@ -510,6 +512,28 @@ def _claim(worker_id: str) -> tuple[Worker | None, str]:
 
 
 def run(worker_id: str, registry=None) -> str:
+    # Already-started workers must be able to finish naturally, including lost
+    # step recovery. Queued workers retain their state for the overdue sweep.
+    from django.db.models import Q
+
+    from django_ergo.conversation.models import Worker
+
+    continuing = enabled() and (
+        Worker.objects.filter(pk=worker_id)
+        .filter(
+            Q(started_at__isnull=False)
+            | Q(function__startswith="agent:")
+            | Q(function="orca:watch")
+        )
+        .exists()
+    )
+    with execution(continuing=continuing) as admitted:
+        if not admitted:
+            return "draining"
+        return _run(worker_id, registry)
+
+
+def _run(worker_id: str, registry=None) -> str:
     """Run one step of a worker (what a runner calls). Returns its status after."""
     from django_ergo.bots.background import find_bot
 

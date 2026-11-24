@@ -912,6 +912,10 @@ user unit, or allow the restart with a sudoers line or a polkit rule and set
 
 ### Your own upgrader
 
+Experimental admission-drain integration is default off and refuses external
+upgrade handoff when enabled. See [admission behavior and remaining
+activation requirements](admission-drain.md).
+
 `command` runs `ERGONAUT_UPGRADE_COMMAND` in a shell with
 `ERGONAUT_UPGRADE_TAG`, `ERGONAUT_UPGRADE_SHA`, `ERGONAUT_UPGRADE_REPO` and
 `ERGONAUT_UPGRADE_URL` set. For more, subclass `Upgrader`, for example in

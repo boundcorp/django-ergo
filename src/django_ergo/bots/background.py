@@ -34,6 +34,7 @@ from typing import Any
 
 from asgiref.sync import async_to_sync
 
+from django_ergo.bots.admission_drain import sync_execution
 from django_ergo.bots.tools import bot_task  # noqa: F401 — re-exported
 from django_ergo.conversation.budget import forbid
 from django_ergo.settings import api_settings
@@ -88,6 +89,7 @@ def find_bot(bot_name: str, registry: BotRegistry | None = None) -> Bot:
     return bot
 
 
+@sync_execution(wait=True, inherit=True)
 def execute(
     bot_name: str, task_name: str, args: list, kwargs: dict, registry=None
 ) -> Any:

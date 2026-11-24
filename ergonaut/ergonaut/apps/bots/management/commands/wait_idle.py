@@ -46,13 +46,20 @@ def running_sessions() -> list[str]:
     return sorted(ids)
 
 
-def active_workers() -> list[str]:
+def active_workers(*, draining=False) -> list[str]:
     """Workers queued or running, as ``bot: title``."""
+    from django.db.models import Q
     from django_ergo.conversation.models import Worker, WorkerStatus
 
-    rows = Worker.objects.filter(status__in=[WorkerStatus.QUEUED, WorkerStatus.RUNNING]).values_list(
-        "bot_name", "title"
-    )
+    rows = Worker.objects.filter(status__in=[WorkerStatus.QUEUED, WorkerStatus.RUNNING])
+    if draining:
+        rows = rows.filter(
+            Q(status=WorkerStatus.RUNNING)
+            | Q(started_at__isnull=False)
+            | Q(function__startswith="agent:")
+            | Q(function="orca:watch")
+        )
+    rows = rows.values_list("bot_name", "title")
     return sorted(f"{bot}: {title}" for bot, title in rows)
 
 
@@ -75,11 +82,15 @@ def running_local_jobs() -> list[str]:
     return sorted(found)
 
 
-def busy(*, workers: bool = True) -> list[str]:
+def busy(*, workers: bool = True, draining: bool = False) -> list[str]:
     """What would be cut off by a restart now; empty when idle."""
+    from django_ergo.bots.admission_drain import enabled, executions_active
+
     items = [f"turn {sid}" for sid in running_sessions()]
+    if enabled() and executions_active():
+        items.append("admitted execution")
     if workers:
-        items += [f"worker {w}" for w in active_workers()]
+        items += [f"worker {w}" for w in active_workers(draining=draining)]
     else:
         items += [f"job {j}" for j in running_local_jobs()]
     return items
@@ -92,13 +103,14 @@ def wait_until_idle(
     poll: float = 5,
     workers: bool = True,
     log: Callable[[str], None] = print,
+    observe=None,
 ) -> bool:
     """Block until nothing has been running for ``quiet_for`` seconds; False after ``timeout``."""
     deadline = time.monotonic() + timeout
     quiet_since = None
     last = None
     while True:
-        items = busy(workers=workers)
+        items = (observe or busy)(workers=workers)
         now = time.monotonic()
         if items:
             quiet_since = None
