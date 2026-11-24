@@ -37,6 +37,10 @@ bot.yaml::
     tool_results_in_context: 6         # large tool results each model call keeps in full
     tool_results_tokens: 40000         # optional budget for older ones; default 20% of window
     permanent_chats: []                # session UUIDs to protect on bot load
+    self_health:                       # owner's classification for ergo_self_health_metrics
+      scope: non_personal              # or personal; unset = unclassified, so excluded
+      include_sessions: []             # session UUIDs counted although the bot is unclassified
+      exclude_sessions: []             # session UUIDs never counted (wins over everything)
     chats:
       main:                            # every user's main chat (always there)
         skills: [orchestration, tandoor]   # loaded from the start (default: orchestration)
@@ -166,6 +170,52 @@ def _permanent_chats(value):
         raise BotDefinitionError(msg) from exc
 
 
+HEALTH_SCOPES = ("non_personal", "personal")
+
+
+@dataclass(frozen=True)
+class SelfHealth:
+    """Owner-declared classification for self-health metrics.
+
+    Nothing is inferred: a bot is counted only when ``scope`` is
+    ``non_personal`` or the session is listed in ``include_sessions``.
+    """
+
+    scope: str = ""  # "": unclassified
+    include_sessions: tuple[str, ...] = ()
+    exclude_sessions: tuple[str, ...] = ()
+
+
+def _self_health(value) -> SelfHealth:
+    from uuid import UUID
+
+    if value is None:
+        return SelfHealth()
+    if not isinstance(value, dict):
+        msg = "self_health must be a mapping"
+        raise BotDefinitionError(msg)
+    unknown = set(value) - {"scope", "include_sessions", "exclude_sessions"}
+    if unknown:
+        msg = f"Unknown self_health keys: {', '.join(sorted(map(str, unknown)))}"
+        raise BotDefinitionError(msg)
+    scope = str(value.get("scope") or "")
+    if scope and scope not in HEALTH_SCOPES:
+        msg = f"self_health.scope must be one of {', '.join(HEALTH_SCOPES)}"
+        raise BotDefinitionError(msg)
+    lists = {}
+    for key in ("include_sessions", "exclude_sessions"):
+        items = value.get(key) or []
+        if not isinstance(items, list):
+            msg = f"self_health.{key} must be a list of session UUIDs"
+            raise BotDefinitionError(msg)
+        try:
+            lists[key] = tuple(str(UUID(str(item))) for item in items)
+        except (ValueError, TypeError, AttributeError) as exc:
+            msg = f"self_health.{key} must contain session UUIDs"
+            raise BotDefinitionError(msg) from exc
+    return SelfHealth(scope, lists["include_sessions"], lists["exclude_sessions"])
+
+
 @dataclass
 class BotDefinition:
     name: str
@@ -189,6 +239,7 @@ class BotDefinition:
     allow_create_sessions: bool = False
     archive_after_days: int = 7
     permanent_chats: list[str] = field(default_factory=list)
+    self_health: SelfHealth = field(default_factory=SelfHealth)
     default_compaction_mode: str = CompactionMode.CONTEXT_SIZE
     default_compaction_config: dict = field(default_factory=dict)
     tool_files: list[Path] = field(default_factory=list)
@@ -278,6 +329,7 @@ class BotDefinition:
             allow_create_sessions=bool(sessions.get("allow_create", False)),
             archive_after_days=int(sessions.get("archive_after_days", 7) or 0),
             permanent_chats=permanent_chats,
+            self_health=_self_health(data.get("self_health")),
             default_compaction_mode=mode,
             default_compaction_config=dict(compaction.get("config") or {}),
             tool_files=[_tool_path(p, root_dir) for p in data.get("tools") or []],

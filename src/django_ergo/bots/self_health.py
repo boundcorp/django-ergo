@@ -6,6 +6,8 @@ from datetime import timedelta
 from uuid import UUID
 
 from django.db.models import Count
+from django.db.models import Exists
+from django.db.models import OuterRef
 from django.db.models import Sum
 
 from django_ergo.bots.registry import may_use
@@ -14,14 +16,124 @@ from django_ergo.conversation.models import AgentUsageEvent
 from django_ergo.conversation.models import ConversationSession
 from django_ergo.conversation.models import MessageBlock
 from django_ergo.conversation.models import RecurringWakeOccurrence
+from django_ergo.conversation.models import SessionMessage
 from django_ergo.conversation.models import Wake
 from django_ergo.conversation.models import Worker
 
 MAX_SESSIONS = 200
 
 
-def report(ctx, end_utc: str, session_ids: list[str] | None = None) -> dict:  # noqa: C901
-    """Aggregate only explicitly selected, accessible sessions; never read payloads."""
+def classify(bot, session_id) -> tuple[bool, str]:
+    """Whether a session may be counted, and why. Only owner declarations count.
+
+    Order: private bot, per-session deny, personal bot, non-personal bot,
+    per-session allow; anything else is ``unclassified`` and excluded. Names of
+    bots or chats are never consulted.
+    """
+    declared = bot.definition.self_health
+    sid = str(session_id)
+    if bot.definition.private:
+        return False, "private_bot"
+    if sid in declared.exclude_sessions:
+        return False, "denied_session"
+    if declared.scope == "personal":
+        return False, "personal_bot"
+    if declared.scope == "non_personal":
+        return True, "bot_non_personal"
+    if sid in declared.include_sessions:
+        return True, "session_allowed"
+    return False, "unclassified"
+
+
+def _explicit(ctx, bots, session_ids, end) -> set[UUID]:
+    try:
+        selected = {UUID(str(value)) for value in session_ids}
+    except (ValueError, TypeError, AttributeError) as exc:
+        msg = "Invalid session ID"
+        raise ValueError(msg) from exc
+    rows = ConversationSession.objects.filter(
+        pk__in=selected, user_id=ctx.session.user_id, created_at__lt=end
+    ).values_list("pk", "bot_name")
+    found = {pk for pk, name in rows if name in bots and classify(bots[name], pk)[0]}
+    if found != selected:
+        msg = (
+            "One or more sessions are inaccessible, outside the window or not "
+            "classified non-personal"
+        )
+        raise ValueError(msg)
+    return selected
+
+
+def _discover(ctx, bots, start, end) -> tuple[set[UUID], dict]:
+    """Sessions of the caller with activity in the window that classify as non-personal.
+
+    Existence checks only; no message content is read. Ordered by creation then id so
+    a capped list is stable.
+    """
+    in_window = {"created_at__gte": start, "created_at__lt": end}
+    active = ConversationSession.objects.filter(
+        user_id=ctx.session.user_id, created_at__lt=end
+    ).filter(
+        Exists(SessionMessage.objects.filter(session=OuterRef("pk"), **in_window))
+        | Exists(Worker.objects.filter(session=OuterRef("pk"), **in_window))
+        | Exists(
+            Worker.objects.filter(
+                session=OuterRef("pk"), completed_at__gte=start, completed_at__lt=end
+            )
+        )
+        | Exists(
+            Wake.objects.filter(
+                session=OuterRef("pk"), fired_at__gte=start, fired_at__lt=end
+            )
+        )
+        | Exists(
+            RecurringWakeOccurrence.objects.filter(
+                schedule__session=OuterRef("pk"),
+                dispatched_at__gte=start,
+                dispatched_at__lt=end,
+            )
+        )
+    )
+    included: list[UUID] = []
+    excluded: dict[str, int] = {}
+    considered = 0
+    for pk, name in active.order_by("created_at", "pk").values_list("pk", "bot_name"):
+        considered += 1
+        ok, reason = (
+            classify(bots[name], pk) if name in bots else (False, "out_of_scope")
+        )
+        if ok:
+            included.append(pk)
+        else:
+            excluded[reason] = excluded.get(reason, 0) + 1
+    truncated = len(included) > MAX_SESSIONS
+    kept = included[:MAX_SESSIONS]
+    return set(kept), {
+        "active_sessions_considered": considered,
+        "included": len(kept),
+        "classified_non_personal": len(included),
+        "excluded_by_reason": dict(sorted(excluded.items())),
+        "truncated": truncated,
+        "not_included_due_to_cap": len(included) - len(kept),
+        "ordering": "created_at ascending, then session id",
+        "activity_basis": "a stored message, worker start or completion, fired wake or dispatched recurring wake inside the window",
+    }
+
+
+def _coverage(discovery) -> str:
+    if discovery is None:
+        return "partial; explicit selection is not evidence of zero activity elsewhere"
+    if discovery["truncated"]:
+        return (
+            "partial; the cap truncated the classified sessions, so totals understate"
+        )
+    if discovery["excluded_by_reason"]:
+        return "partial; active sessions that are not classified non-personal are excluded (see discovery)"
+    return "complete for classified non-personal sessions with recorded activity in the window"
+
+
+def report(ctx, end_utc: str, session_ids: list[str] | None = None) -> dict:
+    """Aggregate counts for explicitly selected or automatically discovered non-personal sessions; never read payloads."""
     try:
         end = datetime.fromisoformat(end_utc.replace("Z", "+00:00"))
     except (ValueError, AttributeError) as exc:
@@ -41,25 +153,18 @@ def report(ctx, end_utc: str, session_ids: list[str] | None = None) -> dict:  # 
     ):
         msg = "An authenticated authorized session owner is required"
         raise ValueError(msg)
-    ids = [] if session_ids is None else session_ids
-    if not isinstance(ids, list) or len(ids) > MAX_SESSIONS:
+    if session_ids is not None and (
+        not isinstance(session_ids, list) or len(session_ids) > MAX_SESSIONS
+    ):
         msg = "session_ids must be a list of at most 200 IDs"
         raise ValueError(msg)
-    try:
-        selected = {UUID(str(value)) for value in ids}
-    except (ValueError, TypeError, AttributeError) as exc:
-        msg = "Invalid session ID"
-        raise ValueError(msg) from exc
-    names = {bot.name for bot in scope_bots(ctx) if not bot.definition.private}
-    sessions = ConversationSession.objects.filter(
-        pk__in=selected,
-        user_id=ctx.session.user_id,
-        bot_name__in=names,
-        created_at__lt=end,
-    )
-    if sessions.count() != len(selected):
-        msg = "One or more sessions are inaccessible or outside the window"
-        raise ValueError(msg)
+    bots = {bot.name: bot for bot in scope_bots(ctx)}
+    if session_ids:
+        selected = _explicit(ctx, bots, session_ids, end)
+        discovery = None
+    else:
+        selected, discovery = _discover(ctx, bots, start, end)
+    sessions = ConversationSession.objects.filter(pk__in=selected)
     window = {"created_at__gte": start, "created_at__lt": end}
     workers = Worker.objects.filter(session__in=sessions, **window)
     completions = Worker.objects.filter(
@@ -111,15 +216,18 @@ def report(ctx, end_utc: str, session_ids: list[str] | None = None) -> dict:  # 
         },
         "scope": {
             "selected_sessions": len(selected),
-            "selection": "explicit; no sessions selected by default",
-            "coverage": "partial; empty selection is not evidence of zero activity",
-            "personal_classification": "caller must exclude personal conversations",
+            "selection": "explicit" if discovery is None else "automatic",
+            "coverage": _coverage(discovery),
+            "personal_classification": "owner-declared non-personal only (bot.yaml self_health); anything not positively classified is excluded",
             "private_bots": "excluded",
             "max_sessions": MAX_SESSIONS,
+            "discovery": discovery,
         },
         "inventory": {
             "sessions": len(selected),
-            "basis": "selected accessible sessions existing before window end",
+            "basis": "selected accessible sessions existing before window end"
+            if discovery is None
+            else "classified non-personal sessions with recorded activity in the window",
         },
         "workers": {
             "attempts_started": workers.count(),
