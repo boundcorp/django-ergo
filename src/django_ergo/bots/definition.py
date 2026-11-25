@@ -73,6 +73,7 @@ bot.yaml::
         token_env: KITCHEN_TELEGRAM_TOKEN
     schedules:                         # see django_ergo.bots.schedules
       - {name: weekly-plan, cron: "0 17 * * sun", message: Plan next week's dinners}
+        # allow_self_resolve: true     # default false: leave scheduled threads open
     pull_requests: [boundcorp/ergo-bots]   # repos whose open PRs orchestrating chats see (gh CLI)
     permissions:
       call_bots: [sysadmin]            # other bots this bot may message

@@ -322,3 +322,13 @@ on `ScheduleRun`. A failed step stops later steps and posts a failure notice
 to the bot's main chat without an LLM turn. Nothing-to-report success stays
 silent. Scheduled LLM prompts are queued events: the run records enqueueing,
 not completion of the later LLM turn.
+
+## Keeping scheduled threads open
+
+Threads opened by a schedule stay open by default: the bot cannot resolve its
+own thread, and idle archival skips it. A person can resolve it in the UI, and
+an authorized different chat can resolve it explicitly. Set `allow_self_resolve:
+true` on the schedule to permit self-resolution and idle archival. The option
+applies to both `actions` and `workflow`, and is recorded with each new thread;
+changing the schedule does not change existing threads. Older schedule-linked
+threads without the flag also default to staying open.

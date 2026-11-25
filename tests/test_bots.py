@@ -4576,3 +4576,64 @@ def test_closure_waits_for_concurrent_permanence_change(monkeypatch):
             future.result(timeout=10)
     session.refresh_from_db()
     assert session.status == "completed"
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_scheduled_thread_self_resolution_policy(tmp_path):
+    from datetime import timedelta
+
+    from django.utils import timezone
+
+    from django_ergo.bots import archival
+    from django_ergo.bots import orchestrator
+
+    user = await User.objects.acreate(username="scheduled-resolver")
+    bot, engine = make_bot(tmp_path, say("ok"))
+    root = await bot.root_session(user)
+    protected = await bot.create_session(
+        user, parent=root, title="Report", metadata={"schedule": "weekly"}
+    )
+    allowed = await bot.create_session(
+        user,
+        parent=root,
+        title="Allowed",
+        metadata={"schedule": "weekly", "allow_self_resolve": True},
+    )
+    ordinary = await bot.create_session(user, parent=root, title="Ordinary")
+    for tool, args in [
+        ("ergo_thread_resolve", {}),
+        ("ergo_thread_archive", {"thread_id": str(protected.id)}),
+    ]:
+        engine._client.responses = [claude_tool(tool, args), say("Leaving it open.")]
+        await bot.ask(protected, "Review")
+        result = _tool_results(engine)[-1]
+        assert (
+            result["is_error"]
+            and "weekly" in result["content"]
+            and "self-resolve" in result["content"]
+        )
+    assert "does not allow self-resolution" in orchestrator.chat_identity(
+        protected, bot
+    )
+    for thread in (allowed, ordinary):
+        engine._client.responses = [claude_tool("ergo_thread_resolve", {}), say("Done")]
+        await bot.ask(thread, "Finish")
+        await thread.arefresh_from_db()
+        assert thread.status == "completed"
+
+    await ConversationSession.objects.filter(pk=protected.pk).aupdate(
+        updated_at=timezone.now() - timedelta(days=8)
+    )
+    assert str(protected.pk) not in await sync_to_async(archival.archive_idle_threads)(
+        [bot]
+    )
+    await protected.arefresh_from_db()
+    assert protected.status == "active"
+    ctx = ToolContext(bot=bot, session=root, user=user)
+    await sync_to_async(orchestrator.resolve)(ctx, str(protected.pk))
+    await protected.arefresh_from_db()
+    assert protected.status == "completed"
+    await sync_to_async(archival.reopen)(protected)
+    await sync_to_async(archival.archive)(protected, "user resolved")
+    await protected.arefresh_from_db()
+    assert protected.status == "completed"

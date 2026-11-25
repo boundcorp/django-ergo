@@ -382,3 +382,25 @@ def test_backfill_migration_keys_legacy_rows(lee):
     legacy.refresh_from_db()
     keyed.refresh_from_db()
     assert (legacy.schedule_key, keyed.schedule_key) == ("old name", "k")
+
+
+@pytest.mark.parametrize("form", ["actions", "workflow"])
+@pytest.mark.parametrize("allowed", [False, True])
+def test_self_resolve_option_parses_in_each_format(form, allowed):
+    from django_ergo.bots.schedules import Schedule
+
+    config = {"name": "review", "cron": "* * * * *", form: [{"prompt": "Review"}]}
+    assert Schedule.from_config(config).allow_self_resolve is False
+    config["allow_self_resolve"] = allowed
+    assert Schedule.from_config(config).allow_self_resolve is allowed
+    config["allow_self_resolve"] = "yes"
+    with pytest.raises(ValueError, match="allow_self_resolve"):
+        Schedule.from_config(config)
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("allowed", [False, True])
+def test_scheduled_thread_records_self_resolve_option(setup, allowed):
+    bot = setup(f"allow_self_resolve: {str(allowed).lower()},")
+    message = run_week(bot, 0)
+    assert message.recipient_session.metadata["allow_self_resolve"] is allowed
