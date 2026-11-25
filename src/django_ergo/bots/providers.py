@@ -64,6 +64,18 @@ its login or inference has been verified.
 A bot selects a member as ``personal`` or ``personal/<alias>``. Private
 models never appear in ``models()``, ``find()``, tiers, agents or the default,
 and no public provider, tier, agent or default may name one.
+
+Every provider also takes ``enabled`` (default true; false removes it from
+listings, pins, retries and new workers, and Ergonaut's Routing page can
+toggle it at runtime) and ``billing`` (``subscription`` or ``metered``;
+default: CLI transports are subscriptions, API keys are metered). A metered
+model can carry its exact price, which pool budgets need before they send::
+
+    - {name: gpt-6.1-sol, price: {input: 1.25, cached: 0.125, output: 10}}
+
+``type: google`` declares a Google (Gemini) API provider; it routes once a
+``("google", "api")`` engine is registered. ``pools``, ``auto_rollover`` and
+``privacy`` are parsed by ``bots.pool_config`` and enforced by ``bots.pools``.
 """
 
 from __future__ import annotations
@@ -79,6 +91,13 @@ from types import MappingProxyType
 
 import yaml
 
+from django_ergo.bots.pool_config import BILLING_KINDS
+from django_ergo.bots.pool_config import METERED
+from django_ergo.bots.pool_config import SUBSCRIPTION
+from django_ergo.bots.pool_config import PoolConfigError
+from django_ergo.bots.pool_config import PoolsConfig
+from django_ergo.bots.pool_config import parse_pools
+from django_ergo.bots.pool_config import parse_privacy
 from django_ergo.bots.routing import DEFAULT_EFFORT
 from django_ergo.bots.routing import AgentChoice
 from django_ergo.bots.routing import Routing
@@ -92,17 +111,20 @@ from django_ergo.conversation.inference_policy import PrivatePool
 from django_ergo.conversation.inference_policy import is_private_host
 from django_ergo.conversation.inference_policy import names_private_model
 from django_ergo.conversation.inference_policy import url_host
+from django_ergo.pricing import ExactPrice
 from django_ergo.protected_env import is_protected_env
 
 PROVIDERS_FILE = "providers.yaml"
 ROUTING_FILE = "routing.md"
-ENGINE_TYPES = ("openai", "claude")
+ENGINE_TYPES = ("openai", "claude", "google")
 PROVIDER_TYPES = (*ENGINE_TYPES, "omp")
 TRANSPORTS = {
     "openai": ("api", "cli"),
     "claude": ("api", "cli"),
+    "google": ("api",),
     "omp": ("cli",),
 }
+PRICE_KEYS = ("input", "cached", "output")
 PRIVATE_POOLS_KEY = "private_pools"
 POOL_KEYS = frozenset(
     {"enabled", "provider", "allowed_bots", "default", "models", "daily_usd_cap"}
@@ -147,6 +169,7 @@ class Model:
     name: str
     label: str = ""
     config: dict = field(default_factory=dict)
+    price: ExactPrice | None = None  # exact USD per million tokens, when given
 
     @property
     def id(self) -> str:
@@ -162,14 +185,23 @@ class Provider:
     config: dict = field(default_factory=dict)
     models: dict[str, Model] = field(default_factory=dict)
     account: str = ""
+    enabled: bool = True  # providers.yaml; Ergonaut's runtime toggle is bots.pools
+    billing: str = SUBSCRIPTION  # subscription or metered
 
     @property
     def worker_only(self) -> bool:
         return self.type == "omp"
 
     @property
+    def metered(self) -> bool:
+        return self.billing == METERED
+
+    @property
     def available(self) -> bool:
-        """Its key is set (or it needs none); for the CLI, the CLI is installed."""
+        """Enabled, and its key is set (or it needs none); for the CLI, the CLI
+        is installed."""
+        if not self.enabled:
+            return False
         if self.worker_only:
             return shutil.which("omp") is not None
         if self.transport == "cli" and self.type == "openai":
@@ -192,6 +224,8 @@ class Providers:
     private_pools: dict[str, PrivatePool] = field(default_factory=dict)
     # Account/window presentation overrides; never used by routing.
     hidden_usage_windows: dict[str, list[str]] = field(default_factory=dict)
+    # Ordered pools, the rollover gate and privacy policies (bots.pool_config).
+    pools: PoolsConfig = field(default_factory=PoolsConfig)
 
     def __bool__(self) -> bool:
         return bool(self.providers)
@@ -204,17 +238,23 @@ class Providers:
         """Selector namespaces that are private, configured or reserved."""
         return frozenset((*RESERVED_POOL_NAMES, *self.private_pools))
 
-    def private_pool_for(self, bot: str) -> PrivatePool | None:
+    def private_pool_for(self, bot: str, lineage=()) -> PrivatePool | None:
         """The private pool that lists ``bot`` in ``allowed_bots`` (enabled or
-        not, so a disabled pool still fails closed), or None."""
-        return next(
-            (
-                pool
-                for _, pool in sorted(self.private_pools.items())
-                if bot and bot in pool.allowed_bots
-            ),
-            None,
-        )
+        not, so a disabled pool still fails closed), or None. ``lineage``
+        (the bot's folder ancestors) lets a nested bot inherit its parent's
+        pool; the nearest listed name wins."""
+        for name in (bot, *lineage):
+            found = next(
+                (
+                    pool
+                    for _, pool in sorted(self.private_pools.items())
+                    if name and name in pool.allowed_bots
+                ),
+                None,
+            )
+            if found is not None:
+                return found
+        return None
 
     def is_private(self, ref) -> bool:
         """``ref`` names a private pool (``personal``, ``personal/heavy``) or a
@@ -271,7 +311,7 @@ class Providers:
         return provider.type, config, provider.api_key_env
 
     @classmethod
-    def from_dict(cls, data: dict) -> Providers:
+    def from_dict(cls, data: dict) -> Providers:  # noqa: C901
         if not isinstance(data, dict):
             msg = f"{PROVIDERS_FILE} must be a mapping"
             raise ProvidersError(msg)
@@ -286,6 +326,16 @@ class Providers:
             if transport not in TRANSPORTS[kind]:
                 msg = f"Provider {name!r}: transport {transport!r} doesn't work with {kind}"
                 raise ProvidersError(msg)
+            enabled = spec.get("enabled", True)
+            if not isinstance(enabled, bool):
+                msg = f"Provider {name!r}: enabled must be true or false"
+                raise ProvidersError(msg)
+            billing = str(
+                spec.get("billing") or (SUBSCRIPTION if transport == "cli" else METERED)
+            )
+            if billing not in BILLING_KINDS:
+                msg = f"Provider {name!r}: billing must be one of {', '.join(BILLING_KINDS)}"
+                raise ProvidersError(msg)
             provider = Provider(
                 name=str(name),
                 type=kind,
@@ -293,6 +343,8 @@ class Providers:
                 api_key_env=str(spec.get("api_key_env") or ""),
                 config=dict(spec.get("config") or {}),
                 account=_worker_account(name, kind, spec),
+                enabled=enabled,
+                billing=billing,
             )
             for listed in spec.get("models") or []:
                 entry = listed if isinstance(listed, dict) else {"name": listed}
@@ -300,6 +352,7 @@ class Providers:
                     provider=provider.name,
                     name=str(entry["name"]),
                     label=str(entry.get("label") or ""),
+                    price=_price(provider, str(entry["name"]), entry.get("price")),
                     config={
                         **dict(entry.get("config") or {}),
                         **(
@@ -330,6 +383,13 @@ class Providers:
         result.hidden_usage_windows = hidden
         result.private_pools = _private_pools(data.get(PRIVATE_POOLS_KEY), providers)
         result.routing = result._routing(data)
+        try:
+            result.pools = parse_pools(data, providers)
+            result.pools.privacy = parse_privacy(
+                data.get("privacy"), result.private_pools
+            )
+        except PoolConfigError as exc:
+            raise ProvidersError(str(exc)) from exc
         if result.default and not result.knows(result.default):
             msg = f"default {result.default!r} isn't one of the listed models"
             raise ProvidersError(msg)
@@ -456,6 +516,40 @@ class Providers:
         if is_auto(ref):
             return bool(self.routing.tiers.get(tier_of(ref)))
         return self.find(ref) is not None
+
+
+def _price(provider: Provider, model: str, raw) -> ExactPrice | None:
+    """A model's exact price (USD per million input, cached input and output
+    tokens), or None when providers.yaml gives none."""
+    if raw is None:
+        return None
+    where = f"Provider {provider.name!r}: {model} price"
+    if (
+        not isinstance(raw, dict)
+        or set(raw) - set(PRICE_KEYS)
+        or "input" not in raw
+        or "output" not in raw
+    ):
+        msg = f"{where} needs input and output (and optionally cached), USD per million tokens"
+        raise ProvidersError(msg)
+    values = {}
+    for key in PRICE_KEYS:
+        value = raw.get(key, raw["input"] if key == "cached" else None)
+        try:
+            amount = Decimal(str(value))
+        except InvalidOperation as exc:
+            msg = f"{where}.{key} must be a number"
+            raise ProvidersError(msg) from exc
+        if isinstance(value, bool) or not amount.is_finite() or amount < 0:
+            msg = f"{where}.{key} must be a number of US dollars, 0 or more"
+            raise ProvidersError(msg)
+        values[key] = amount
+    return ExactPrice(
+        provider=provider.name,
+        model=model,
+        source=f"providers.yaml ({provider.name})",
+        **values,
+    )
 
 
 def _worker_account(name: str, kind: str, spec: dict) -> str:

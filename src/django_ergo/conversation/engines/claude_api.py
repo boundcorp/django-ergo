@@ -173,7 +173,18 @@ class ClaudeAPIEngine(StoredMessagesMixin, Engine):
 
         With ``request_limits`` (a budgeted turn) the request is refused if its
         input could pass them, its ``max_tokens`` is cut to the output left, and
-        it is sent without retries and with the time left as its timeout."""
+        it is sent without retries and with the time left as its timeout.
+
+        With a ``spend_guard`` (a metered pool route) each request reserves its
+        worst-case cost first (``conversation.spend_guard``)."""
+        guard = getattr(self, "spend_guard", None)
+        if guard is not None:
+            return await guard.call(
+                kwargs, "max_tokens", lambda: self._send_message(**kwargs)
+            )
+        return await self._send_message(**kwargs)
+
+    async def _send_message(self, **kwargs):
         client = self._get_client()
         assert_public_endpoint(
             getattr(client, "base_url", None), what="The Claude API engine"

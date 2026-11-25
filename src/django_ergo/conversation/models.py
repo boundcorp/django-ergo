@@ -1345,6 +1345,115 @@ class RoutingSwitch(models.Model):
         return f"{self.from_model} -> {self.to_model}"
 
 
+class ModelPoolState(models.Model):
+    """Runtime overrides of one providers.yaml pool (``bots.pools``), edited on
+    Ergonaut's Routing page. A null field keeps the providers.yaml value;
+    ``budget_override`` / ``expires_override`` make a null budget or expiry
+    an explicit "none". ``version`` guards concurrent edits."""
+
+    name = models.CharField(max_length=64, unique=True)
+    enabled = models.BooleanField(null=True, blank=True)
+    rollover_out = models.BooleanField(null=True, blank=True)
+    allow_auto_entry = models.BooleanField(null=True, blank=True)
+    budget_override = models.BooleanField(default=False)
+    budget_usd = models.DecimalField(
+        max_digits=16, decimal_places=4, null=True, blank=True
+    )
+    expires_override = models.BooleanField(default=False)
+    expires_at = models.DateTimeField(null=True, blank=True)
+    per_launch_usd = models.DecimalField(
+        max_digits=16, decimal_places=4, null=True, blank=True
+    )
+    version = models.PositiveIntegerField(default=1)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return self.name
+
+
+class ModelPoolPreference(models.Model):
+    """One user's pool choices (``key`` ``user:<id>``; ``deployment`` for
+    work without a user): preferred order, the manually selected pool ("" =
+    automatic, preferred order) and the auto-rollover gate (null = the
+    providers.yaml default, which is off)."""
+
+    key = models.CharField(max_length=64, unique=True)
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="model_pool_preferences",
+    )
+    order = models.JSONField(default=list, blank=True)
+    active_pool = models.CharField(max_length=64, blank=True, default="")
+    auto_rollover = models.BooleanField(null=True, blank=True)
+    version = models.PositiveIntegerField(default=1)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.key}: {self.active_pool or 'auto'}"
+
+
+class ProviderToggle(models.Model):
+    """A runtime on/off switch for one providers.yaml provider (account).
+    Off removes it from listings, pins, retries and new workers everywhere."""
+
+    name = models.CharField(max_length=64, unique=True)
+    enabled = models.BooleanField(default=True)
+    version = models.PositiveIntegerField(default=1)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.name}: {'on' if self.enabled else 'off'}"
+
+
+class RouteDecision(models.Model):
+    """A receipt for one pool selection (``bots.pools.select_route``): what was
+    asked for, which pool and route were chosen or why it was refused, and the
+    candidates left out. Never a prompt, message text or credential."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    session = models.ForeignKey(
+        ConversationSession,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="route_decisions",
+    )
+    user = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="route_decisions",
+    )
+    bot_name = models.CharField(max_length=100, blank=True, default="")
+    consumer = models.CharField(max_length=32)
+    origin = models.CharField(max_length=200, blank=True, default="")  # privacy
+    mode = models.CharField(max_length=16, blank=True, default="")  # auto/manual
+    requested = models.CharField(max_length=200, blank=True, default="")
+    tier = models.CharField(max_length=20, blank=True, default="")
+    pool = models.CharField(max_length=64, blank=True, default="")
+    route = models.CharField(max_length=200, blank=True, default="")
+    billing = models.CharField(max_length=16, blank=True, default="")
+    outcome = models.CharField(max_length=16)  # selected or refused
+    code = models.CharField(max_length=32, blank=True, default="")
+    reason = models.CharField(max_length=500, blank=True, default="")
+    rejected = models.JSONField(default=list, blank=True)
+    rollover = models.JSONField(default=list, blank=True)  # pools passed through
+    reserved_usd = models.DecimalField(
+        max_digits=16, decimal_places=10, null=True, blank=True
+    )
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.consumer}: {self.pool}/{self.route or self.code}"
+
+
 class AuthorProfile(models.Model):
     """Who an external message author is, for apps to show: a name and a
     small picture, keyed like a message's ``author`` (``kind``, ``ref``), e.g.

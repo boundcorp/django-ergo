@@ -97,6 +97,9 @@ class Engine(ABC):
     # subscription CLIs) make a budgeted turn fail before any request.
     supports_request_limits: bool = False
     request_limits: RequestLimits | None = None
+    # A metered pool route's spend authority (conversation.spend_guard), set by
+    # bots.pools; API engines reserve each request's worst-case cost with it.
+    spend_guard = None
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)

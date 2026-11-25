@@ -276,7 +276,21 @@ class OpenAIAPIEngine(StoredMessagesMixin, Engine):
         With ``request_limits`` (a budgeted turn) the request is refused if its
         input could pass them, its output tokens (reasoning included) are cut
         to what is left, and it is sent without retries and with the time left
-        as its timeout."""
+        as its timeout.
+
+        With a ``spend_guard`` (a metered pool route, ``conversation.spend_guard``)
+        each request reserves its worst-case cost first and is refused when
+        the pool's budget can't cover it."""
+        guard = getattr(self, "spend_guard", None)
+        if guard is not None:
+            return await guard.call(
+                kwargs,
+                "max_completion_tokens",
+                lambda: self._send_completion(kwargs),
+            )
+        return await self._send_completion(kwargs)
+
+    async def _send_completion(self, kwargs: dict):
         client = self._get_client()
         assert_public_endpoint(
             getattr(client, "base_url", ""), what="The OpenAI API engine"
