@@ -140,7 +140,7 @@ class Runner:
         self.starts = 0
         self.checkout_change = ""
 
-    def respond(self, args):
+    def respond(self, args):  # noqa: PLR0911
         self.calls.append(args)
         command = tuple(args[:2])
         if command == self.fail:
@@ -186,6 +186,11 @@ class Runner:
                     "id": selector.removeprefix("id:"),
                     "path": str(self.paths[index]),
                 }
+            }
+        if command == ("orchestration", "task-list"):
+            create = self.commands("orchestration", "task-create")[-1]
+            return {
+                "tasks": [{"id": "task-1", "spec": create[create.index("--spec") + 1]}]
             }
         if command == ("orchestration", "worker-start"):
             self.starts += 1

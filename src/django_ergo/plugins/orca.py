@@ -982,13 +982,19 @@ class OrcaPlugin(BotPlugin):
         effort: str = "",
     ) -> tuple[str, str, str, dict]:
         """Create the task and worker: task id, run id, owning mailbox, receipt."""
+        full_spec = spec + "\n\n" + instruction_protocol.CHECKPOINT_GUIDANCE
+        # Bound the argv below the per-argument limit on Linux as well as Orca's
+        # prompt budget. Count UTF-8 bytes, including our checkpoint guidance.
+        if len(full_spec.encode("utf-8")) > 64 * 1024:
+            msg = "Orca task spec exceeds the 65536-byte launch limit"
+            raise ValueError(msg)
         mailbox, run_id = self.mailbox(ctx, worktree)
         task = self.cli_json(
             [
                 "orchestration",
                 "task-create",
                 "--spec",
-                spec + "\n\n" + instruction_protocol.CHECKPOINT_GUIDANCE,
+                full_spec,
                 "--task-title",
                 title,
                 "--run",
@@ -998,6 +1004,20 @@ class OrcaPlugin(BotPlugin):
             ]
         )
         task_id = _first_key(task, ("taskId", "task_id", "id"))
+        listing = ["orchestration", "task-list", "--run", run_id, "--from", mailbox]
+        try:
+            tasks = self.cli_json([*listing, "--full"])
+        except OrcaError as exc:
+            # Older Orca returns full rows by default and does not know --full.
+            if "Unknown flag --full" not in str(exc):
+                raise
+            tasks = self.cli_json(listing)
+        stored = next(
+            (row for row in tasks.get("tasks", []) if row.get("id") == task_id), None
+        )
+        if not task_id or not stored or stored.get("spec") != full_spec:
+            msg = "Orca task spec could not be verified in full; no worker launched"
+            raise ValueError(msg)
         args = [
             "orchestration",
             "worker-start",
@@ -1118,6 +1138,17 @@ class OrcaPlugin(BotPlugin):
         }
 
     def start_agent(self, ctx: ToolContext, spec: AgentSpec) -> dict:
+        # Reject large user briefs before creating even a scoped worktree.
+        if (
+            len(
+                (spec.brief + "\n\n" + instruction_protocol.CHECKPOINT_GUIDANCE).encode(
+                    "utf-8"
+                )
+            )
+            > 64 * 1024
+        ):
+            msg = "Orca task spec exceeds the 65536-byte launch limit"
+            raise ValueError(msg)
         if not spec.tier:
             from django_ergo.bots.routing import coding_login_error
             from django_ergo.bots.routing import coding_login_store

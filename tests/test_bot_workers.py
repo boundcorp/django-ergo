@@ -519,6 +519,13 @@ def test_orca_start_worker_watches_the_dispatch_and_reports_back(  # noqa: PLR09
 
     def respond(args):
         command = tuple(args[1:3])
+        if command == ("orchestration", "task-list"):
+            create = next(
+                c for c in reversed(calls) if c[1:3] == ["orchestration", "task-create"]
+            )
+            return {
+                "tasks": [{"id": "task_1", "spec": create[create.index("--spec") + 1]}]
+            }
         if command == ("orchestration", "worker-show"):
             return {
                 "dispatch": {"status": state["status"]},
@@ -862,7 +869,16 @@ def test_orca_start_worker_replaces_a_mailbox_whose_terminal_is_gone(
             return subprocess.CompletedProcess(
                 argv, 1, stdout=json.dumps(body), stderr=""
             )
-        body = {"ok": True, "result": fixed[tuple(argv[1:3])]}
+        if argv[1:3] == ["orchestration", "task-list"]:
+            create = next(
+                c for c in reversed(calls) if c[1:3] == ["orchestration", "task-create"]
+            )
+            result = {
+                "tasks": [{"id": "task_1", "spec": create[create.index("--spec") + 1]}]
+            }
+        else:
+            result = fixed[tuple(argv[1:3])]
+        body = {"ok": True, "result": result}
         return subprocess.CompletedProcess(argv, 0, stdout=json.dumps(body), stderr="")
 
     monkeypatch.setattr("django_ergo.plugins.orca.subprocess.run", fake_run)
@@ -952,7 +968,20 @@ def test_orca_watch_fails_a_worker_whose_agent_terminal_is_gone(
         },
     }
 
+    calls = []
+
     def fake_run(argv, **kwargs):
+        calls.append(argv)
+        if argv[1:3] == ["orchestration", "task-list"]:
+            create = next(
+                c for c in reversed(calls) if c[1:3] == ["orchestration", "task-create"]
+            )
+            result = {
+                "tasks": [{"id": "task_1", "spec": create[create.index("--spec") + 1]}]
+            }
+            return subprocess.CompletedProcess(
+                argv, 0, stdout=json.dumps({"ok": True, "result": result}), stderr=""
+            )
         if argv[1:3] == ["terminal", "show"]:
             body = terminal["show"]
             code = 0 if body.get("ok", True) else 1
@@ -1271,3 +1300,46 @@ def test_a_finished_event_names_output_files_without_hashes():
     assert shown["outputs"][-1] == "... 3 more; ergo_worker_list has them all"
     assert result_for_chat("plain text") == "plain text"
     assert json.loads(result_for_chat({"a": 1})) == {"a": 1}
+
+
+def test_orca_dispatch_verifies_the_complete_brief_before_launch(tmp_path, monkeypatch):
+    from tests.test_bot_plugins import orca_bot
+
+    _, _, plugin = orca_bot(tmp_path)
+    calls = []
+    task_spec = ""
+
+    def cli(args):
+        nonlocal task_spec
+        calls.append(args)
+        if args[:2] == ["orchestration", "task-create"]:
+            task_spec = args[args.index("--spec") + 1]
+            return {"taskId": "task-1"}
+        if args[:2] == ["orchestration", "task-list"]:
+            return {"tasks": [{"id": "task-1", "spec": task_spec}]}
+        if args[:2] == ["orchestration", "worker-start"]:
+            return {"dispatchId": "dispatch-1"}
+        raise AssertionError(args)
+
+    monkeypatch.setattr(plugin, "mailbox", lambda *_: ("mailbox", "run"))
+    monkeypatch.setattr(plugin, "cli_json", cli)
+    brief = "long requirement\n" * 2000 + "ACCEPTANCE_SENTINEL"
+    plugin.dispatch(None, brief, "worktree", "codex", "title")
+    assert task_spec.startswith(brief + "\n\n")
+    assert any(c[:2] == ["orchestration", "worker-start"] for c in calls)
+
+    calls.clear()
+    with pytest.raises(ValueError, match="65536-byte"):
+        plugin.dispatch(None, "é" * 40000, "worktree", "codex", "title")
+    assert calls == []
+
+    def truncated(args):
+        if args[:2] == ["orchestration", "task-list"]:
+            calls.append(args)
+            return {"tasks": [{"id": "task-1", "spec": task_spec[:-1]}]}
+        return cli(args)
+
+    monkeypatch.setattr(plugin, "cli_json", truncated)
+    with pytest.raises(ValueError, match="could not be verified"):
+        plugin.dispatch(None, brief, "worktree", "codex", "title")
+    assert not any(c[:2] == ["orchestration", "worker-start"] for c in calls)
