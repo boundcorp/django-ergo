@@ -1,4 +1,5 @@
-import { Fragment, createContext, useContext, useMemo, useRef, useState } from 'react'
+import { Fragment, createContext, useContext, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Transcript as ChatTranscript, type RenderMessage, type RenderPart } from '@ergo/chat-ui'
 import { useNavigate } from 'react-router-dom'
 import type {
   AttachmentFile,
@@ -12,6 +13,7 @@ import type {
   Worker,
 } from '../api'
 import { api } from '../api'
+import { adapterMeta, toChatMessages } from '../chatAdapter'
 import { DirectoryContext } from './BotIcon'
 import Markdown from './Markdown'
 import { ThreadCard, ThreadLink, WorkerCard, workerStatus, linkThreads } from './Threads'
@@ -726,146 +728,126 @@ function EventMessage({ message }: { message: Message }) {
   )
 }
 
-function MessageView({
-  message,
-  results,
-  pending,
-  replies,
-}: {
-  message: Message
+/** A "context" block is a toggle; each one keeps its own open state. */
+function ContextToggle({ text }: { text: string }) {
+  const [show, setShow] = useState(false)
+  return (
+    <button className="text-xs text-zinc-400 underline" onClick={() => setShow(!show)}>
+      {show ? <pre className="whitespace-pre-wrap text-left">{text}</pre> : 'context'}
+    </button>
+  )
+}
+
+type PartEnv = {
   results: Map<string, ToolResult>
   pending: Set<string>
   replies: string[]
-}) {
-  const [showContext, setShowContext] = useState(false)
-  const { hidden, rows } = useContext(FoldContext)
-  if (message.author?.kind === 'system' || message.provenance?.kind === 'event')
-    return <EventMessage message={message} />
-  if (message.provenance?.kind && message.provenance.origin) return <AttributedMessage message={message} />
+}
+
+/**
+ * One Ergonaut block as the card it has always been. The package calls this for every part (`renderPart`);
+ * `null` hides the part (an echoed reply, a call folded away), so nothing here falls back to the package default.
+ */
+function renderBlock(message: Message, block: Block, blocks: Block[], env: PartEnv, folds: Folds): ReactNode {
+  const { results, pending, replies } = env
+  const { hidden, rows } = folds
   const user = message.role === 'user'
-  const parts = message.blocks.filter(
-    b =>
-      b.type !== 'tool_result' &&
-      !(b.type === 'text' && !user && echoesReply(b.text, replies)) &&
-      !(b.type === 'tool_use' && hidden.has(b.id) && !rows.has(b.id)),
-  )
-  if (!parts.length) return null
-  const groups = attachmentGroups(parts)
-  return (
-    <div className={`flex flex-col gap-1 ${user ? 'items-end' : 'items-start'}`}>
-      {parts.map((block, i) => {
-        switch (block.type) {
-          case 'text': {
-            const from = user && !message.author?.kind ? fromThread(block.text) : null
-            // Resume's note to the model (see api/bots.py RESUME_NOTE) reads as a divider, not a message.
-            const resumed = user
-              ? /^\[Resume\] Your last turn stopped before it finished \((.*?)\)\./.exec(block.text)
-              : null
-            if (resumed)
-              return (
-                <div key={i} className="self-center text-xs text-zinc-500" title={block.text}>
-                  ↻ Resumed after: {resumed[1]}
-                </div>
-              )
-            if (from?.kind === 'reply')
-              // A reply to work this chat sent: one row to open; the card above has its status.
-              return (
-                <details
-                  key={i}
-                  className="group w-full max-w-[85%] self-start rounded-card border border-teal/40 bg-teal-tint px-3 py-2"
-                >
-                  <summary className="flex cursor-pointer list-none items-center gap-2 text-xs text-teal-700 dark:text-teal-300">
-                    <span className="transition-transform group-open:rotate-90">▸</span>
-                    <span className="font-medium">↩ Reply from {from.who}</span>
-                    {from.about && <span className="truncate opacity-80">· re “{from.about}”</span>}
-                  </summary>
-                  <div className="mt-2 text-sm">
-                    <BotMarkdown text={from.body} />
-                  </div>
-                </details>
-              )
-            if (from)
-              return (
-                <div
-                  key={i}
-                  className="max-w-[85%] self-start rounded-card border border-teal/40 bg-teal-tint px-4 py-3"
-                >
-                  <div className="mb-1 text-xs font-medium text-teal-700 dark:text-teal-300">
-                    {from.kind === 'report' ? 'Report from' : '✉ message from'} {from.who}
-                    {from.about && <span className="font-normal text-teal-600/80"> · re “{from.about}”</span>}
-                  </div>
-                  <BotMarkdown text={from.body} />
-                </div>
-              )
-            return user ? (
-              <div
-                key={i}
-                className="max-w-[85%] rounded-card border border-accent/20 bg-indigo-tint px-4 py-3 text-ink"
-              >
-                <RoleLabel
-                  who={authorLabel(message)}
-                  timestamp={message.timestamp}
-                  line={message.line}
-                  author={message.author}
-                />
-                <Markdown text={block.text} />
-              </div>
-            ) : (
-              <div
-                key={i}
-                className="max-w-[85%] rounded-card border border-stroke bg-surface px-4 py-3 text-sm text-ink"
-              >
-                <RoleLabel who={authorLabel(message)} timestamp={message.timestamp} line={message.line} />
-                <BotMarkdown text={block.text} />
-              </div>
-            )
-          }
-          case 'attachment':
-            return groups.has(i) ? (
-              <div key={i} className="max-w-[85%]">
-                <MediaGallery items={groups.get(i)!} />
-              </div>
-            ) : null
-          case 'thinking':
-            return (
-              <details key={i} className="max-w-[85%] text-xs text-zinc-500">
-                <summary className="cursor-pointer">Thinking</summary>
-                <div className="whitespace-pre-wrap">{block.text}</div>
-              </details>
-            )
-          case 'context':
-            return (
-              <button key={i} className="text-xs text-zinc-400 underline" onClick={() => setShowContext(!showContext)}>
-                {showContext ? <pre className="whitespace-pre-wrap text-left">{block.text}</pre> : 'context'}
-              </button>
-            )
-          case 'tool_use':
-            if (block.name === REPLY_TOOL) {
-              // A rejected reply was retried; the accepted one follows.
-              if (results.get(block.id)?.is_error) return null
-              return <ReplyBubble key={i} reply={block.input as Reply} message={message} />
-            }
-            return (
-              // Keyed by call id, not position, so an open call stays open as the chat streams and folds shift.
-              <Fragment key={block.id || i}>
-                {rows.has(block.id) && (
-                  <div className="w-full max-w-[85%]">
-                    <FoldToggle row={rows.get(block.id)!} />
-                  </div>
-                )}
-                {!hidden.has(block.id) && (
-                  <div className="w-full max-w-[85%]">
-                    <ToolCall use={block} result={results.get(block.id)} pending={pending.has(block.id)} />
-                  </div>
-                )}
-              </Fragment>
-            )
-          default:
-            return null
-        }
-      })}
-    </div>
-  )
+  switch (block.type) {
+    case 'text': {
+      if (!user && echoesReply(block.text, replies)) return null
+      const from = user && !message.author?.kind ? fromThread(block.text) : null
+      // Resume's note to the model (see api/bots.py RESUME_NOTE) reads as a divider, not a message.
+      const resumed = user ? /^\[Resume\] Your last turn stopped before it finished \((.*?)\)\./.exec(block.text) : null
+      if (resumed)
+        return (
+          <div className="self-center text-xs text-zinc-500" title={block.text}>
+            ↻ Resumed after: {resumed[1]}
+          </div>
+        )
+      if (from?.kind === 'reply')
+        // A reply to work this chat sent: one row to open; the card above has its status.
+        return (
+          <details className="group w-full max-w-[85%] self-start rounded-card border border-teal/40 bg-teal-tint px-3 py-2">
+            <summary className="flex cursor-pointer list-none items-center gap-2 text-xs text-teal-700 dark:text-teal-300">
+              <span className="transition-transform group-open:rotate-90">▸</span>
+              <span className="font-medium">↩ Reply from {from.who}</span>
+              {from.about && <span className="truncate opacity-80">· re “{from.about}”</span>}
+            </summary>
+            <div className="mt-2 text-sm">
+              <BotMarkdown text={from.body} />
+            </div>
+          </details>
+        )
+      if (from)
+        return (
+          <div className="max-w-[85%] self-start rounded-card border border-teal/40 bg-teal-tint px-4 py-3">
+            <div className="mb-1 text-xs font-medium text-teal-700 dark:text-teal-300">
+              {from.kind === 'report' ? 'Report from' : '✉ message from'} {from.who}
+              {from.about && <span className="font-normal text-teal-600/80"> · re “{from.about}”</span>}
+            </div>
+            <BotMarkdown text={from.body} />
+          </div>
+        )
+      return user ? (
+        <div className="max-w-[85%] rounded-card border border-accent/20 bg-indigo-tint px-4 py-3 text-ink">
+          <RoleLabel
+            who={authorLabel(message)}
+            timestamp={message.timestamp}
+            line={message.line}
+            author={message.author}
+          />
+          <Markdown text={block.text} />
+        </div>
+      ) : (
+        <div className="max-w-[85%] rounded-card border border-stroke bg-surface px-4 py-3 text-sm text-ink">
+          <RoleLabel who={authorLabel(message)} timestamp={message.timestamp} line={message.line} />
+          <BotMarkdown text={block.text} />
+        </div>
+      )
+    }
+    case 'attachment': {
+      // The message's files together, where its first file was.
+      const group = attachmentGroups(blocks).get(blocks.indexOf(block))
+      return group ? (
+        <div className="max-w-[85%]">
+          <MediaGallery items={group} />
+        </div>
+      ) : null
+    }
+    case 'thinking':
+      return (
+        <details className="max-w-[85%] text-xs text-zinc-500">
+          <summary className="cursor-pointer">Thinking</summary>
+          <div className="whitespace-pre-wrap">{block.text}</div>
+        </details>
+      )
+    case 'context':
+      return <ContextToggle text={block.text} />
+    case 'tool_use': {
+      if (block.name === REPLY_TOOL) {
+        // A rejected reply was retried; the accepted one follows.
+        if (results.get(block.id)?.is_error) return null
+        return <ReplyBubble reply={block.input as Reply} message={message} />
+      }
+      if (hidden.has(block.id) && !rows.has(block.id)) return null
+      return (
+        <>
+          {rows.has(block.id) && (
+            <div className="w-full max-w-[85%]">
+              <FoldToggle row={rows.get(block.id)!} />
+            </div>
+          )}
+          {!hidden.has(block.id) && (
+            <div className="w-full max-w-[85%]">
+              <ToolCall use={block} result={results.get(block.id)} pending={pending.has(block.id)} />
+            </div>
+          )}
+        </>
+      )
+    }
+    default:
+      return null
+  }
 }
 
 // Images a tool returned (renders, screenshots), shown under its card rather than inside it.
@@ -992,6 +974,7 @@ export function Transcript({
 }) {
   const { sessions } = useContext(DirectoryContext)
   const messages = useMemo(() => uniqueToolIds(rawMessages), [rawMessages])
+  const chatMessages = useMemo(() => toChatMessages(messages), [messages])
   const contexts = useMemo(() => contextPlacement(messages, calls), [messages, calls])
   const [openFolds, setOpenFolds] = useState<Set<string>>(new Set())
   const results = new Map<string, ToolResult>()
@@ -1039,48 +1022,73 @@ export function Transcript({
         return next
       }),
   }
+  const env: PartEnv = { results, pending, replies }
+
+  // Parts: every Ergonaut block is drawn by its own card (renderBlock); the package supplies the list, keys and slots.
+  const renderPart: RenderPart = (_part, { message, index }) => {
+    const meta = adapterMeta(message)
+    return renderBlock(meta.source, meta.blocks[index], meta.blocks, env, folds)
+  }
+  // Messages: the shell around a message's parts (event and attributed messages, ids for links, call headers,
+  // sent-to notes, files a bot made, context panels, compaction dividers, voice sessions).
+  const renderMessage: RenderMessage = (chat, { parts }) => {
+    const message = adapterMeta(chat).source
+    const body =
+      message.author?.kind === 'system' || message.provenance?.kind === 'event' ? (
+        <EventMessage message={message} />
+      ) : message.provenance?.kind && message.provenance.origin ? (
+        <AttributedMessage message={message} />
+      ) : parts.length ? (
+        <div className={`flex flex-col gap-1 ${message.role === 'user' ? 'items-end' : 'items-start'}`}>{parts}</div>
+      ) : null
+    return (
+      <Fragment>
+        {(voiceBefore.get(message.line) ?? []).map(voice => (
+          <VoiceSessionCard key={voice.id} session={voice} />
+        ))}
+        <div
+          id={messageAnchor(message.line)}
+          className={`empty:hidden ${toolsOnly(message) && !starts.has(message.line) ? 'mt-1.5' : 'mt-6'} ${highlight === message.line ? 'message-target' : ''}`}
+        >
+          {starts.has(message.line) && <CallHeader call={starts.get(message.line)!} />}
+          {body}
+          {sentFrom.has(message.line) && (
+            <div className="mt-1 flex flex-wrap items-center justify-end gap-1.5 text-xs text-muted">
+              ↪ Sent to
+              {sentFrom.get(message.line)!.map(card => (
+                <ThreadLink key={card.message_id} id={card.thread.id}>
+                  {card.thread.title}
+                </ThreadLink>
+              ))}
+            </div>
+          )}
+          {made.has(message.line) && <BotFiles files={made.get(message.line)!} />}
+          {contexts.has(message.line) && <ContextPanel call={contexts.get(message.line)!} />}
+          {compactions
+            .filter(c => c.upto_sequence === message.line)
+            .map(c => (
+              <CompactionDivider key={c.id} compaction={c} sessionId={sessionId} />
+            ))}
+        </div>
+      </Fragment>
+    )
+  }
   return (
     <SessionContext.Provider value={sessionId}>
       <FilesContext.Provider value={files}>
         <DelegatedContext.Provider value={delegated}>
           <FoldContext.Provider value={folds}>
-            <div className="flex flex-col">
-              {made.has(-1) && <BotFiles files={made.get(-1)!} />}
-              {messages.map(message => (
-                <Fragment key={message.line}>
-                  {(voiceBefore.get(message.line) ?? []).map(voice => (
-                    <VoiceSessionCard key={voice.id} session={voice} />
-                  ))}
-                  <div
-                    id={messageAnchor(message.line)}
-                    className={`empty:hidden ${toolsOnly(message) && !starts.has(message.line) ? 'mt-1.5' : 'mt-6'} ${highlight === message.line ? 'message-target' : ''}`}
-                  >
-                    {starts.has(message.line) && <CallHeader call={starts.get(message.line)!} />}
-                    <MessageView message={message} results={results} pending={pending} replies={replies} />
-                    {sentFrom.has(message.line) && (
-                      <div className="mt-1 flex flex-wrap items-center justify-end gap-1.5 text-xs text-muted">
-                        ↪ Sent to
-                        {sentFrom.get(message.line)!.map(card => (
-                          <ThreadLink key={card.message_id} id={card.thread.id}>
-                            {card.thread.title}
-                          </ThreadLink>
-                        ))}
-                      </div>
-                    )}
-                    {made.has(message.line) && <BotFiles files={made.get(message.line)!} />}
-                    {contexts.has(message.line) && <ContextPanel call={contexts.get(message.line)!} />}
-                    {compactions
-                      .filter(c => c.upto_sequence === message.line)
-                      .map(c => (
-                        <CompactionDivider key={c.id} compaction={c} sessionId={sessionId} />
-                      ))}
-                  </div>
-                </Fragment>
-              ))}
-              {voiceAfter.map(voice => (
+            <ChatTranscript
+              messages={chatMessages}
+              scroll="host"
+              className="flex flex-col"
+              renderPart={renderPart}
+              renderMessage={renderMessage}
+              header={made.has(-1) ? <BotFiles files={made.get(-1)!} /> : undefined}
+              footer={voiceAfter.map(voice => (
                 <VoiceSessionCard key={voice.id} session={voice} />
               ))}
-            </div>
+            />
           </FoldContext.Provider>
         </DelegatedContext.Provider>
       </FilesContext.Provider>

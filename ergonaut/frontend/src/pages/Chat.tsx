@@ -17,7 +17,17 @@ import type {
   Wake,
   Worker,
 } from '../api'
+import { Composer as ChatComposer, type Attachment } from '@ergo/chat-ui'
 import { api } from '../api'
+import {
+  ambiguousSend,
+  chooseApproval,
+  fromAttachment,
+  toAttachment,
+  type ApprovalChoices,
+  type Outgoing,
+} from '../chatAdapter'
+import { ApprovalPanel } from '../components/ApprovalPanel'
 import { useDraft } from '../draft'
 import { prepareChatSend, type ChatSendSource } from '../chatSend'
 import { lastTurn, suggestionsFromMessages, statusSummary } from '../chatLayout'
@@ -141,7 +151,6 @@ export function Chat({ onChange }: { onChange: () => void }) {
   const [showTodos, setShowTodos] = usePersistedFlag('ergonaut.todos')
   const [error, setError] = useState('')
   // Files picked or pasted for the next message, already uploaded to the session.
-  type Outgoing = { id: string; filename: string; image: boolean; audio: boolean }
   const [outgoing, setOutgoing] = useComposerAttachments<Outgoing>(id)
   // Files sent with the queued message, shown with it until the worker stores it.
   const [sentFiles, setSentFiles] = useState<Outgoing[]>([])
@@ -149,7 +158,6 @@ export function Chat({ onChange }: { onChange: () => void }) {
   const [files, setFiles] = useState<AttachmentFile[]>([])
   const [uploading, setUploading] = useState(false)
   const [illustration, setIllustration] = useState<IllustrationResult | null>(null)
-  const picker = useRef<HTMLInputElement>(null)
   // A turn a worker is running: what was sent, and how the calls and messages looked then.
   const [pending, setPending] = useState<{ text: string; lastCall: string; line: number; approvals: string } | null>(
     null,
@@ -157,8 +165,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
   // Stop was pressed; the turn ends at its next step.
   const [stopping, setStopping] = useState(false)
   // Answers to the tool calls a turn waits on, sent together once every one has one.
-  const [choices, setChoices] = useState<Record<string, boolean>>({})
-  const choicesBatch = useRef('')
+  const [choices, setChoices] = useState<ApprovalChoices>({ batch: '', choices: {} })
   // The Files panel stays open or closed across sessions, per browser.
   const [showFiles, toggleFiles] = usePersistedFlag('ergonaut.files')
   // The pinned page shown in place of the transcript, if any.
@@ -501,13 +508,8 @@ export function Chat({ onChange }: { onChange: () => void }) {
       }
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e)
-      setError(
-        accepted && !acknowledged
-          ? `${message} Send may have succeeded; check the conversation before retrying.`
-          : message,
-      )
-      if (accepted && !acknowledged)
-        throw new Error(`${message} Send may have succeeded; check the conversation before retrying.`)
+      setError(accepted && !acknowledged ? ambiguousSend(message) : message)
+      if (accepted && !acknowledged) throw new Error(ambiguousSend(message))
     } finally {
       setBusy(false)
     }
@@ -557,34 +559,37 @@ export function Chat({ onChange }: { onChange: () => void }) {
     }
   }
 
-  async function attach(files: FileList | File[] | null) {
-    if (!files || !files.length) return
+  // The composer hands over the picked or pasted files; what was stored comes back to it as attachments.
+  // A failure part-way keeps the files already stored (they are on the server) and reports the error.
+  async function attach(files: File[]): Promise<Attachment[]> {
+    if (!files.length) return []
     setUploading(true)
     setError('')
+    const stored: Attachment[] = []
     try {
-      for (const file of Array.from(files)) {
+      for (const file of files) {
         const saved = await api.uploadAttachment(id, file)
-        setOutgoing(list => [
-          ...list,
-          {
+        stored.push(
+          toAttachment({
             id: saved.id,
             filename: saved.filename,
             image: saved.kind === 'image' || saved.view === 'image',
             audio: isAudio(saved),
-          },
-        ])
+          }),
+        )
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
       setUploading(false)
-      if (picker.current) picker.current.value = ''
     }
+    return stored
   }
 
-  async function unattach(fileId: string) {
-    setOutgoing(list => list.filter(f => f.id !== fileId))
-    await api.deleteAttachment(fileId).catch(() => undefined)
+  // Dropped at once; the server copy is deleted best-effort.
+  async function unattach(attachment: Attachment) {
+    setOutgoing(list => list.filter(f => f.id !== attachment.id))
+    await api.deleteAttachment(attachment.id).catch(() => undefined)
   }
 
   if (!detail) return <div className="p-6 text-zinc-500">{error || 'Loading…'}</div>
@@ -605,16 +610,9 @@ export function Chat({ onChange }: { onChange: () => void }) {
     }
   }
   function decide(approvalId: string, approve: boolean) {
-    const batch = JSON.stringify([lastCall?.id, waiting])
-    const next = { ...(choicesBatch.current === batch ? choices : {}), [approvalId]: approve }
-    choicesBatch.current = batch
-    if (waiting.every(a => a.id in next)) {
-      setChoices({})
-      const decisions = Object.fromEntries(waiting.map(a => [a.id, next[a.id]]))
-      run(() => api.decide(id, decisions, waiting, lastCall?.id))
-    } else {
-      setChoices(next)
-    }
+    const { state, submit } = chooseApproval(choices, lastCall?.id, waiting, approvalId, approve)
+    setChoices(state)
+    if (submit) run(() => api.decide(id, submit, waiting, lastCall?.id))
   }
   // A newer user message or an unfinished call supersedes the previous reply.
   const newerUserMessage = detail.messages.some(
@@ -949,54 +947,13 @@ export function Chat({ onChange }: { onChange: () => void }) {
             </div>
           )}
         </div>
-        {!!waiting.length && (
-          <div className="mx-4 mb-3 grid max-h-[45dvh] gap-2 overflow-y-auto sm:mx-6">
-            <button
-              disabled={busy || !!pending}
-              className="rounded-control border border-warning/50 px-3 py-2 text-sm text-ink disabled:opacity-50"
-              onClick={revalidate}
-            >
-              Re-check permissions and run if authorized
-            </button>
-            {waiting.map(approval => (
-              <section key={approval.id} className="rounded-card border border-warning/40 bg-amber-tint p-4 text-sm">
-                <div className="font-medium">Tool approval requested: {approval.name}</div>
-                <p className="mt-1 text-muted">Review this tool call; the composer waits for its decision.</p>
-                <pre className="mt-3 max-h-56 overflow-auto whitespace-pre-wrap rounded-control border border-warning/30 bg-canvas p-3 text-xs text-ink">
-                  {JSON.stringify(approval.input, null, 2)}
-                </pre>
-                {approval.preview && (
-                  <pre className="mt-3 max-h-56 overflow-auto whitespace-pre-wrap rounded-control border border-warning/30 bg-canvas p-3 text-xs text-ink">
-                    {approval.preview}
-                  </pre>
-                )}
-                <div className="mt-3 flex items-center gap-2">
-                  <button
-                    disabled={busy || !!pending}
-                    className={`rounded-control px-4 py-2 font-semibold disabled:opacity-50 ${
-                      choices[approval.id] === false ? 'border border-warning/50 text-muted' : 'bg-warning text-canvas'
-                    }`}
-                    onClick={() => decide(approval.id, true)}
-                  >
-                    {choices[approval.id] === true ? 'Approved' : 'Approve'}
-                  </button>
-                  <button
-                    disabled={busy || !!pending}
-                    className={`rounded-control border px-4 py-2 disabled:opacity-50 ${
-                      choices[approval.id] === false ? 'border-danger/60 text-danger' : 'border-warning/50'
-                    }`}
-                    onClick={() => decide(approval.id, false)}
-                  >
-                    {choices[approval.id] === false ? 'Rejected' : 'Reject'}
-                  </button>
-                  {approval.id in choices && waiting.length > 1 && (
-                    <span className="text-xs text-muted">Sent once every call has an answer</span>
-                  )}
-                </div>
-              </section>
-            ))}
-          </div>
-        )}
+        <ApprovalPanel
+          waiting={waiting}
+          choices={choices.choices}
+          disabled={busy || !!pending}
+          onDecide={decide}
+          onRevalidate={revalidate}
+        />
         {error && (
           <div className="mx-4 mb-2 rounded-card border border-danger/40 bg-red-tint p-3 text-sm text-danger sm:mx-6">
             {error}
@@ -1067,27 +1024,6 @@ export function Chat({ onChange }: { onChange: () => void }) {
           disabled={busy || !!pending || uploading}
           onPick={s => send(s, 'send', 'suggestion')}
         />
-        {!!outgoing.length && (
-          <div className="mx-4 flex flex-wrap gap-2 pt-2">
-            {outgoing.map(file => (
-              <span
-                key={file.id}
-                className="flex items-center gap-1 rounded-full border border-zinc-300 px-2 py-0.5 text-xs dark:border-zinc-700"
-              >
-                {file.image ? <img src={api.viewUrl(file.id)} alt="" className="h-6 w-6 rounded object-cover" /> : '📎'}{' '}
-                {file.filename}
-                <button
-                  type="button"
-                  className="text-zinc-400 hover:text-red-600"
-                  title="Remove"
-                  onClick={() => unattach(file.id)}
-                >
-                  ✕
-                </button>
-              </span>
-            ))}
-          </div>
-        )}
         {illustration && (
           <aside className="mx-4 mt-2 flex items-center gap-3 rounded-card border border-indigo-300 bg-indigo-tint px-3 py-2 text-sm dark:border-indigo-700">
             <span aria-hidden="true">✦</span>
@@ -1141,90 +1077,56 @@ export function Chat({ onChange }: { onChange: () => void }) {
             }}
           />
         </div>
-        <form
+        <ChatComposer
+          textareaRef={composer}
           className="chat-composer mx-4 mb-2 rounded-panel border border-stroke bg-surface px-2 pt-1.5 pb-1 focus-within:border-accent/60"
-          onSubmit={e => {
-            e.preventDefault()
-            void submit()
+          unstyled
+          classNames={{
+            row: 'chat-composer-row flex items-end gap-1',
+            attach:
+              'chat-attach flex h-8 w-8 shrink-0 items-center justify-center rounded-control text-xl leading-none text-mint hover:bg-raised disabled:opacity-50',
+            input:
+              'min-w-0 flex-1 resize-none overflow-y-auto bg-transparent px-1 py-1.5 leading-snug focus:outline-none',
+            stop: 'chat-stop h-8 shrink-0 rounded-control border border-stroke bg-raised px-2 text-xs disabled:opacity-50',
+            send: 'chat-send flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent text-canvas disabled:opacity-40',
+            pending: 'flex flex-wrap gap-2 pb-1',
           }}
-        >
-          <input ref={picker} type="file" multiple hidden onChange={e => attach(e.target.files)} />
-          <div className="chat-composer-row flex items-end gap-1">
-            <button
-              type="button"
-              disabled={closed || !!waiting.length || uploading}
-              title={uploading ? 'Attaching…' : 'Attach images, PDFs or other files'}
-              aria-label="Attach images, PDFs or other files"
-              className="chat-attach flex h-8 w-8 shrink-0 items-center justify-center rounded-control text-xl leading-none text-mint hover:bg-raised disabled:opacity-50"
-              onClick={() => picker.current?.click()}
-            >
-              {uploading ? '…' : '+'}
-            </button>
-            <textarea
-              ref={composer}
-              onPaste={e => {
-                const files = Array.from(e.clipboardData.files)
-                if (files.length) {
-                  e.preventDefault()
-                  attach(files)
-                }
-              }}
-              value={text}
-              disabled={closed || !!waiting.length}
-              onChange={e => setText(e.target.value)}
-              onKeyDown={e => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault()
-                  void submit()
-                }
-              }}
-              rows={1}
-              aria-label="Message"
-              placeholder={
-                closed
-                  ? 'This session is closed'
-                  : waiting.length
-                    ? 'Answer the approval first'
-                    : archived
-                      ? 'Resolved: sending a message reopens it'
-                      : running
-                        ? 'Steer the bot: your message joins this turn'
-                        : 'Message the bot'
-              }
-              className="min-w-0 flex-1 resize-none overflow-y-auto bg-transparent px-1 py-1.5 leading-snug focus:outline-none"
-            />
-            <ComposerVoice sessionId={id} disabled={closed || !!waiting.length} {...voice} />
-            {running && (
-              <>
-                <button
-                  type="button"
-                  disabled={stopping}
-                  title="Stop the bot after the step it's on"
-                  className="chat-stop h-8 shrink-0 rounded-control border border-stroke bg-raised px-2 text-xs disabled:opacity-50"
-                  onClick={stop}
-                >
-                  Stop
-                </button>
-                {(!!text.trim() || !!outgoing.length || voiceActive) && (
-                  <button
-                    type="button"
-                    disabled={busy || uploading || stopping}
-                    title="Stop the bot and answer this message instead"
-                    className="chat-stop h-8 shrink-0 rounded-control bg-accent px-2 text-xs font-semibold text-canvas disabled:opacity-50"
-                    onClick={() => void submit('interrupt')}
-                  >
-                    Stop &amp; send
-                  </button>
-                )}
-              </>
-            )}
-            <button
-              type="submit"
-              disabled={busy || uploading || (!text.trim() && !outgoing.length && !voiceActive)}
-              title={running ? 'Send now; the bot sees it after the step it is on' : 'Send'}
-              aria-label="Send"
-              className="chat-send flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent text-canvas disabled:opacity-40"
-            >
+          draft={text}
+          onDraftChange={setText}
+          attachments={outgoing.map(toAttachment)}
+          onAttachmentsChange={list => setOutgoing(list.map(fromAttachment))}
+          onAttach={attach}
+          onRemoveAttachment={unattach}
+          attachDisabled={closed || !!waiting.length || uploading}
+          disabled={closed || !!waiting.length}
+          // Ergonaut clears the draft itself, and only what was sent (see send()); voice decides when to submit.
+          clearOnSend={false}
+          canSend={!(busy || uploading || (!text.trim() && !outgoing.length && !voiceActive))}
+          onSend={() => submit()}
+          busy={running}
+          sendWhileBusy
+          onStop={stop}
+          stopDisabled={stopping}
+          placeholder={
+            closed
+              ? 'This session is closed'
+              : waiting.length
+                ? 'Answer the approval first'
+                : archived
+                  ? 'Resolved: sending a message reopens it'
+                  : running
+                    ? 'Steer the bot: your message joins this turn'
+                    : 'Message the bot'
+          }
+          buttons={{ send: 'Send', stop: 'Stop', attach: 'Attach images, PDFs or other files' }}
+          titles={{
+            send: running ? 'Send now; the bot sees it after the step it is on' : 'Send',
+            stop: "Stop the bot after the step it's on",
+            attach: uploading ? 'Attaching…' : 'Attach images, PDFs or other files',
+          }}
+          icons={{
+            attach: uploading ? '…' : '+',
+            send: (
               <svg
                 viewBox="0 0 16 16"
                 width="16"
@@ -1238,14 +1140,43 @@ export function Chat({ onChange }: { onChange: () => void }) {
               >
                 <path d="M8 13V3M3.5 7.5 8 3l4.5 4.5" />
               </svg>
-            </button>
-          </div>
-          {models && (
-            <div className="chat-composer-meta flex px-1 leading-tight">
-              <ModelLink label={modelLabel(models, detail.session.model ?? '')} onOpen={openOptions} />
-            </div>
+            ),
+          }}
+          renderPending={(file, remove) => (
+            <span className="flex items-center gap-1 rounded-full border border-zinc-300 px-2 py-0.5 text-xs dark:border-zinc-700">
+              {file.mediaType?.startsWith('image/') ? (
+                <img src={file.url} alt="" className="h-6 w-6 rounded object-cover" />
+              ) : (
+                '📎'
+              )}{' '}
+              {file.name}
+              <button type="button" className="text-zinc-400 hover:text-red-600" title="Remove" onClick={remove}>
+                ✕
+              </button>
+            </span>
           )}
-        </form>
+          afterInput={<ComposerVoice sessionId={id} disabled={closed || !!waiting.length} {...voice} />}
+          actions={
+            running && (!!text.trim() || !!outgoing.length || voiceActive) ? (
+              <button
+                type="button"
+                disabled={busy || uploading || stopping}
+                title="Stop the bot and answer this message instead"
+                className="chat-stop h-8 shrink-0 rounded-control bg-accent px-2 text-xs font-semibold text-canvas disabled:opacity-50"
+                onClick={() => void submit('interrupt')}
+              >
+                Stop &amp; send
+              </button>
+            ) : null
+          }
+          footer={
+            models ? (
+              <div className="chat-composer-meta flex px-1 leading-tight">
+                <ModelLink label={modelLabel(models, detail.session.model ?? '')} onOpen={openOptions} />
+              </div>
+            ) : null
+          }
+        />
       </div>
       {showFiles && (
         <Files

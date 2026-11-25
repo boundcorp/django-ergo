@@ -1,4 +1,4 @@
-import { useId, useRef, useState, type KeyboardEvent } from 'react'
+import { useId, useRef, useState, type ClipboardEvent, type KeyboardEvent } from 'react'
 import { AttachmentView } from './Attachments'
 import { useRoot } from './root'
 import type { Attachment, ComposerProps } from './types'
@@ -40,8 +40,26 @@ export function Composer({
   accept,
   theme = 'light',
   className = '',
+  textareaRef,
+  canSend: canSendProp,
+  clearOnSend = true,
+  sendWhileBusy = false,
+  stopDisabled = false,
+  attachDisabled = false,
+  renderPending,
+  afterInput,
+  actions,
+  footer,
+  buttons,
+  titles,
+  icons,
+  classNames,
+  unstyled = false,
 }: ComposerProps) {
-  const root = useRoot(theme, 'ergo-chat__composer', className)
+  const cx = (...names: (string | undefined | false)[]) => names.filter(Boolean).join(' ')
+  // `unstyled` keeps the scoped root (tokens, theme) but none of the package's layout or visual classes.
+  const own = (name: string | undefined) => (unstyled ? undefined : name)
+  const root = useRoot(theme, cx(unstyled ? 'ergo-chat--bare' : 'ergo-chat__composer', classNames?.root), className)
   const [text, setText] = useControllable(draft, onDraftChange, '')
   const [files, setFiles] = useControllable<Attachment[]>(attachments, onAttachmentsChange, [])
   const [uploading, setUploading] = useState(0)
@@ -54,16 +72,21 @@ export function Composer({
   filesRef.current = files
 
   const trimmed = text.trim()
-  const canSend = !disabled && !sending && !uploading && (trimmed.length > 0 || files.length > 0)
+  const computed = !disabled && !sending && !uploading && (trimmed.length > 0 || files.length > 0)
+  // A host-owned guard (`canSend`) governs the button; Enter and submit then reach `onSend`, where the host explains a refusal.
+  const canSend = canSendProp ?? computed
+  const mayAttempt = canSendProp === undefined ? computed : !disabled && !sending
 
   async function send() {
-    if (!canSend) return
+    if (!mayAttempt) return
     setError(null)
     setSending(true)
     try {
       await onSend(trimmed, files)
-      setText('')
-      setFiles([])
+      if (clearOnSend) {
+        setText('')
+        setFiles([])
+      }
     } catch (e) {
       setError(errorText(e, 'Could not send. Your message is still here.'))
     } finally {
@@ -74,6 +97,10 @@ export function Composer({
   async function attach(list: FileList | null) {
     const chosen = list ? Array.from(list) : []
     if (input.current) input.current.value = ''
+    await attachFiles(chosen)
+  }
+
+  async function attachFiles(chosen: File[]) {
     if (!onAttach || !chosen.length) return
     setError(null)
     setUploading(n => n + 1)
@@ -97,6 +124,15 @@ export function Composer({
     }
   }
 
+  function onPaste(event: ClipboardEvent<HTMLTextAreaElement>) {
+    // Pasted files (a screenshot) go through the host's upload; pasted text is untouched.
+    if (!onAttach || disabled || attachDisabled) return
+    const pasted = Array.from(event.clipboardData?.files ?? [])
+    if (!pasted.length) return
+    event.preventDefault()
+    void attachFiles(pasted)
+  }
+
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     // Enter sends; Shift+Enter is a newline; Enter that confirms an IME candidate is not a send.
     if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
@@ -114,20 +150,24 @@ export function Composer({
       }}
     >
       {files.length > 0 && (
-        <ul className="ergo-chat__pending" aria-label="Attachments">
-          {files.map(file => (
-            <li key={file.id} className="ergo-chat__pending-item">
-              <AttachmentView attachment={file} />
-              <button
-                type="button"
-                className="ergo-chat__btn ergo-chat__btn--small"
-                aria-label={`Remove ${file.name}`}
-                onClick={() => void remove(file)}
-              >
-                ✕
-              </button>
-            </li>
-          ))}
+        <ul className={cx(own('ergo-chat__pending'), classNames?.pending)} aria-label="Attachments">
+          {files.map(file =>
+            renderPending ? (
+              <li key={file.id}>{renderPending(file, () => void remove(file))}</li>
+            ) : (
+              <li key={file.id} className="ergo-chat__pending-item">
+                <AttachmentView attachment={file} />
+                <button
+                  type="button"
+                  className="ergo-chat__btn ergo-chat__btn--small"
+                  aria-label={`Remove ${file.name}`}
+                  onClick={() => void remove(file)}
+                >
+                  ✕
+                </button>
+              </li>
+            ),
+          )}
         </ul>
       )}
       {uploading > 0 && (
@@ -140,7 +180,7 @@ export function Composer({
           {error}
         </div>
       )}
-      <div className="ergo-chat__composer-row">
+      <div className={cx(own('ergo-chat__composer-row'), classNames?.row)}>
         {onAttach && (
           <>
             <input
@@ -148,24 +188,27 @@ export function Composer({
               type="file"
               multiple
               accept={accept}
-              className="ergo-chat__sr"
+              className={unstyled ? undefined : 'ergo-chat__sr'}
+              hidden={unstyled}
               tabIndex={-1}
               aria-hidden
               onChange={event => void attach(event.target.files)}
             />
             <button
               type="button"
-              className="ergo-chat__btn"
-              aria-label="Attach files"
-              disabled={disabled}
+              className={cx(own('ergo-chat__btn'), classNames?.attach)}
+              aria-label={buttons?.attach ?? 'Attach files'}
+              title={titles?.attach}
+              disabled={disabled || attachDisabled}
               onClick={() => input.current?.click()}
             >
-              📎
+              {icons?.attach ?? '📎'}
             </button>
           </>
         )}
         <textarea
-          className="ergo-chat__input"
+          ref={textareaRef}
+          className={cx(own('ergo-chat__input'), classNames?.input)}
           rows={1}
           value={text}
           placeholder={placeholder}
@@ -174,17 +217,39 @@ export function Composer({
           disabled={disabled}
           onChange={event => setText(event.target.value)}
           onKeyDown={onKeyDown}
+          onPaste={onPaste}
         />
-        {busy && onStop ? (
-          <button type="button" className="ergo-chat__btn ergo-chat__btn--primary" onClick={onStop}>
-            Stop
+        {afterInput}
+        {busy && onStop && (
+          <button
+            type="button"
+            className={cx(
+              own('ergo-chat__btn'),
+              own(sendWhileBusy ? undefined : 'ergo-chat__btn--primary'),
+              classNames?.stop,
+            )}
+            aria-label={buttons?.stop}
+            title={titles?.stop}
+            disabled={stopDisabled}
+            onClick={onStop}
+          >
+            {icons?.stop ?? 'Stop'}
           </button>
-        ) : (
-          <button type="submit" className="ergo-chat__btn ergo-chat__btn--primary" disabled={!canSend}>
-            Send
+        )}
+        {actions}
+        {(!busy || !onStop || sendWhileBusy) && (
+          <button
+            type="submit"
+            className={cx(own('ergo-chat__btn ergo-chat__btn--primary'), classNames?.send)}
+            aria-label={buttons?.send}
+            title={titles?.send}
+            disabled={!canSend}
+          >
+            {icons?.send ?? 'Send'}
           </button>
         )}
       </div>
+      {footer}
     </form>
   )
 }

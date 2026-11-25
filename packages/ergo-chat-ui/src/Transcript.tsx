@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, type ReactNode } from 'react'
+import { Fragment, useEffect, useLayoutEffect, useRef, type ReactNode } from 'react'
 import { AttachmentList } from './Attachments'
 import { Markdown } from './Markdown'
 import { useRoot } from './root'
@@ -40,34 +40,47 @@ function partKey(part: Part, index: number): string {
 
 function MessageView({
   message,
+  index,
   renderPart,
+  renderMessage,
   allowImages,
 }: {
   message: Message
+  index: number
   renderPart?: TranscriptProps['renderPart']
+  renderMessage?: TranscriptProps['renderMessage']
   allowImages: boolean
 }) {
   const parts = Array.isArray(message.parts) ? message.parts : []
   const label = message.role === 'user' ? 'You' : message.role === 'system' ? 'System' : 'Assistant'
-  return (
+  const nodes: { key: string; node: ReactNode }[] = []
+  parts.forEach((part, i) => {
+    const fallback = defaultPart(part, allowImages)
+    const custom = renderPart?.(part, { message, index: i, defaultRender: fallback })
+    const node = custom === undefined ? fallback : custom
+    if (node !== null) nodes.push({ key: partKey(part, i), node })
+  })
+  const article = (
     <article className={`ergo-chat__msg ergo-chat__msg--${message.role}`} data-message-id={message.id}>
       <header className="ergo-chat__msg-head">
         <span className="ergo-chat__sr">{label}</span>
       </header>
       <div className="ergo-chat__bubble" title={message.createdAt}>
-        {parts.map((part, index) => {
-          const fallback = defaultPart(part, allowImages)
-          const custom = renderPart?.(part, { message, index, defaultRender: fallback })
-          const node = custom === undefined ? fallback : custom
-          return node === null ? null : (
-            <div className="ergo-chat__part" key={partKey(part, index)}>
-              {node}
-            </div>
-          )
-        })}
+        {nodes.map(({ key, node }) => (
+          <div className="ergo-chat__part" key={key}>
+            {node}
+          </div>
+        ))}
       </div>
     </article>
   )
+  if (!renderMessage) return article
+  const custom = renderMessage(message, {
+    index,
+    parts: nodes.map(({ key, node }) => <Fragment key={key}>{node}</Fragment>),
+    defaultRender: article,
+  })
+  return custom === undefined ? article : custom
 }
 
 // useLayoutEffect warns during SSR in React 18; this is the usual guard.
@@ -77,6 +90,9 @@ const useIsoLayoutEffect = typeof window === 'undefined' ? useEffect : useLayout
 export function Transcript({
   messages,
   renderPart,
+  renderMessage,
+  header,
+  scroll = 'pin',
   empty,
   footer,
   allowMarkdownImages = false,
@@ -85,14 +101,34 @@ export function Transcript({
 }: TranscriptProps) {
   const scroller = useRef<HTMLDivElement>(null)
   const pinned = useRef(true)
+  const host = scroll === 'host'
+  const root = useRoot(theme, host ? 'ergo-chat--bare ergo-chat__list' : 'ergo-chat__transcript', className)
   useIsoLayoutEffect(() => {
     const el = scroller.current
-    if (el && pinned.current) el.scrollTop = el.scrollHeight
+    if (el && pinned.current && !host) el.scrollTop = el.scrollHeight
   })
+  const body = (
+    <>
+      {header}
+      {messages.length === 0 && empty ? <div className="ergo-chat__empty">{empty}</div> : null}
+      {messages.map((message, index) => (
+        <MessageView
+          key={message.id}
+          message={message}
+          index={index}
+          renderPart={renderPart}
+          renderMessage={renderMessage}
+          allowImages={allowMarkdownImages}
+        />
+      ))}
+      {footer}
+    </>
+  )
+  if (host) return <div {...root}>{body}</div>
   return (
     <div
       ref={scroller}
-      {...useRoot(theme, 'ergo-chat__transcript', className)}
+      {...root}
       role="log"
       aria-live="polite"
       aria-label="Conversation"
@@ -102,11 +138,7 @@ export function Transcript({
         pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48
       }}
     >
-      {messages.length === 0 && empty ? <div className="ergo-chat__empty">{empty}</div> : null}
-      {messages.map(message => (
-        <MessageView key={message.id} message={message} renderPart={renderPart} allowImages={allowMarkdownImages} />
-      ))}
-      {footer}
+      {body}
     </div>
   )
 }

@@ -639,3 +639,10 @@ video.ergo-chat__media {
 .ergo-chat__hljs .hljs-tag {
   color: var(--ergo-chat-hl-attr);
 }
+
+/* Host-owned layout (Transcript scroll="host", Composer unstyled): keep the host's type, color and line height. */
+.ergo-chat--bare {
+  color: inherit;
+  font-size: inherit;
+  line-height: inherit;
+}

@@ -7,6 +7,9 @@ import type { ChatViewProps } from './types'
 export function ChatView({
   messages,
   renderPart,
+  renderMessage,
+  header,
+  scroll,
   empty,
   footer,
   allowMarkdownImages,
@@ -31,6 +34,9 @@ export function ChatView({
         <Transcript
           messages={messages}
           renderPart={renderPart}
+          renderMessage={renderMessage}
+          header={header}
+          scroll={scroll}
           empty={empty}
           footer={footer}
           allowMarkdownImages={allowMarkdownImages}
