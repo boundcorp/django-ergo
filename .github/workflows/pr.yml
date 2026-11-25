@@ -57,3 +57,35 @@ jobs:
       - if: steps.changed.outputs.frontend == 'true'
         working-directory: ergonaut/frontend
         run: npm ci && npx tsc -b
+
+  # The reusable chat UI package: typecheck, tests on React 19 and 18, build, and a fixture run that installs the
+  # packed tarball into a Vite app and a Next 13.1 Pages Router app. Skipped unless the PR touches the package.
+  chat-ui:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: packages/ergo-chat-ui
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Did the package change?
+        id: changed
+        working-directory: .
+        run: |
+          if git diff --quiet "origin/${{ github.base_ref }}...HEAD" -- packages/ergo-chat-ui; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/setup-node@v4
+        if: steps.changed.outputs.changed == 'true'
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: packages/ergo-chat-ui/package-lock.json
+      - if: steps.changed.outputs.changed == 'true'
+        run: npm ci && npm run test:all && npm run build && npm run size
+      - if: steps.changed.outputs.changed == 'true'
+        run: npm run fixtures

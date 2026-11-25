@@ -1,0 +1,7 @@
+{
+  "name": "ergo-chat-ui-next13-fixture",
+  "private": true,
+  "scripts": { "build": "next build" },
+  "dependencies": { "next": "13.1.1", "react": "18.2.0", "react-dom": "18.2.0" },
+  "devDependencies": { "@types/react": "18.0.26", "@types/node": "18.11.18", "typescript": "4.9.4" }
+}

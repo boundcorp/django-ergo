@@ -1,0 +1,638 @@
+/*
+ * @ergo/chat-ui styles. Every selector starts with `.ergo-chat`; there is no reset, no :root, html or body rule,
+ * and no font-family (text inherits the host's font). Theme with the --ergo-chat-* variables on `.ergo-chat`
+ * (or any ancestor-scoped override such as `.my-host .ergo-chat { --ergo-chat-accent: ... }`).
+ */
+.ergo-chat {
+  --ergo-chat-fg: #1f2328;
+  --ergo-chat-muted: #656d76;
+  --ergo-chat-bg: transparent;
+  --ergo-chat-surface: #ffffff;
+  --ergo-chat-raised: #f3f4f6;
+  --ergo-chat-border: #d0d7de;
+  --ergo-chat-accent: #2563eb;
+  --ergo-chat-accent-fg: #ffffff;
+  --ergo-chat-user-bg: #e8f0fe;
+  --ergo-chat-danger: #b42318;
+  --ergo-chat-danger-bg: #fef3f2;
+  --ergo-chat-success: #067647;
+  --ergo-chat-radius: 10px;
+  --ergo-chat-gap: 12px;
+  --ergo-chat-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --ergo-chat-hl-keyword: #cf222e;
+  --ergo-chat-hl-string: #0a3069;
+  --ergo-chat-hl-number: #0550ae;
+  --ergo-chat-hl-comment: #6e7781;
+  --ergo-chat-hl-title: #8250df;
+  --ergo-chat-hl-attr: #953800;
+
+  color: var(--ergo-chat-fg);
+  background: var(--ergo-chat-bg);
+  font-size: 0.9375em;
+  line-height: 1.5;
+  font-family: inherit;
+}
+.ergo-chat[data-theme='dark'] {
+  --ergo-chat-fg: #e6edf3;
+  --ergo-chat-muted: #8b949e;
+  --ergo-chat-surface: #161b22;
+  --ergo-chat-raised: #21262d;
+  --ergo-chat-border: #30363d;
+  --ergo-chat-accent: #4c8dff;
+  --ergo-chat-accent-fg: #0b1220;
+  --ergo-chat-user-bg: #1b2a44;
+  --ergo-chat-danger: #ff7b72;
+  --ergo-chat-danger-bg: #3b1519;
+  --ergo-chat-success: #3fb950;
+  --ergo-chat-hl-keyword: #ff7b72;
+  --ergo-chat-hl-string: #a5d6ff;
+  --ergo-chat-hl-number: #79c0ff;
+  --ergo-chat-hl-comment: #8b949e;
+  --ergo-chat-hl-title: #d2a8ff;
+  --ergo-chat-hl-attr: #ffa657;
+}
+@media (prefers-color-scheme: dark) {
+  .ergo-chat[data-theme='auto'] {
+    --ergo-chat-fg: #e6edf3;
+    --ergo-chat-muted: #8b949e;
+    --ergo-chat-surface: #161b22;
+    --ergo-chat-raised: #21262d;
+    --ergo-chat-border: #30363d;
+    --ergo-chat-accent: #4c8dff;
+    --ergo-chat-accent-fg: #0b1220;
+    --ergo-chat-user-bg: #1b2a44;
+    --ergo-chat-danger: #ff7b72;
+    --ergo-chat-danger-bg: #3b1519;
+    --ergo-chat-success: #3fb950;
+    --ergo-chat-hl-keyword: #ff7b72;
+    --ergo-chat-hl-string: #a5d6ff;
+    --ergo-chat-hl-number: #79c0ff;
+    --ergo-chat-hl-comment: #8b949e;
+    --ergo-chat-hl-title: #d2a8ff;
+    --ergo-chat-hl-attr: #ffa657;
+  }
+}
+
+/* Scoped, not global: only inside the package's own tree. */
+.ergo-chat,
+.ergo-chat *,
+.ergo-chat *::before,
+.ergo-chat *::after {
+  box-sizing: border-box;
+}
+.ergo-chat__sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+.ergo-chat__muted {
+  color: var(--ergo-chat-muted);
+}
+.ergo-chat__danger {
+  color: var(--ergo-chat-danger);
+}
+.ergo-chat__mono {
+  font-family: var(--ergo-chat-mono);
+  font-size: 0.85em;
+}
+.ergo-chat__wrap {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Layout */
+.ergo-chat__view {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+.ergo-chat__transcript {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ergo-chat-gap);
+  overflow-y: auto;
+  padding: var(--ergo-chat-gap);
+  min-height: 0;
+  overscroll-behavior: contain;
+}
+.ergo-chat__view-transcript {
+  flex: 1 1 auto;
+}
+.ergo-chat__empty {
+  margin: auto;
+  color: var(--ergo-chat-muted);
+  text-align: center;
+}
+
+/* Messages */
+.ergo-chat__msg {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  max-width: 100%;
+}
+.ergo-chat__msg-head {
+  margin: 0;
+}
+.ergo-chat__bubble {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  max-width: min(100%, 48rem);
+}
+.ergo-chat__msg--user {
+  align-items: flex-end;
+}
+.ergo-chat__msg--user .ergo-chat__bubble {
+  background: var(--ergo-chat-user-bg);
+  border-radius: var(--ergo-chat-radius);
+  padding: 8px 12px;
+}
+.ergo-chat__msg--system .ergo-chat__bubble {
+  color: var(--ergo-chat-muted);
+  font-size: 0.9em;
+}
+.ergo-chat__part {
+  min-width: 0;
+}
+.ergo-chat__unknown {
+  border: 1px dashed var(--ergo-chat-border);
+  border-radius: var(--ergo-chat-radius);
+  color: var(--ergo-chat-muted);
+  padding: 6px 10px;
+  font-size: 0.9em;
+}
+
+/* Buttons and inputs */
+.ergo-chat__btn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 2.5rem;
+  min-width: 2.5rem;
+  margin: 0;
+  padding: 0 12px;
+  border: 1px solid var(--ergo-chat-border);
+  border-radius: var(--ergo-chat-radius);
+  background: var(--ergo-chat-surface);
+  color: var(--ergo-chat-fg);
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+}
+.ergo-chat__btn:hover:not(:disabled) {
+  border-color: var(--ergo-chat-accent);
+}
+.ergo-chat__btn:focus-visible,
+.ergo-chat__input:focus-visible,
+.ergo-chat__tool-head:focus-visible,
+.ergo-chat__link-btn:focus-visible,
+.ergo-chat__transcript:focus-visible,
+.ergo-chat__code pre:focus-visible,
+.ergo-chat__pre:focus-visible,
+.ergo-chat__result summary:focus-visible {
+  outline: 2px solid var(--ergo-chat-accent);
+  outline-offset: 2px;
+}
+.ergo-chat__btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.ergo-chat__btn--primary {
+  background: var(--ergo-chat-accent);
+  border-color: var(--ergo-chat-accent);
+  color: var(--ergo-chat-accent-fg);
+}
+.ergo-chat__btn--small {
+  min-height: 1.5rem;
+  min-width: 0;
+  padding: 0 6px;
+  font-size: 0.8em;
+}
+@media (pointer: coarse) {
+  .ergo-chat__btn--small {
+    min-height: 2.25rem;
+  }
+}
+.ergo-chat__link-btn {
+  appearance: none;
+  margin: 0;
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  color: var(--ergo-chat-accent);
+  font: inherit;
+  font-size: 0.85em;
+  cursor: pointer;
+}
+.ergo-chat__alert {
+  margin: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--ergo-chat-danger);
+  border-radius: var(--ergo-chat-radius);
+  background: var(--ergo-chat-danger-bg);
+  color: var(--ergo-chat-danger);
+}
+
+/* Composer */
+.ergo-chat__composer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: var(--ergo-chat-gap);
+  margin: 0;
+  border-top: 1px solid var(--ergo-chat-border);
+}
+.ergo-chat__composer-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+.ergo-chat__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 2.5rem;
+  max-height: 12rem;
+  margin: 0;
+  padding: 8px 12px;
+  resize: none;
+  field-sizing: content;
+  border: 1px solid var(--ergo-chat-border);
+  border-radius: var(--ergo-chat-radius);
+  background: var(--ergo-chat-surface);
+  color: inherit;
+  font: inherit;
+  line-height: 1.4;
+}
+.ergo-chat__pending {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.ergo-chat__pending-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Attachments */
+.ergo-chat__attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.ergo-chat__media {
+  display: block;
+  max-width: min(100%, 20rem);
+  border-radius: var(--ergo-chat-radius);
+  overflow: hidden;
+}
+.ergo-chat__media img,
+video.ergo-chat__media {
+  display: block;
+  max-width: 100%;
+  max-height: 16rem;
+  height: auto;
+  object-fit: contain;
+}
+.ergo-chat__audio {
+  max-width: 100%;
+}
+.ergo-chat__file {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 4px 10px;
+  border: 1px solid var(--ergo-chat-border);
+  border-radius: var(--ergo-chat-radius);
+  background: var(--ergo-chat-surface);
+  color: inherit;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
+/* Tool cards */
+.ergo-chat__tool {
+  min-width: 0;
+  border: 1px solid var(--ergo-chat-border);
+  border-radius: var(--ergo-chat-radius);
+  background: var(--ergo-chat-surface);
+  font-size: 0.9em;
+}
+.ergo-chat__tool--error {
+  border-color: var(--ergo-chat-danger);
+  background: var(--ergo-chat-danger-bg);
+}
+.ergo-chat__tool-head {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 2.25rem;
+  margin: 0;
+  padding: 4px 10px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.ergo-chat__tool-icon {
+  width: 1em;
+  text-align: center;
+}
+.ergo-chat__tool-icon--running {
+  color: var(--ergo-chat-accent);
+  animation: ergo-chat-pulse 1.2s ease-in-out infinite;
+}
+.ergo-chat__tool-icon--done {
+  color: var(--ergo-chat-success);
+}
+.ergo-chat__tool-icon--error {
+  color: var(--ergo-chat-danger);
+}
+@keyframes ergo-chat-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ergo-chat__tool-icon--running {
+    animation: none;
+  }
+}
+.ergo-chat__tool-name {
+  flex: 0 1 auto;
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.ergo-chat__tool-preview {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ergo-chat-muted);
+}
+.ergo-chat__tool-state {
+  flex: none;
+  color: var(--ergo-chat-muted);
+  font-size: 0.85em;
+}
+.ergo-chat__tool-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 12px 10px;
+  border-top: 1px solid var(--ergo-chat-border);
+}
+.ergo-chat__tool-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ergo-chat__tool-row--top {
+  align-items: flex-start;
+}
+.ergo-chat__tool-row .ergo-chat__btn {
+  margin-left: auto;
+}
+.ergo-chat__tool-label {
+  color: var(--ergo-chat-muted);
+  font-size: 0.85em;
+  font-weight: 600;
+}
+.ergo-chat__tool-id {
+  color: var(--ergo-chat-muted);
+  font-size: 0.75em;
+  overflow-wrap: anywhere;
+}
+.ergo-chat__args {
+  display: grid;
+  grid-template-columns: minmax(0, max-content) minmax(0, 1fr);
+  gap: 4px 12px;
+  margin: 4px 0 0;
+}
+.ergo-chat__arg {
+  display: contents;
+}
+.ergo-chat__arg dt {
+  max-width: 40vw;
+  color: var(--ergo-chat-muted);
+  overflow-wrap: anywhere;
+}
+.ergo-chat__arg dd {
+  margin: 0;
+  min-width: 0;
+}
+.ergo-chat__clamp {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+}
+.ergo-chat__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.ergo-chat__chip {
+  padding: 0 6px;
+  border: 1px solid var(--ergo-chat-border);
+  border-radius: 6px;
+  background: var(--ergo-chat-raised);
+  overflow-wrap: anywhere;
+}
+.ergo-chat__pre {
+  max-height: 20rem;
+  margin: 4px 0 0;
+  padding: 6px 8px;
+  overflow: auto;
+  border-radius: 6px;
+  background: var(--ergo-chat-raised);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.ergo-chat__result {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.ergo-chat__result summary {
+  cursor: pointer;
+}
+.ergo-chat__result-label {
+  font-weight: 600;
+}
+.ergo-chat__result-preview {
+  margin-left: 8px;
+}
+.ergo-chat__result[open] .ergo-chat__result-preview {
+  display: none;
+}
+
+/* Markdown */
+.ergo-chat__md {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.ergo-chat__md > :first-child {
+  margin-top: 0;
+}
+.ergo-chat__md > :last-child {
+  margin-bottom: 0;
+}
+.ergo-chat__md p,
+.ergo-chat__md ul,
+.ergo-chat__md ol,
+.ergo-chat__md blockquote,
+.ergo-chat__md table {
+  margin: 0.6em 0;
+}
+.ergo-chat__md ul,
+.ergo-chat__md ol {
+  padding-left: 1.4em;
+}
+.ergo-chat__md h1,
+.ergo-chat__md h2,
+.ergo-chat__md h3,
+.ergo-chat__md h4,
+.ergo-chat__md h5,
+.ergo-chat__md h6 {
+  margin: 0.9em 0 0.4em;
+  font-size: 1em;
+  font-weight: 700;
+  line-height: 1.3;
+}
+.ergo-chat__md h1 {
+  font-size: 1.25em;
+}
+.ergo-chat__md h2 {
+  font-size: 1.12em;
+}
+.ergo-chat__md a {
+  color: var(--ergo-chat-accent);
+}
+.ergo-chat__md blockquote {
+  padding-left: 12px;
+  border-left: 3px solid var(--ergo-chat-border);
+  color: var(--ergo-chat-muted);
+}
+.ergo-chat__md hr {
+  border: 0;
+  border-top: 1px solid var(--ergo-chat-border);
+}
+.ergo-chat__md table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+}
+.ergo-chat__md th,
+.ergo-chat__md td {
+  padding: 4px 10px;
+  border: 1px solid var(--ergo-chat-border);
+  text-align: left;
+}
+.ergo-chat__md :not(pre) > code {
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+  background: var(--ergo-chat-raised);
+  font-family: var(--ergo-chat-mono);
+  font-size: 0.88em;
+}
+.ergo-chat__md-img {
+  max-width: 100%;
+  height: auto;
+}
+.ergo-chat__md-unsafe {
+  color: var(--ergo-chat-muted);
+}
+.ergo-chat__code {
+  position: relative;
+  margin: 0.6em 0;
+  border: 1px solid var(--ergo-chat-border);
+  border-radius: 8px;
+  background: var(--ergo-chat-raised);
+}
+.ergo-chat__code pre {
+  margin: 0;
+  padding: 10px 12px;
+  overflow-x: auto;
+  white-space: pre;
+}
+.ergo-chat__code code {
+  font-family: var(--ergo-chat-mono);
+  font-size: 0.85em;
+}
+.ergo-chat__code-lang {
+  position: absolute;
+  top: 4px;
+  left: 10px;
+  color: var(--ergo-chat-muted);
+  font-size: 0.7em;
+  pointer-events: none;
+}
+.ergo-chat__code .ergo-chat__copy {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+}
+.ergo-chat__code-lang + .ergo-chat__copy + pre {
+  padding-top: 24px;
+}
+.ergo-chat__hljs .hljs-keyword,
+.ergo-chat__hljs .hljs-selector-tag,
+.ergo-chat__hljs .hljs-built_in {
+  color: var(--ergo-chat-hl-keyword);
+}
+.ergo-chat__hljs .hljs-string,
+.ergo-chat__hljs .hljs-regexp,
+.ergo-chat__hljs .hljs-template-tag {
+  color: var(--ergo-chat-hl-string);
+}
+.ergo-chat__hljs .hljs-number,
+.ergo-chat__hljs .hljs-literal,
+.ergo-chat__hljs .hljs-symbol {
+  color: var(--ergo-chat-hl-number);
+}
+.ergo-chat__hljs .hljs-comment,
+.ergo-chat__hljs .hljs-quote {
+  color: var(--ergo-chat-hl-comment);
+  font-style: italic;
+}
+.ergo-chat__hljs .hljs-title,
+.ergo-chat__hljs .hljs-section {
+  color: var(--ergo-chat-hl-title);
+}
+.ergo-chat__hljs .hljs-attr,
+.ergo-chat__hljs .hljs-attribute,
+.ergo-chat__hljs .hljs-variable,
+.ergo-chat__hljs .hljs-params,
+.ergo-chat__hljs .hljs-meta,
+.ergo-chat__hljs .hljs-type,
+.ergo-chat__hljs .hljs-name,
+.ergo-chat__hljs .hljs-tag {
+  color: var(--ergo-chat-hl-attr);
+}

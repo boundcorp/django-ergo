@@ -61,6 +61,7 @@ and prettier (for `ergonaut/frontend`); every hook should pass.
 - `conversation/usage_windows.py`: provider rate-limit windows (engines record, `bots.routing` reads)
 - `bots/messaging.py`: `running_turn()` is the one "is a turn running" rule; `busy()` uses it
 - `plugins/_common.py`: `trim`, `clip`, `is_secret`, `record_agent_usage`; `daemon.start_daemon` for broker-less background work
+- `packages/ergo-chat-ui/`: `@ergo/chat-ui`, the presentational React chat package (own npm project, see its README); not yet used by Ergonaut
 - `ergonaut/frontend/src/persistedFlag.ts`: open/closed panels remembered per browser
 - `conversation/compaction.py`, `conversation/context.py`, `conversation/window.py` (window chats), `conversation/history*.py`
 - `settings.py`: `DJANGO_ERGO` defaults
