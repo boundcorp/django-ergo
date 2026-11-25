@@ -261,3 +261,5 @@ Still to do:
 - [x] Live bot reloads on file changes; auto-pull of the bot repo.
 - [x] CTO bot (orca on devbox, bash, threads) proposed by boundcorp and merged (ergo-bots #1).
 - [x] Costs page, bot pages, Memory page, Files panel; tool names prefixed `ergo_*`.
+
+- Added model-free `ergo_thread_send(reply_mode="record")` reports and quiet task-thread returns; browser session holders no longer inflate active worker counts.

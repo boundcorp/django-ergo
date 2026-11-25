@@ -240,7 +240,7 @@ def thread_status(session: ConversationSession) -> dict:
     """What a chat is doing, for orchestrators and UIs (the "Bots and threads"
     block uses it; so can an API).
 
-    ``state`` is ``working``, ``waiting_for_approval`` or ``idle``;
+    ``state`` is ``working``, ``waiting_for_approval``, ``waiting_on_worker`` or ``idle``;
     ``last_activity`` is when its latest turn moved (sessions aren't touched per
     turn); ``started_by``/``started_by_id`` name another bot's chat that started
     it; ``working_for``/``waiting_on`` count open requests in and out;
@@ -290,9 +290,13 @@ def thread_status(session: ConversationSession) -> dict:
         "blocked_on": blocked_on(session),
         "workers_running": Worker.objects.filter(
             session=session, status__in=[WorkerStatus.QUEUED, WorkerStatus.RUNNING]
-        ).count(),
+        )
+        .exclude(function="browser:session")
+        .count(),
         "last_asks": last_asks,
     }
+    if state == "idle" and status["workers_running"]:
+        status["state"] = "waiting_on_worker"
     quiet = timezone.now() - status["last_activity"] > READY_AFTER
     status["ready_to_resolve"] = (
         not roles.is_top(session)
@@ -640,11 +644,14 @@ def ergo_thread_list(
         },
         "reply_mode": {
             "type": "string",
-            "enum": ["auto", "response", "notification"],
+            "enum": ["auto", "response", "notification", "record"],
             "description": (
                 "auto preserves route defaults and ask; response requests a reply; "
                 "notification invokes the recipient without an automatic reply. "
-                "notification cannot be combined with ask=true."
+                "record stores status/results in history without a model turn or reply. "
+                "Use record for updates needing no action; notification/response only "
+                "when the recipient must act or answer. record/notification cannot "
+                "be combined with ask=true; record cannot interrupt."
             ),
         },
         "attachments": {
@@ -682,7 +689,9 @@ def ergo_thread_send(  # noqa: PLR0913
 ) -> dict:
     """Send a message to a bot's main chat, a named chat, a thread, or a new thread.
 
-    Returns at once. The recipient runs a turn even for a notification. In auto
+    Returns at once. Use record for status/results needing no action: history
+    only, no model turn or reply. Use notification/response when the recipient
+    must act or answer. A notification still runs a recipient turn. In auto
     mode upward and starter reports do not return a reply unless ask is true;
     other routes do. A busy thread queues each message in order.
     """
@@ -899,11 +908,14 @@ def _send(  # noqa: PLR0913
 ) -> dict:
     # Before anything the send does first, such as stopping the recipient's turn.
     forbid("send a thread message")
-    if reply_mode not in ("auto", "response", "notification"):
-        msg = "reply_mode must be auto, response, or notification"
+    if reply_mode not in ("auto", "response", "notification", "record"):
+        msg = "reply_mode must be auto, response, notification, or record"
         raise ValueError(msg)
-    if reply_mode == "notification" and ask:
-        msg = "reply_mode=notification cannot be combined with ask=true"
+    if reply_mode in ("notification", "record") and ask:
+        msg = f"reply_mode={reply_mode} cannot be combined with ask=true"
+        raise ValueError(msg)
+    if reply_mode == "record" and interrupt:
+        msg = "reply_mode=record cannot be combined with interrupt=true"
         raise ValueError(msg)
     messaging.require_export(ctx.session, target.name, ctx.bot.registry)
     check_spacing(message, "message")
@@ -926,10 +938,12 @@ def _send(  # noqa: PLR0913
     upward = _is_main(recipient) and (
         (target is ctx.bot and not _is_main(ctx.session)) or _upward_only(ctx, target)
     )
-    report = reply_mode == "notification" or (
+    report = reply_mode in ("notification", "record") or (
         reply_mode == "auto" and (upward or starter) and not ask
     )
     metadata = {"attachments": shared} if shared else {}
+    metadata["reply_mode"] = reply_mode
+    metadata["ask"] = ask
     if report:
         metadata["report"] = True
     if reply_mode == "notification":
@@ -952,6 +966,8 @@ def _send(  # noqa: PLR0913
         if report
         else "The reply will arrive as a new message in this chat."
     )
+    if reply_mode == "record":
+        note = "Recorded in recipient history; no model turn or reply. The chat is unread for its user."
     if interrupt:
         note += " " + _interrupt_outcome(interrupting, interrupted, not_interrupted)
     if delivery["status"] == "queued":
@@ -966,7 +982,11 @@ def _send(  # noqa: PLR0913
         **_session_metadata(recipient),
         **delivery,
         **({"interrupted": interrupted} if interrupt else {}),
-        "reply_mode": "notification" if report else "response",
+        "reply_mode": "record"
+        if reply_mode == "record"
+        else "notification"
+        if report
+        else "response",
         "note": note,
         **({"shared_files": [f["filename"] for f in shared]} if shared else {}),
     }

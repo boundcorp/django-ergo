@@ -69,7 +69,11 @@ def clip(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
-STATE_WORDS = {"waiting_for_approval": "waiting for approval", "working": "working"}
+STATE_WORDS = {
+    "waiting_for_approval": "waiting for approval",
+    "working": "working",
+    "waiting_on_worker": "waiting on worker",
+}
 
 
 def facts(

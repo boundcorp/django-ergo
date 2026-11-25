@@ -2539,3 +2539,28 @@ def test_permanence_toggle_and_close_permissions(client, cook, bot_folder, use_b
     assert post(client, f"{main_url}/close").status_code == 409
     assert not post(client, f"{main_url}/permanent", {"is_permanent": False}).json()["is_permanent"]
     assert post(client, f"{main_url}/close").json()["status"] == "completed"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_record_report_marks_chat_unread_without_turn(client, cook, use_bots):
+    from django_ergo.bots import messaging
+    from django_ergo.conversation.models import ConversationSession
+
+    use_bots()
+    sender = ConversationSession.objects.create(user=cook, bot_name="kitchen", metadata={"bot_role": "main"})
+    recipient = ConversationSession.objects.create(
+        user=cook, bot_name="kitchen", metadata={"bot_role": "thread", "title": "Recorded"}
+    )
+
+    def listed():
+        return next(row for row in client.get("/api/sessions").json() if row["id"] == str(recipient.id))
+
+    for body in ("First result", "Result after reading"):
+        assert not listed()["unread"]
+        report = messaging.send(sender, recipient, body, metadata={"reply_mode": "record"})
+        assert report.status == "answered"
+        assert listed()["unread"]
+        assert not recipient.structured_calls.exists()
+        client.get(f"/api/sessions/{recipient.id}")
+        assert not listed()["unread"]
+    assert recipient.messages.count() == 2

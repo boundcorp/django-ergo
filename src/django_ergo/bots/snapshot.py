@@ -232,7 +232,9 @@ def _signals(ids: list) -> dict:
         "sender_session_id",
     )
     workers = _per_session(
-        Worker.objects.filter(session_id__in=ids, status__in=ACTIVE_WORKERS),
+        Worker.objects.filter(session_id__in=ids, status__in=ACTIVE_WORKERS).exclude(
+            function="browser:session"
+        ),
         "session_id",
     )
     return {
@@ -275,6 +277,8 @@ def _thread_row(session, current, signals: dict, blocked: dict) -> dict:
         state = "waiting_for_approval"
     elif sid in signals["running"]:
         state = "working"
+    elif signals["workers"].get(sid, 0):
+        state = "waiting_on_worker"
     else:
         state = "idle"
     row = {
