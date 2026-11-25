@@ -638,7 +638,12 @@ The Orca plugin's agent manager starts a supervised Orca worker (with
 approval) in the worktree the brief names, and its watcher polls the dispatch
 every `worker_poll_seconds` (default 120), passes the agent's questions to the
 chat (`ergo_agent_reply` answers them with `orchestration reply`), and returns
-its `worker_done` report. `orca_start_worker(spec, worktree, agent)` is the
+its `worker_done` report. The result includes `work_disposition`, separate from
+Orca transport status: `completed`, `partial`, `blocked`, or `failed` only when
+the dispatch-scoped report explicitly supplies that value in its JSON payload;
+otherwise it is null. Orca’s existing `--payload` option can carry this field;
+its `--outcome` still describes transport completion or failure.
+`orca_start_worker(spec, worktree, agent)` is the
 same as `ergo_agent_start` with Orca's parameter names; workers started before
 agents existed (`orca:watch`) keep working. Each check also
 reads the agent's latest output (`orchestration worker-read`: its transcript,
