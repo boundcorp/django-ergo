@@ -1126,24 +1126,37 @@ Messages between sessions are asynchronous, like thread-to-thread
 delegation in Codex (`django_ergo.bots.messaging`). `ergo_thread_send`
 stores a `ThreadMessage` and returns. The recipient runs a turn of its own,
 with a header identifying the sender and whether a reply is expected.
-The `reply_mode` argument controls what happens when that turn finishes:
+The `reply_mode` argument controls delivery and automatic replies:
 
 - `auto` (the default) follows the route's existing semantics: ordinary
   requests send a reply back to the sender as a new message (`[Reply from
   ...]`), starting a turn there; report routes are one-way, as described below.
 - `response` sends the recipient's reply back, even on a report route. It
   takes precedence over `ask: false`.
+- `record` stores the message immediately in recipient history and marks the
+  chat unread, without invoking a model or returning a reply. Use it for status
+  and results needing no action. It works while the recipient is busy; it cannot
+  be combined with `ask: true` or `interrupt: true`.
 - `notification` is one-way: it still invokes a recipient turn, but its
   reply is not sent back to the sender.
 
 For compatibility, `ask: true` with `auto` requests a response even on a
-report route. `notification` with `ask: true` is rejected; choose `response`
+report route. `notification` or `record` with `ask: true` is rejected; choose `response`
 when an answer is needed. Replies are never answered back, chains of delegation
 stop after six hops, and a recipient that is mid-turn finishes first. A turn
 that stops for approval resumes once the user decides; only response-mode turns
 route their reply back. A message from a person
 routes nothing back, so a bot's main chat can take delegated work without its
 replies reaching Telegram.
+
+Use `return_mode: "record"` on an ordinary `auto` request only when its eventual
+answer is informational and needs no action. Its automatic answer and worker
+follow-up are recorded; questions still wake the sender. The default preserves
+waking replies. `THREAD_REPORTS_RECORD` may disable this opt-in. A record to a
+resolved thread stays in its history and does not reopen it; inspect resolved
+threads to see those records. Full history includes records once; compacted or
+per-turn history receives otherwise hidden records in context. Records arriving
+during tool work are deferred past outstanding tool results.
 
 Explicit notifications also suppress automatic delivery-failure messages.
 For compatibility, default one-way reports can still return a delivery failure.
@@ -1152,6 +1165,11 @@ queues a Celery task) or a background thread. Set `orchestration: false` for
 a bot that never delegates; it has no `orchestration` skill (it still
 answers messages sent to it, and can message upward, below).
 
+
+Browser session holders (`browser:session`) remain visible in the worker
+inventory but do not count as running work. A chat with queued/running tasks
+and no active model turn shows `waiting_on_worker` ("waiting on worker"), while
+approval and active-turn states take precedence.
 
 ### Portfolio status snapshot
 

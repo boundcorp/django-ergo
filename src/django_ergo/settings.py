@@ -80,6 +80,7 @@ DEFAULTS = {
     # Callable(message_id) that delivers a bot-to-bot thread message, e.g. by
     # queueing a Celery task. None = deliver in a background thread.
     "THREAD_MESSAGE_RUNNER": None,
+    "THREAD_REPORTS_RECORD": True,
     # Finite per-thread recurring wakes (active, paused and blocked all count).
     "RECURRING_WAKE_MIN_INTERVAL_SECONDS": 60,
     "RECURRING_WAKE_MAX_PER_THREAD": 3,

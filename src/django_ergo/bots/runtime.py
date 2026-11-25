@@ -1243,6 +1243,12 @@ class Bot:
         ]
         if text := page_actions.context_text(session):
             sources.append(TextContextSource(page_actions.CONTEXT_TITLE, text))
+        from django_ergo.bots.messaging import recorded_reports
+
+        if reports := recorded_reports(session):
+            sources.append(
+                TextContextSource("Recorded reports since your last turn", reports)
+            )
         return sources
 
     def toolkits(self, session: ConversationSession) -> list[Toolkit]:

@@ -20,6 +20,9 @@ thread-to-thread delegation.
 - A turn that stops for approval leaves the message ``waiting``; the reply
   goes back once the user decides and the turn finishes.
 
+``reply_mode="record"`` stores an attributed history message immediately,
+without delivery or a model turn; it never returns a reply.
+
 Delivery runs through ``DJANGO_ERGO["THREAD_MESSAGE_RUNNER"]`` (Ergonaut
 queues a Celery task), or a background thread by default.
 """
@@ -274,7 +277,7 @@ def send(  # noqa: C901, PLR0913 - provenance and inherited execution restrictio
     metadata: dict | None = None,
     depth: int = 0,
 ) -> ThreadMessage:
-    """Queue a message for ``recipient`` and start delivering it.
+    """Queue a message, or store it without a turn for ``reply_mode=record``.
 
     ``depth``: the hops a message with no sender continues (a self-wake keeps
     the depth of the message its turn was answering)."""
@@ -295,6 +298,8 @@ def send(  # noqa: C901, PLR0913 - provenance and inherited execution restrictio
         msg = f"Too many hops of delegation ({depth}); answer with what you have."
         raise ValueError(msg)
     metadata = dict(metadata or {})
+    if metadata.get("reply_mode") == "record":
+        metadata["report"] = True
     cause = in_reply_to or handling
     if cause:
         origin = (cause.metadata or {}).get("recurring_origin") or (
@@ -339,6 +344,13 @@ def send(  # noqa: C901, PLR0913 - provenance and inherited execution restrictio
                 provenance[key] = metadata[key]
         metadata.setdefault("message_author", bot_identity(sender))
         metadata["message_provenance"] = provenance
+    return _store_message(
+        sender, recipient, text, in_reply_to, depth, metadata, registry
+    )
+
+
+@transaction.atomic
+def _store_message(sender, recipient, text, in_reply_to, depth, metadata, registry):  # noqa: PLR0913
     message = ThreadMessage.objects.create(
         sender_session=sender,
         recipient_session=recipient,
@@ -347,8 +359,32 @@ def send(  # noqa: C901, PLR0913 - provenance and inherited execution restrictio
         depth=depth,
         metadata=metadata or {},
     )
-    _record_handoff("queued", message, occurred_at=message.created_at)
-    transaction.on_commit(lambda: dispatch(str(message.id), registry))
+    if metadata.get("reply_mode") == "record":
+        # Persist immediately, including during a running turn; never enter the
+        # delivery queue or acquire a model/turn lock.
+        from django_ergo.conversation.messages import add_message
+
+        author, provenance = thread_message_identity(message)
+        async_to_sync(add_message)(
+            recipient,
+            "user",
+            [{"block_type": "text", "text": text}],
+            author=author,
+            provenance={
+                **provenance,
+                "delivery_mode": "record",
+                "thread_message_id": str(message.pk),
+            },
+        )
+        message.status = ThreadMessageStatus.ANSWERED
+        message.save(update_fields=["status", "updated_at"])
+        ConversationSession.objects.filter(pk=recipient.pk).update(
+            updated_at=message.created_at
+        )
+        _record_handoff("delivered", message)
+    else:
+        _record_handoff("queued", message, occurred_at=message.created_at)
+        transaction.on_commit(lambda: dispatch(str(message.id), registry))
     return message
 
 
@@ -680,11 +716,15 @@ def fail(message: ThreadMessage, error: str) -> None:
         and message.in_reply_to_id is None
         and not (message.metadata or {}).get("notification")
     ):
-        reply(message, f"(Could not deliver your message: {error})")
+        reply(message, f"(Could not deliver your message: {error})", question=True)
 
 
 def reply(
-    message: ThreadMessage, text: str, registry: BotRegistry | None = None
+    message: ThreadMessage,
+    text: str,
+    registry: BotRegistry | None = None,
+    *,
+    question: bool = False,
 ) -> None:
     """Send the answer to ``message`` back to its sender."""
     send(
@@ -693,6 +733,9 @@ def reply(
         text,
         in_reply_to=message,
         registry=registry,
+        metadata=return_policy(
+            message.sender_session, question=question, request=message
+        ),
     )
 
 
@@ -758,9 +801,20 @@ def _route_reply(bot: Bot, session: ConversationSession, result: TurnResult) -> 
         _record_handoff("result_persisted", message, turn_id=call.pk)
     report = (message.metadata or {}).get("report")  # a one-way report: no reply back
     if message.sender_session_id and message.in_reply_to_id is None and not report:
-        reply(message, text, registry=bot.registry)
+        reply(
+            message,
+            text,
+            registry=bot.registry,
+            question=result.reply is None or result.reply.is_question,
+        )
     elif result.reply is not None:
-        _report_worker_result(session, message, text, registry=bot.registry)
+        _report_worker_result(
+            session,
+            message,
+            text,
+            registry=bot.registry,
+            question=result.reply.is_question,
+        )
 
 
 def _report_worker_result(
@@ -769,6 +823,7 @@ def _report_worker_result(
     text: str,
     *,
     registry: BotRegistry | None = None,
+    question: bool = False,
 ) -> None:
     """A thread that another chat started passes on what it made of a worker's
     result. Its answer to that chat's request was often "I've started a worker",
@@ -795,6 +850,15 @@ def _report_worker_result(
             f"[Result of {title}]\n\n{text}",
             registry=registry,
             metadata={
+                **return_policy(
+                    starter,
+                    question=question,
+                    request=ThreadMessage.objects.filter(
+                        pk=message.metadata.get("originating_message"),
+                        sender_session=starter,
+                        recipient_session=session,
+                    ).first(),
+                ),
                 "report": True,
                 "worker": message.metadata.get("worker"),
                 **(
@@ -806,3 +870,43 @@ def _report_worker_result(
         )
     except ValueError:
         logger.warning("Couldn't report a worker result to %s", starter_id)
+
+
+def return_policy(starter, *, question=False, request=None) -> dict:
+    """Record only when the originating request explicitly opted in."""
+    if (
+        api_settings.THREAD_REPORTS_RECORD
+        and not question
+        and request is not None
+        and (request.metadata or {}).get("return_mode") == "record"
+    ):
+        return {"reply_mode": "record", "report": True}
+    return {}
+
+
+def recorded_reports(session) -> str:
+    """Reports since the previous turn, also for per-turn native windows.
+
+    Read ThreadMessage rows so compaction cannot hide reports before the
+    recipient has had a real turn to consume them.
+    """
+    latest = (
+        session.structured_calls.filter(kind="chat_reply")
+        .order_by("-created_at")
+        .first()
+    )
+    reports = session.thread_messages.filter(metadata__reply_mode="record")
+    if latest:
+        reports = reports.filter(created_at__gt=latest.created_at)
+    if (session.compaction_config or {}).get("native_history") != "turn":
+        from django_ergo.conversation.compaction import latest_compaction
+
+        compacted = latest_compaction(session)
+        if compacted is None:
+            return ""
+        ids = session.messages.filter(
+            sequence__lte=compacted.upto_sequence,
+            provenance__delivery_mode="record",
+        ).values_list("provenance__thread_message_id", flat=True)
+        reports = reports.filter(id__in=list(ids))
+    return "\n\n".join(turn_text(row) for row in reports.order_by("created_at", "id"))

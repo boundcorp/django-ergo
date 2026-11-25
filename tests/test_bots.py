@@ -1900,6 +1900,35 @@ async def test_idle_threads_are_archived_and_reopen_on_a_message(tmp_path):
 
 
 @pytest.mark.django_db(transaction=True)
+async def test_browser_session_alone_does_not_block_idle_archival(tmp_path):
+    from datetime import timedelta
+
+    from django.utils import timezone
+
+    from django_ergo.bots import archival
+    from django_ergo.conversation.models import Worker
+
+    user = await User.objects.acreate(username="idle-browser")
+    bot, _ = make_bot(tmp_path, say("ok"))
+    session = await bot.create_session(user)
+    await Worker.objects.acreate(
+        session=session, function="browser:session", status="running"
+    )
+    await ConversationSession.objects.filter(pk=session.pk).aupdate(
+        updated_at=timezone.now() - timedelta(days=8)
+    )
+    assert await sync_to_async(
+        lambda: archival.idle_threads(bot).filter(pk=session.pk).exists()
+    )()
+    await Worker.objects.acreate(
+        session=session, function="browser:task", status="running"
+    )
+    assert not await sync_to_async(
+        lambda: archival.idle_threads(bot).filter(pk=session.pk).exists()
+    )()
+
+
+@pytest.mark.django_db(transaction=True)
 async def test_archiving_a_thread_cancels_its_workers(tmp_path):
     from datetime import timedelta
 
@@ -4528,6 +4557,291 @@ def test_configured_permanence_respects_explicit_unmark_after_reload(tmp_path):
     BotRegistry().add(bot)
     thread.refresh_from_db()
     assert not thread.is_permanent
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("native_history", ["full", "turn"])
+async def test_record_message_is_history_without_a_turn(
+    tmp_path, thread_messages, native_history
+):
+    from django_ergo.bots import messaging
+    from django_ergo.bots import orchestrator
+    from django_ergo.conversation.models import ConversationCompaction
+    from django_ergo.conversation.models import ThreadMessage
+
+    user = await User.objects.acreate(username=f"record-{native_history}")
+    bot, engine = make_bot(tmp_path, say("Ready."))
+    root = await bot.root_session(user)
+    recipient = await bot.create_session(user, title="Receiver")
+    recipient.compaction_config = {"native_history": native_history}
+    await recipient.asave(update_fields=["compaction_config"])
+    ctx = ToolContext(bot=bot, session=root, user=user)
+    result = await sync_to_async(orchestrator.ergo_thread_send)(
+        ctx,
+        thread=str(recipient.id),
+        message="Build finished: cobalt-spoon.",
+        reply_mode="record",
+    )
+    assert result["reply_mode"] == "record"
+    assert SENT == []
+    assert engine._client.calls == []
+    assert not await recipient.structured_calls.aexists()
+    stored = await recipient.messages.aget()
+    assert stored.role == "user"
+    assert stored.author["kind"] == "bot"
+    assert stored.provenance["delivery_mode"] == "record"
+    if native_history == "full":
+        assert await sync_to_async(messaging.recorded_reports)(recipient) == ""
+    message = await ThreadMessage.objects.aget(id=result["message_id"])
+    assert message.status == "answered" and message.metadata["report"]
+    # Even if history has already been compacted, the next real turn sees it.
+    await ConversationCompaction.objects.acreate(
+        session=recipient,
+        mode="context_size",
+        from_sequence=stored.sequence,
+        upto_sequence=stored.sequence,
+        message_count=1,
+        summary="Older history.",
+    )
+    await bot.ask(recipient, "Continue with the build")
+    assert "cobalt-spoon" in _turn_context(engine._client.calls[-1])
+    assert "Recorded reports since your last turn" in _turn_context(
+        engine._client.calls[-1]
+    )
+    assert await sync_to_async(messaging.recorded_reports)(recipient) == ""
+    assert SENT == []
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    ("kind", "mode", "ask", "main", "expected"),
+    [
+        ("message", "auto", False, False, "invoke"),
+        ("question", "auto", False, False, "invoke"),
+        ("message", "response", False, False, "invoke"),
+        ("message", "auto", True, False, "invoke"),
+        ("message", "auto", False, True, "invoke"),
+    ],
+)
+async def test_automatic_task_reply_policy(  # noqa: PLR0913
+    tmp_path, thread_messages, kind, mode, ask, main, expected
+):
+    from django_ergo.bots import messaging
+    from django_ergo.bots import orchestrator
+    from django_ergo.conversation.models import ThreadMessage
+
+    user = await User.objects.acreate(username="automatic-report")
+    bot, engine = make_bot(tmp_path, say("Finished.", kind=kind))
+    root = await bot.root_session(user)
+    starter = (
+        root
+        if main
+        else await bot.create_session(
+            user, title="Coordinator", metadata={"started_by": str(root.id)}
+        )
+    )
+    ctx = ToolContext(bot=bot, session=starter, user=user)
+    result = await sync_to_async(orchestrator.ergo_thread_send)(
+        ctx, thread="new", message="Do the task", reply_mode=mode, ask=ask
+    )
+    await thread_messages()
+    request = await ThreadMessage.objects.aget(id=result["message_id"])
+    returned = await ThreadMessage.objects.aget(in_reply_to=request)
+    assert len(engine._client.calls) == 1
+    if expected == "record":
+        assert SENT == []
+        assert returned.metadata["reply_mode"] == "record"
+        assert returned.status == "answered"
+        assert await starter.messages.acount() == 1
+        assert "Finished." in await sync_to_async(messaging.recorded_reports)(starter)
+    else:
+        assert [str(returned.id)] == SENT
+        engine._client.responses = [say("Received.")]
+        await thread_messages()
+        assert len(engine._client.calls) == 2
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_record_rejects_action_options(tmp_path, thread_messages):
+    from django_ergo.bots import orchestrator
+
+    user = await User.objects.acreate(username="record-invalid")
+    bot, _ = make_bot(tmp_path, say("Ready."))
+    root = await bot.root_session(user)
+    ctx = ToolContext(bot=bot, session=root, user=user)
+    for options in ({"ask": True}, {"interrupt": True}):
+        with pytest.raises(ValueError, match="cannot be combined"):
+            await sync_to_async(orchestrator.ergo_thread_send)(
+                ctx, thread="new", message="Status", reply_mode="record", **options
+            )
+    assert SENT == []
+    assert not await root.children.aexists()
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("mode", ["auto", "response"])
+async def test_worker_followup_to_task_starter(tmp_path, thread_messages, mode):
+    from django_ergo.bots import messaging
+    from django_ergo.bots import orchestrator
+    from django_ergo.conversation.models import ThreadMessage
+
+    user = await User.objects.acreate(username="worker-followup")
+    bot, engine = make_bot(tmp_path, say("Worker started."))
+    root = await bot.root_session(user)
+    starter = await bot.create_session(user, metadata={"started_by": str(root.id)})
+    ctx = ToolContext(bot=bot, session=starter, user=user)
+    sent = await sync_to_async(orchestrator.ergo_thread_send)(
+        ctx, thread="new", message="Check the key", reply_mode=mode
+    )
+    await thread_messages()
+    SENT.clear()  # initial reply already tested separately
+    child = await ConversationSession.objects.aget(id=sent["thread_id"])
+    engine._client.responses = [say("Key checked.")]
+    await sync_to_async(messaging.send_event)(
+        child,
+        "Worker finished",
+        source="worker:w1",
+        source_label="Key worker",
+        metadata={"worker_finished": True, "worker_title": "Check key", "worker": "w1"},
+    )
+    await thread_messages()
+    followup = (
+        await ThreadMessage.objects.filter(
+            sender_session=child, recipient_session=starter
+        )
+        .order_by("-created_at")
+        .afirst()
+    )
+    assert "Key checked." in followup.text
+    assert [str(followup.id)] == SENT
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_record_return_setting_and_human_facing_thread(tmp_path, settings):
+    from django_ergo.bots import messaging
+
+    user = await User.objects.acreate(username="return-compat")
+    bot, _ = make_bot(tmp_path, say("Ready."))
+    root = await bot.root_session(user)
+    starter = await bot.create_session(user, metadata={"started_by": str(root.id)})
+    assert await sync_to_async(messaging.return_policy)(starter) == {}
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_record_during_tool_work_defers_past_results(tmp_path, thread_messages):
+    from django_ergo.bots import messaging
+    from django_ergo.conversation.messages import add_message
+    from django_ergo.conversation.messages import model_rows
+    from django_ergo.conversation.models import StructuredCall
+
+    user = await User.objects.acreate(username="record-busy")
+    bot, engine = make_bot(tmp_path, say("Ready."))
+    root = await bot.root_session(user)
+    recipient = await bot.create_session(user)
+    await StructuredCall.objects.acreate(
+        session=recipient, kind="chat_reply", status="in_progress"
+    )
+    tool = await add_message(
+        recipient,
+        "assistant",
+        [
+            {
+                "block_type": "tool_use",
+                "tool_use_id": "pending-1",
+                "tool_name": "lookup",
+                "tool_input": {},
+            }
+        ],
+    )
+    await sync_to_async(messaging.send)(
+        root, recipient, "Background result", metadata={"reply_mode": "record"}
+    )
+    report = await recipient.messages.order_by("-sequence").afirst()
+    result = await add_message(
+        recipient,
+        "user",
+        [
+            {
+                "block_type": "tool_result",
+                "tool_result_for": "pending-1",
+                "tool_result_content": "Done",
+            }
+        ],
+    )
+    rows = await sync_to_async(
+        lambda: model_rows(recipient.messages.prefetch_related("content_blocks").all())
+    )()
+    assert [row.id for row in rows] == [tool.id, result.id, report.id]
+    assert SENT == [] and engine._client.calls == []
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_explicit_record_return_and_originating_worker_request(
+    tmp_path, thread_messages
+):
+    from django_ergo.bots import messaging
+    from django_ergo.bots import orchestrator
+    from django_ergo.conversation.models import ThreadMessage
+
+    user = await User.objects.acreate(username="explicit-return")
+    bot, engine = make_bot(tmp_path, say("Started."))
+    root = await bot.root_session(user)
+    ctx = ToolContext(bot=bot, session=root, user=user)
+    sent = await sync_to_async(orchestrator.ergo_thread_send)(
+        ctx, thread="new", message="Run background work", return_mode="record"
+    )
+    await thread_messages()
+    request = await ThreadMessage.objects.aget(id=sent["message_id"])
+    answer = await ThreadMessage.objects.aget(in_reply_to=request)
+    assert answer.metadata["reply_mode"] == "record"
+    assert SENT == []
+    child = await ConversationSession.objects.aget(id=sent["thread_id"])
+    await sync_to_async(messaging.send)(root, child, "Later unrelated request")
+    SENT.clear()
+    await sync_to_async(messaging._report_worker_result)(
+        child,
+        await sync_to_async(messaging.send_event)(
+            child,
+            "Worker finished",
+            source="worker:w",
+            source_label="worker",
+            metadata={"worker_finished": True, "originating_message": str(request.id)},
+        ),
+        "Finished work",
+    )
+    followup = (
+        await ThreadMessage.objects.filter(sender_session=child, recipient_session=root)
+        .order_by("-created_at")
+        .afirst()
+    )
+    assert followup.metadata["reply_mode"] == "record"
+    assert "Finished work" in followup.text
+    assert (
+        await sync_to_async(messaging.return_policy)(
+            root, request=request, question=True
+        )
+        == {}
+    )
+    assert len(engine._client.calls) == 1
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_record_to_resolved_thread_stays_resolved(tmp_path, thread_messages):
+    from django_ergo.bots import messaging
+
+    user = await User.objects.acreate(username="resolved-record")
+    bot, _ = make_bot(tmp_path, say("Ready."))
+    root = await bot.root_session(user)
+    recipient = await bot.create_session(user)
+    recipient.status = "completed"
+    await recipient.asave(update_fields=["status"])
+    await sync_to_async(messaging.send)(
+        root, recipient, "For the record", metadata={"reply_mode": "record"}
+    )
+    await recipient.arefresh_from_db()
+    assert recipient.status == "completed"
+    assert await recipient.messages.filter(provenance__delivery_mode="record").aexists()
+    assert SENT == []
 
 
 @pytest.mark.django_db(transaction=True)

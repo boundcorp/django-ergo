@@ -762,7 +762,9 @@ def with_open_counts(qs):
     moved = StructuredCall.objects.filter(session=OuterRef("pk")).order_by("-updated_at")
 
     running = StructuredCall.objects.filter(messaging.running_turn(), session=OuterRef("pk"))
-    working = Worker.objects.filter(session=OuterRef("pk"), status__in=["queued", "running"])
+    working = Worker.objects.filter(session=OuterRef("pk"), status__in=["queued", "running"]).exclude(
+        function="browser:session"
+    )
     paused = StructuredCall.objects.filter(session=OuterRef("recipient_session"), status="awaiting_approval")
     blocked = ThreadMessage.objects.filter(
         sender_session=OuterRef("pk"), in_reply_to__isnull=True, status="waiting"
@@ -797,6 +799,7 @@ def with_open_counts(qs):
         busy=Exists(running) | Exists(working),
         blocked=Exists(blocked),
         unread=Exists(finished.filter(updated_at__gt=OuterRef("read_at")))
+        | Exists(delivered_reports.filter(updated_at__gt=OuterRef("read_at")))
         | (Q(read_at__isnull=True) & Exists(delivered_reports)),
         latest_status=Subquery(latest.values("status")[:1]),
         latest_type=Subquery(latest.values("response__type")[:1]),

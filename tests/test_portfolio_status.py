@@ -605,3 +605,32 @@ def test_measured_on_a_representative_portfolio(world, capsys):
             f"files={len(out['attachments'])}"
         )
     assert len(queries) <= 30 and size < 120_000
+
+
+def test_browser_session_is_not_an_active_worker(world):
+    from django_ergo.bots.overview import facts
+
+    ctx = ctx_for(world, "boundcorp")
+    session = thread(world, "design", "Browsing")
+    Worker.objects.create(session=session, function="browser:session", status="running")
+    assert orchestrator.thread_status(session)["workers_running"] == 0
+    assert orchestrator.thread_status(session)["state"] == "idle"
+    task = Worker.objects.create(
+        session=session, function="browser_task", status="running"
+    )
+    status = orchestrator.thread_status(session)
+    assert status["workers_running"] == 1
+    assert status["state"] == "waiting_on_worker"
+    assert "waiting on worker" in facts(session, ctx.session, status)
+    out = snapshot.portfolio_status(ctx)
+    row = next(row for row in out["threads"] if row["session_id"] == str(session.id))
+    assert row["recorded"]["workers_running"] == 1
+    assert row["state"] == "waiting_on_worker"
+    # Keep the session visible as a stored resource in the worker inventory.
+    assert (
+        len([w for w in out["workers"] if w["owner"]["session_id"] == str(session.id)])
+        == 2
+    )
+    task.status = "completed"
+    task.save()
+    assert orchestrator.thread_status(session)["state"] == "idle"

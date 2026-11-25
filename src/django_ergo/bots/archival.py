@@ -126,7 +126,13 @@ def idle_threads(bot: Bot, now: datetime | None = None):
         .exclude(status="completed")
         .exclude(structured_calls__status__in=BUSY_CALLS)
         .exclude(thread_messages__status__in=OPEN_MESSAGES)
-        .exclude(workers__status__in=[WorkerStatus.QUEUED, WorkerStatus.RUNNING])
+        .exclude(
+            pk__in=Worker.objects.filter(
+                status__in=[WorkerStatus.QUEUED, WorkerStatus.RUNNING]
+            )
+            .exclude(function="browser:session")
+            .values("session_id")
+        )
         .annotate(last_turn=Max("structured_calls__updated_at"))
         .annotate(last_activity=Greatest("updated_at", "last_turn"))
         .filter(last_activity__lt=cutoff)

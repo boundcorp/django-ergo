@@ -394,11 +394,7 @@ def start(  # noqa: PLR0913
     call = current_call.get()
     call_metadata = (call.metadata or {}) if call else {}
     origin = None
-    if (
-        call
-        and call.session_id == session.pk
-        and call_metadata.get("voice_execution_mode") == "normal_thread"
-    ):
+    if call and call.session_id == session.pk:
         origin = ThreadMessage.objects.filter(
             pk=call_metadata.get("thread_message"), recipient_session=session
         ).first()
@@ -758,6 +754,9 @@ def _finish(worker: Worker, status: str, result: Any, error: str) -> None:
             "worker": str(worker.pk),
             "worker_title": worker.title,
             "worker_finished": True,
+            "originating_message": str(worker.originating_message_id)
+            if worker.originating_message_id
+            else None,
         },
     )
 
