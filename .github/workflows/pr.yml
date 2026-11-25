@@ -59,10 +59,10 @@ jobs:
         run: npm ci && npx tsc -b
 
   # The reusable chat UI package: typecheck, tests on React 19 and 18, build, and a fixture run that installs the
-  # packed tarball into a Vite app and a Next 13.1 Pages Router app. Skipped unless the PR touches the package.
+  # packed tarball into a Vite app and a Next 16 + MUI 6 Pages Router app (build, plus browser coexistence checks). Skipped unless the PR touches the package.
   chat-ui:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: packages/ergo-chat-ui
@@ -87,5 +87,7 @@ jobs:
           cache-dependency-path: packages/ergo-chat-ui/package-lock.json
       - if: steps.changed.outputs.changed == 'true'
         run: npm ci && npm run test:all && npm run build && npm run size
+      - if: steps.changed.outputs.changed == 'true'
+        run: npx --yes playwright@1.56.1 install --with-deps chromium
       - if: steps.changed.outputs.changed == 'true'
         run: npm run fixtures

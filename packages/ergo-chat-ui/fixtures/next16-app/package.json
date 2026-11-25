@@ -1,0 +1,23 @@
+{
+  "name": "ergo-chat-ui-next16-fixture",
+  "private": true,
+  "scripts": { "build": "next build --webpack" },
+  "dependencies": {
+    "@emotion/cache": "^11.10.5",
+    "@emotion/react": "^11.10.5",
+    "@emotion/server": "^11.10.0",
+    "@emotion/styled": "^11.10.5",
+    "@mui/material": "6.5.0",
+    "next": "16.4.5",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "tss-react": "^4.9.21"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "18.3.12",
+    "@types/react-dom": "18.3.1",
+    "playwright-core": "1.56.1",
+    "typescript": "^5.6.2"
+  }
+}

@@ -8,7 +8,7 @@ callbacks you give it.
 Status: first version (0.1.0), in this repository so Ergonaut changes stay atomic. Not published; consume the
 `npm pack` tarball (see [Install](#install)). `package.json` is `private` until ownership and a registry are agreed.
 
-- React `^18.2.0 || ^19.0.0` (peer; never bundled). Tested on 18.2 and 19.
+- React `^18.2.0 || ^19.0.0` (peer; never bundled). See [Compatibility](#compatibility).
 - Prebuilt ESM + CJS, `.d.ts`, `./styles.css`. No runtime dependencies (markdown and highlighting are bundled).
 - SSR-safe: no `window`/`document` at module scope; hydration is tested.
 - Styling is precompiled and scoped: no Tailwind, no reset, nothing on `:root`/`body`, fonts inherit.
@@ -152,13 +152,30 @@ npm test                 # React 19
 npm run test:react18     # same tests on React 18.2 (installs it into .react18/)
 npm run build            # dist/ (ESM, CJS, d.ts, styles.css)
 npm run size
-npm run fixtures         # npm pack, install the tarball into a Vite app and a Next 13.1 Pages Router app, build both
+npm run fixtures         # npm pack, install the tarball into a Vite app and a Next 16 + MUI app, build both, run the browser checks
+REACT18_VERSION=18.2.0 npm run test:react18   # the peer floor (default 18.3.1)
 ```
 
 `fixtures/` holds a shared demo page (markdown, code, tool running/done/error, attachments, an unknown part and an
 approval via `renderPart`) and two apps. The fixture script copies them to `.fixtures/` and installs the **tarball**,
 so it exercises the real `exports` map. Fixtures are not in `files`, so they never reach the package or any host bundle.
-Next fixture: Next 13.1.1, React 18.2, Pages Router, webpack, `experimental.esmExternals: false`, SSR/static prerender.
+Set `SKIP_BROWSER=1` to skip the browser checks; otherwise they need a Chromium (`npx playwright install chromium`, or
+`CHROMIUM_PATH=/path/to/chrome`).
+
+## Compatibility
+
+Tested (tests plus the fixtures above):
+
+| Consumer | Versions | What is checked |
+| --- | --- | --- |
+| Next Pages Router (`fixtures/next16-app`, mirrors the PDS frontend) | Next 16.4.5 (`next build --webpack`), React 18.3.1, MUI 6.5.0 (`ThemeProvider`, `CssBaseline`, Emotion cache + `@emotion/server` SSR in `_document`), Emotion 11, tss-react 4 | tarball install, static prerender with the transcript in the HTML, then in Chromium (`next start`, plus `next dev`): no console errors or hydration warnings, the package CSS changes no `html`/`body`/font or MUI AppBar/Button/Typography/Drawer/Dialog style, `CssBaseline` does not break the chat layout (fills its host, transcript scrolls, composer stays visible, no overflow, inherits the MUI font), Dialog/Drawer/AppBar stack above the chat, `--ergo-chat-*` tokens retheme it. Screenshots: `fixtures/screenshots/` (desktop 1280x800, mobile 390x844, dialog open). |
+| Vite (`fixtures/vite-app`) | Vite, React 19 | tarball install, typecheck, build, scoped CSS in the bundle |
+| Unit tests (`npm test`, `npm run test:react18`) | React 19; React 18.3.1 (and 18.2.0 with `REACT18_VERSION`) | render, hydration, composer, safety |
+
+Notes for hosts: import `@ergo/chat-ui/styles.css` once (in `_app` for the Pages Router). The package does not use Emotion or
+MUI and needs no `transpilePackages`; it works beside MUI's Emotion cache because its CSS is precompiled and every
+selector is `.ergo-chat`-scoped. Give the chat a sized parent (see Styling). The fixture mirrors PDS's
+`esmExternals: false`; Next 16 does not use that flag, and the package does not depend on it.
 
 ## Licenses
 

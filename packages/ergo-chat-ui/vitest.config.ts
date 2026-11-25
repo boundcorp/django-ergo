@@ -2,7 +2,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vitest/config'
 
-// REACT_MAJOR=18 runs the same tests against React 18.2 (installed by scripts/react18.mjs into .react18/).
+// REACT_MAJOR=18 runs the same tests against React 18 (installed by scripts/react18.mjs into .react18/).
 const here = dirname(fileURLToPath(import.meta.url))
 const r18 = join(here, '.react18', 'node_modules')
 const alias =

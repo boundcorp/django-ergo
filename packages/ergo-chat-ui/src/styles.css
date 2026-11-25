@@ -26,6 +26,8 @@
   --ergo-chat-hl-title: #8250df;
   --ergo-chat-hl-attr: #953800;
 
+  /* Anchors the visually hidden (absolute) labels so they cannot stretch the host page. */
+  position: relative;
   color: var(--ergo-chat-fg);
   background: var(--ergo-chat-bg);
   font-size: 0.9375em;
@@ -114,6 +116,7 @@
   height: 100%;
 }
 .ergo-chat__transcript {
+  position: relative; /* hidden labels scroll with the content instead of escaping the scroller */
   display: flex;
   flex-direction: column;
   gap: var(--ergo-chat-gap);

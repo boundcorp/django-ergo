@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, type CSSProperties } from 'react'
 import { ChatView, type Attachment, type ChatStatus, type Message } from '@ergo/chat-ui'
 
 const initial: Message[] = [
@@ -67,13 +67,15 @@ const initial: Message[] = [
   },
 ]
 
-export default function Demo() {
+export default function Demo({ style }: { style?: CSSProperties } = {}) {
   const [messages, setMessages] = useState(initial)
   const [status, setStatus] = useState<ChatStatus>('idle')
   const [decision, setDecision] = useState('pending')
   return (
     <div
-      style={{ height: 640, maxWidth: 760, margin: '0 auto', border: '1px solid #ccc', fontFamily: 'Georgia, serif' }}
+      style={
+        style ?? { height: 640, maxWidth: 760, margin: '0 auto', border: '1px solid #ccc', fontFamily: 'Georgia, serif' }
+      }
     >
       <ChatView
         messages={messages}
