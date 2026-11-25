@@ -46,6 +46,9 @@ export type Session = {
   workers_running?: number
   workers_total?: number
   prs?: PrLink[] // pull requests it reported, newest first
+  pool?: string // this chat's own pool ('' = the user's default / preferred order)
+  pool_route?: { pool?: string; pool_label?: string; route?: string; billing?: string; mode?: string }
+  pool_refusal?: PoolRefusal | null // what the chat is stopped on, with the next choices
 }
 
 export type SessionSearchResult = {
@@ -163,10 +166,96 @@ export type ModelChoice = {
   label: string
   provider: string
   engine_type: string
-  available: boolean // its provider's API key is set
+  available: boolean // usable now under the same rules the backend enforces
+  billing?: string // subscription, metered or api
+  why?: string // why it isn't available, when it isn't
 }
 
-export type BotModels = { default: string; default_engine_type: string; models: ModelChoice[] }
+// Model pools (django_ergo.bots.pools; docs/model-pools.md).
+export type PoolRefusal = {
+  code: string // pool_exhausted, budget_required, provider_disabled, privacy_denied, ...
+  message: string
+  pool: string
+  consumer: string
+  next_choices: { name: string; label: string; status: string; metered: boolean }[]
+}
+
+export type PoolModel = { id: string; label: string; billing: string; available: boolean; why: string }
+
+export type PoolRow = {
+  name: string
+  label: string
+  position?: number
+  enabled?: boolean
+  status: string // eligible, pool_disabled, budget_required, budget_exhausted, budget_expired
+  why?: string
+  metered?: boolean
+  legacy?: boolean
+  locked?: boolean // a privacy-restricted bot's private pool
+  rollover_out?: boolean
+  allow_auto_entry?: boolean
+  budget_usd?: string | null
+  spent_usd?: string
+  reserved_usd?: string
+  expires_at?: string | null
+  per_launch_usd?: string | null
+  version?: number
+  routes?: string[]
+  models: PoolModel[]
+  tiers?: Record<string, string[]>
+}
+
+export type PoolProvider = {
+  name: string
+  type: string
+  transport: string
+  billing: string
+  enabled: boolean
+  configured_enabled: boolean
+  available: boolean
+}
+
+export type PoolSettings = {
+  legacy: boolean
+  pools: PoolRow[]
+  active: string
+  mode: string // auto, manual or private
+  scope?: string // chat, user or ''
+  selected?: string // the manual pick ('' = preferred order)
+  auto_rollover?: boolean
+  user_version?: number
+  providers?: PoolProvider[]
+  reset_times?: Record<string, Record<string, number>>
+  editable?: boolean
+  privacy?: { restricted: boolean; policies: string[]; label: string }
+}
+
+export type ChatPools = PoolSettings & {
+  chat_pool: string
+  route: { pool?: string; pool_label?: string; route?: string; billing?: string; mode?: string; rollover?: string[] }
+  refusal: PoolRefusal | null
+}
+
+export type PoolStatePatch = {
+  version?: number
+  enabled?: boolean
+  rollover_out?: boolean
+  allow_auto_entry?: boolean
+  budget_usd?: string
+  clear_budget?: boolean
+  expires_at?: string
+  clear_expiry?: boolean
+  per_launch_usd?: string
+}
+
+export type BotModels = {
+  default: string
+  default_engine_type: string
+  models: ModelChoice[] // what this chat may pick: a privacy-restricted bot gets only its private models
+  private_models?: ModelChoice[]
+  pool?: { active: string; label: string; mode: string } // with pools configured: the active pool
+  privacy?: { restricted: boolean; label: string; policies: string[] }
+}
 
 export type DelegatedRequest = {
   id: string
@@ -1043,7 +1132,23 @@ export const api = {
   openChat: (bot: string, name: string) => request<Session>('POST', `/bots/${bot}/chats/${name}`),
   newThread: (bot: string, title: string, message = '', model = '') =>
     request<Session>('POST', `/bots/${bot}/threads`, { title, message, model }),
-  models: (bot: string) => request<BotModels>('GET', `/bots/${bot}/models`),
+  models: (bot: string, session?: string) =>
+    request<BotModels>('GET', `/bots/${bot}/models${session ? `?session=${encodeURIComponent(session)}` : ''}`),
+  pools: () => request<PoolSettings>('GET', '/pools'),
+  updatePoolPreferences: (body: {
+    version?: number
+    active_pool?: string
+    auto_rollover?: boolean
+    clear_auto_rollover?: boolean
+    order?: string[]
+  }) => request<PoolSettings>('PATCH', '/pools/preferences', body),
+  updatePool: (name: string, body: PoolStatePatch) =>
+    request<PoolSettings>('PATCH', `/pools/${encodeURIComponent(name)}`, body),
+  updateProvider: (name: string, enabled: boolean) =>
+    request<PoolSettings>('PATCH', `/providers/${encodeURIComponent(name)}`, { enabled }),
+  chatPools: (id: string) => request<ChatPools>('GET', `/sessions/${id}/pool`),
+  setChatPool: (id: string, pool: string, scope: 'chat' | 'user' = 'chat', version?: number) =>
+    request<{ session: Session; warning: string }>('POST', `/sessions/${id}/pool`, { pool, scope, version }),
   setModel: (id: string, model: string) => request<Session>('POST', `/sessions/${id}/model`, { model }),
   setEffort: (id: string, effort: string) => request<Session>('POST', `/sessions/${id}/effort`, { effort }),
   renameSession: (id: string, title: string) => request<{ title: string }>('POST', `/sessions/${id}/title`, { title }),

@@ -2,20 +2,21 @@ import { useEffect, useState } from 'react'
 import type { BotModels } from '../api'
 import { api } from '../api'
 
-/** A bot's model choices from providers.yaml; null until they load, or when it has none. An empty bot waits. */
-export function useBotModels(bot: string): BotModels | null {
+/** A bot's model choices (for one chat, when ``session`` is given: its pool and privacy); null until
+ * they load, or when it has none. An empty bot waits. Changing ``reload`` fetches them again. */
+export function useBotModels(bot: string, session = '', reload = 0): BotModels | null {
   const [models, setModels] = useState<BotModels | null>(null)
   useEffect(() => {
     if (!bot) return
     let current = true
     api
-      .models(bot)
+      .models(bot, session || undefined)
       .then(m => current && setModels(m.models.length ? m : null))
       .catch(() => current && setModels(null))
     return () => {
       current = false
     }
-  }, [bot])
+  }, [bot, session, reload])
   return models
 }
 
@@ -60,7 +61,8 @@ export default function ModelPicker({
       {models.models.map(m => (
         <option key={m.id} value={m.id} disabled={!m.available}>
           {m.provider} · {m.label}
-          {m.available ? '' : ' — no API key'}
+          {m.billing === 'metered' || m.billing === 'api' ? ' (metered)' : ''}
+          {m.available ? '' : ` — ${m.why || 'no API key'}`}
         </option>
       ))}
     </select>

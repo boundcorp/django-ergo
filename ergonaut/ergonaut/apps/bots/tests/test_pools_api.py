@@ -1,0 +1,148 @@
+"""The model pools API (ergonaut/api/pools.py): settings, version-checked writes,
+admin-only deployment settings, the chat pool picker and listing parity with
+what the runtime selects (django_ergo.bots.pools)."""
+
+import json
+import textwrap
+
+import pytest
+from django.contrib.auth import get_user_model
+from django_ergo.bots import pools, routing, webhooks
+from django_ergo.bots.providers import parse_providers
+
+from ergonaut.apps.bots.loading import load_registry
+from ergonaut.apps.bots.tests.fakes import fake_registry, say
+
+pytestmark = pytest.mark.django_db(transaction=True)
+
+BOT = """
+name: kitchen
+description: Runs the kitchen
+orchestration: false
+"""
+
+PROVIDERS = """
+default: auto/medium
+providers:
+  claude:
+    type: claude
+    transport: cli
+    models: [claude-opus-5-5]
+  openai:
+    type: openai
+    api_key_env: TEST_POOLS_OPENAI_KEY
+    models:
+      - {name: gpt-6.1-sol, price: {input: 1, output: 10}}
+tiers:
+  medium: [claude/claude-opus-5-5]
+pools:
+  - name: subs
+    label: Subscriptions
+    routes: [claude]
+  - name: paid
+    label: Paid API
+    routes: [openai]
+    budget_usd: 5
+    tiers: {medium: [openai/gpt-6.1-sol]}
+"""
+
+
+@pytest.fixture
+def kitchen(tmp_path, monkeypatch):
+    folder = tmp_path / "kitchen"
+    folder.mkdir()
+    (folder / "agents.md").write_text("You run the kitchen.")
+    (folder / "bot.yaml").write_text(textwrap.dedent(BOT))
+    registry, _ = fake_registry(folder, say("hi"))
+    registry.providers = parse_providers(PROVIDERS)
+    webhooks.set_registry(registry)
+    monkeypatch.setenv("TEST_POOLS_OPENAI_KEY", "sk-test")
+    monkeypatch.setattr("django_ergo.conversation.engines.claude_code.claude_installed", lambda command="": True)
+    monkeypatch.setattr(routing, "current_usage", lambda now=None: {})
+    yield registry
+    webhooks.set_registry(load_registry)
+
+
+def login(client, name, *, admin=False):
+    model = get_user_model()
+    user = (model.objects.create_superuser if admin else model.objects.create_user)(name, f"{name}@example.com", "pw")
+    response = client.post(
+        "/api/auth/login", json.dumps({"username": name, "password": "pw"}), content_type="application/json"
+    )
+    assert response.status_code == 200
+    return user
+
+
+def send(client, method, url, data):
+    return getattr(client, method)(url, json.dumps(data), content_type="application/json")
+
+
+def test_settings_list_pools_and_admins_change_them(client, kitchen):
+    login(client, "lee", admin=True)
+    data = client.get("/api/pools").json()
+    assert [p["name"] for p in data["pools"]] == ["subs", "paid"]
+    assert data["active"] == "subs" and data["auto_rollover"] is False and data["editable"]
+    paid = data["pools"][1]
+    assert (paid["status"], paid["rollover_out"], paid["allow_auto_entry"]) == ("eligible", False, False)
+    changed = send(client, "patch", "/api/pools/paid", {"version": paid["version"], "budget_usd": "7.5"}).json()
+    assert changed["pools"][1]["budget_usd"] == "7.5000"
+    # A stale version is a conflict, not a silent overwrite.
+    stale = send(client, "patch", "/api/pools/paid", {"version": paid["version"], "enabled": False})
+    assert stale.status_code == 409
+    off = send(client, "patch", "/api/providers/openai", {"enabled": False}).json()
+    assert next(p for p in off["providers"] if p["name"] == "openai")["enabled"] is False
+
+
+def test_people_change_their_own_choices_but_not_deployment_settings(client, kitchen):
+    login(client, "cook")
+    data = client.get("/api/pools").json()
+    assert data["editable"] is False
+    assert send(client, "patch", "/api/pools/paid", {"enabled": False}).status_code == 403
+    assert send(client, "patch", "/api/providers/openai", {"enabled": False}).status_code == 403
+    mine = send(client, "patch", "/api/pools/preferences", {"version": 0, "order": ["paid", "subs"]}).json()
+    assert [p["name"] for p in mine["pools"]] == ["paid", "subs"]
+    assert mine["active"] == "paid"
+    bad = send(client, "patch", "/api/pools/preferences", {"order": ["paid"]})
+    assert bad.status_code == 400
+
+
+def test_chat_pool_picker_switch_listing_and_refusal(client, kitchen, monkeypatch):
+    login(client, "cook")
+    root = send(client, "post", "/api/bots/kitchen/root", {}).json()
+    view = client.get(f"/api/sessions/{root['id']}/pool").json()
+    assert (view["active"], view["chat_pool"], view["refusal"]) == ("subs", "", None)
+    models = client.get(f"/api/bots/kitchen/models?session={root['id']}").json()
+    assert [m["id"] for m in models["models"] if m["provider"] != "auto"] == ["claude/claude-opus-5-5"]
+    assert "auto/medium" in [m["id"] for m in models["models"]]
+    # Out-of-pool pins are refused.
+    assert send(client, "post", f"/api/sessions/{root['id']}/model", {"model": "openai/gpt-6.1-sol"}).status_code == 409
+    switched = send(client, "post", f"/api/sessions/{root['id']}/pool", {"pool": "paid", "scope": "chat"}).json()
+    assert switched["session"]["pool"] == "paid" and switched["warning"] == ""
+    models = client.get(f"/api/bots/kitchen/models?session={root['id']}").json()
+    assert [m["id"] for m in models["models"] if m["provider"] != "auto"] == ["openai/gpt-6.1-sol"]
+    assert models["models"][0]["billing"] == "metered"
+    # The same eligibility the runtime selects with: a chat stopped on exhaustion shows next choices.
+    send(client, "post", f"/api/sessions/{root['id']}/pool", {"pool": "", "scope": "chat"})
+    monkeypatch.setattr(routing, "current_usage", lambda now=None: {"claude": {"weekly": 100}})
+    from django_ergo.conversation.models import ConversationSession
+
+    session = ConversationSession.objects.get(pk=root["id"])
+    with pytest.raises(pools.PoolRefusal):
+        webhooks.get_registry().get("kitchen").route(session)
+    stopped = client.get(f"/api/sessions/{root['id']}/pool").json()["refusal"]
+    assert stopped["code"] == "pool_exhausted"
+    assert [c["name"] for c in stopped["next_choices"]] == ["paid"]
+    detail = client.get(f"/api/sessions/{root['id']}").json()
+    assert detail["session"]["pool_refusal"]["code"] == "pool_exhausted"
+    # Switching clears it.
+    send(client, "post", f"/api/sessions/{root['id']}/pool", {"pool": "paid", "scope": "chat"})
+    assert client.get(f"/api/sessions/{root['id']}/pool").json()["refusal"] is None
+
+
+def test_user_default_from_a_chat(client, kitchen):
+    user = login(client, "cook")
+    root = send(client, "post", "/api/bots/kitchen/root", {}).json()
+    out = send(client, "post", f"/api/sessions/{root['id']}/pool", {"pool": "paid", "scope": "user"}).json()
+    assert out["session"]["pool"] == ""
+    assert pools.preference(user.pk).active_pool == "paid"
+    assert client.get("/api/pools").json()["selected"] == "paid"

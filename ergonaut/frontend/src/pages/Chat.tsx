@@ -38,6 +38,7 @@ import { IllustrateDialog } from '../components/IllustrateDialog'
 import { ComposerVoice, useComposerAttachments, useComposerVoice } from '../components/VoiceRecorder'
 import Markdown from '../components/Markdown'
 import ModelPicker, { EffortSlider, modelLabel, useBotModels } from '../components/ModelPicker'
+import { PoolPicker, PoolRefusalBanner } from '../components/Pools'
 import { PageViewer, Pins } from '../components/Pins'
 import { AttachmentView, isAudio, replySuggestions, Transcript } from '../components/Transcript'
 import { ModelLink, MobileSessionBar, SessionTitle, SuggestionChips, ThreadOptions } from '../components/ChatChrome'
@@ -178,7 +179,8 @@ export function Chat({ onChange }: { onChange: () => void }) {
   // model link opens whichever one this screen has.
   const [sheetOpen, setSheetOpen] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
-  const models = useBotModels(detail?.session.bot ?? '')
+  const [poolsChanged, setPoolsChanged] = useState(0)
+  const models = useBotModels(detail?.session.bot ?? '', id, poolsChanged)
   const usage = useSessionUsage(id, detail?.messages.length)
   function openOptions() {
     if (window.matchMedia('(max-width: 640px)').matches) setSheetOpen(true)
@@ -692,6 +694,13 @@ export function Chat({ onChange }: { onChange: () => void }) {
         <section aria-label="Model and reasoning">
           <h3>Model & reasoning</h3>
           <div className="flex flex-col gap-2">
+            <PoolPicker
+              sessionId={id}
+              onChanged={() => {
+                setPoolsChanged(n => n + 1)
+                load()
+              }}
+            />
             <ModelPicker models={models} value={detail.session.model ?? ''} onPick={pickModel} large />
             <EffortSlider value={detail.session.effort ?? ''} onPick={pickEffort} />
           </div>
@@ -958,6 +967,17 @@ export function Chat({ onChange }: { onChange: () => void }) {
           <div className="mx-4 mb-2 rounded-card border border-danger/40 bg-red-tint p-3 text-sm text-danger sm:mx-6">
             {error}
           </div>
+        )}
+        {detail?.session.pool_refusal && (
+          <PoolRefusalBanner
+            sessionId={id}
+            refusal={detail.session.pool_refusal}
+            busy={busy}
+            onSwitched={() => {
+              setPoolsChanged(n => n + 1)
+              load()
+            }}
+          />
         )}
         {failedCall && (
           <div className="mx-4 mb-2 rounded-card border border-danger/40 bg-red-tint px-4 py-3 text-sm sm:mx-6">
