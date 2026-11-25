@@ -352,3 +352,16 @@ def test_authority_overhead_is_sized_before_scoped_worktree_effect(launch_env):
             ctx, AgentSpec(brief, "demo", authority_message_id=str(message.pk))
         )
     assert calls == []
+
+
+def test_journal_protects_individual_watcher_but_allows_chat_deletion(launch_env):
+    from django.db.models.deletion import RestrictedError
+
+    start(launch_env)
+    worker = Worker.objects.get()
+    with pytest.raises(RestrictedError):
+        worker.delete()
+    assert Worker.objects.count() == 1
+    launch_env[0].session.delete()
+    assert not Worker.objects.exists()
+    assert not AgentLaunch.objects.exists()

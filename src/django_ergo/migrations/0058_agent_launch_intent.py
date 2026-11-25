@@ -48,7 +48,7 @@ class Migration(migrations.Migration):
                     models.OneToOneField(
                         blank=True,
                         null=True,
-                        on_delete=django.db.models.deletion.PROTECT,
+                        on_delete=django.db.models.deletion.RESTRICT,
                         related_name="launch",
                         to="django_ergo.worker",
                     ),

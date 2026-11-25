@@ -725,7 +725,7 @@ class AgentLaunch(TimeStampedMixin):
     watch_state = models.JSONField(default=dict)
     watch_title = models.CharField(max_length=200, default="")
     worker = models.OneToOneField(
-        Worker, null=True, blank=True, on_delete=models.PROTECT, related_name="launch"
+        Worker, null=True, blank=True, on_delete=models.RESTRICT, related_name="launch"
     )
 
     class Meta:
