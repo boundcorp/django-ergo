@@ -235,6 +235,7 @@ schedules:
       # (a schedule of only run steps: once, as the first admin)
     enabled: true
     id: weekly-stats # stable key (default: name), so `name` can change
+    allow_self_resolve: false # default: scheduled threads stay open
     continuity: true # default false: new threads list earlier runs
     continuity_runs: 5 # how many, default 5, at most 20
 ```

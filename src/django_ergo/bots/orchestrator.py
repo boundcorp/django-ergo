@@ -206,6 +206,8 @@ def chat_identity(session: ConversationSession, bot: Bot) -> str:
                 f"ergo_thread_send(bot={starter.bot_name!r}, thread={str(starter.id)!r}); "
                 "don't route through main."
             )
+    if archival.self_resolve_disabled(session):
+        identity += " This scheduled thread does not allow self-resolution; leave it open for the user."
     return identity
 
 
@@ -226,7 +228,7 @@ Resolving threads: keep the thread list to work that is still going on.
 - Resolve a thread (ergo_thread_resolve, with a one-line summary) when its work is
   finished: its PR was merged or closed, its answer was delivered, or the user
   wrapped it up. A thread resolves itself after its final report when nothing is
-  left open.
+  left open, unless the thread's schedule disallows self-resolution.
 - Never resolve one that is waiting on the user (its last reply asks something),
   on a worker, on a reply, or for an approval, or that has an open PR. The tool
   refuses the first ones; open PRs are up to you.
@@ -1105,7 +1107,14 @@ def resolve(
     """Resolve a finished thread (see ``ergo_thread_resolve``)."""
     current = ctx.session
     if not thread_id or thread_id == str(current.id):
-        current.refresh_from_db(fields=["is_permanent"])
+        current.refresh_from_db(fields=["is_permanent", "metadata"])
+        if archival.self_resolve_disabled(current):
+            name = current.metadata["schedule"]
+            msg = (
+                f"This thread was opened by schedule {name!r}, which does not "
+                "allow self-resolve; leave it open for the user."
+            )
+            raise _refused(msg, current)
         if current.is_permanent:
             msg = "This chat is permanent; remove permanence before resolving it."
             raise _refused(msg, current)
@@ -1172,7 +1181,7 @@ def ergo_thread_resolve(
 
 
 @bot_tool(takes_context=True)
-def ergo_thread_archive(ctx: ToolContext, thread_id: str, bot: str = "") -> dict:
+def ergo_thread_archive(ctx: ToolContext, thread_id: str = "", bot: str = "") -> dict:
     """Deprecated: use ergo_thread_resolve (the same thing)."""
     return resolve(ctx, thread_id, bot)
 

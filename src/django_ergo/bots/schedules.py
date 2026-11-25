@@ -329,6 +329,7 @@ class Schedule:
     aliases: tuple[str, ...] = ()  # earlier keys whose history this schedule adopts
     continuity: bool = False
     continuity_runs: int = DEFAULT_CONTINUITY_RUNS
+    allow_self_resolve: bool = False
 
     @property
     def key(self) -> str:
@@ -340,7 +341,7 @@ class Schedule:
         return tuple(dict.fromkeys((self.key, *self.aliases)))
 
     @classmethod
-    def from_config(cls, data: dict) -> Schedule:  # noqa: C901 — mutually exclusive schedule formats
+    def from_config(cls, data: dict) -> Schedule:  # noqa: C901, PLR0912 — mutually exclusive schedule formats
         if not isinstance(data, dict):
             msg = "each schedule needs name, cron and actions (or a message)"
             raise ScheduleError(msg)
@@ -386,11 +387,16 @@ class Schedule:
                 msg = "schedule timezone must be a valid IANA timezone"
                 raise ScheduleError(msg) from exc
         key, continuity, runs = _identity_options(name, data)
+        allow_self_resolve = data.get("allow_self_resolve", False)
+        if not isinstance(allow_self_resolve, bool):
+            msg = f"schedule {name}: allow_self_resolve must be true or false"
+            raise ScheduleError(msg)
         return cls(
             id=key or name,
             aliases=_aliases(name, data),
             continuity=continuity,
             continuity_runs=runs,
+            allow_self_resolve=allow_self_resolve,
             name=name,
             cron=Cron.parse(str(data["cron"])),
             actions=tuple(actions),
@@ -838,6 +844,9 @@ def _send_prompt(  # noqa: PLR0913
                 "schedule": run.schedule,
                 "schedule_id": run.schedule_key or run.schedule,
                 "schedule_run": run.pk,
+                "allow_self_resolve": schedule.allow_self_resolve
+                if schedule
+                else False,
             },
         )
     else:

@@ -234,6 +234,9 @@ schedules:
         to: { thread: "Receipts {date:%b %d}" }
 ```
 
+Scheduled threads stay open by default. Set `allow_self_resolve: true` on the
+schedule if the bot may resolve its own thread and idle archival may close it.
+
 For checks that should only wake a model when something changed, use a
 workflow. Core `ergo.models.check_available` uses only non-billable catalogs,
 persists its diff, and never enables models or changes routing:

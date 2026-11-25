@@ -43,12 +43,29 @@ OPEN_MESSAGES = [
 ]
 
 
-def archive(session: ConversationSession, reason: str = "") -> None:
+class AutomaticResolutionDisabledError(ValueError):
+    """The schedule requires the thread to stay open."""
+
+
+def self_resolve_disabled(session: ConversationSession) -> bool:
+    """Scheduled threads remain open unless their schedule opted in."""
+    metadata = session.metadata or {}
+    return (
+        bool(metadata.get("schedule"))
+        and metadata.get("allow_self_resolve") is not True
+    )
+
+
+def archive(
+    session: ConversationSession, reason: str = "", *, automatic: bool = False
+) -> None:
     from django_ergo.bots.recurring_wakes import cancel_session
 
     with transaction.atomic():
         locked = ConversationSession.objects.select_for_update().get(pk=session.pk)
         locked.require_closable()
+        if automatic and self_resolve_disabled(locked):
+            raise AutomaticResolutionDisabledError
         locked.status = "completed"
         locked.metadata = {
             **(locked.metadata or {}),
@@ -123,12 +140,12 @@ def archive_idle_threads(bots: Iterable[Bot], now: datetime | None = None) -> li
     for bot in bots:
         for session in idle_threads(bot, now):
             try:
-                archive(session, reason="idle")
-            except PermanentChatError:
+                archive(session, reason="idle", automatic=True)
+            except (PermanentChatError, AutomaticResolutionDisabledError):
                 import logging
 
                 logging.getLogger(__name__).info(
-                    "Skipped permanent chat during idle archival"
+                    "Skipped protected chat during idle archival"
                 )
                 continue
             archived.append(str(session.id))
