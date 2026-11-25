@@ -22,6 +22,7 @@
 | [Observability](observability.md)       | Read-only Grafana and Prometheus: bounded PromQL, target health, dashboard links, chart attachments |
 | [RunPod workers](runpod.md)             | Native GPU workers, scoped admission, durable rental ownership and independent cleanup              |
 | [Realtime voice](realtime-voice.md) | Native live voice and optional STT → normal text assistant → TTS; separate media consent and release gates |
+| [Model pools](model-pools.md)          | Ordered model pools, rollover gates, metered budgets, coding confinement and inherited privacy        |
 | [Agent skills](agent-skills.md)         | Ergo's skills for Claude Code and Codex, the `ergonaut-remote` command and API keys                 |
 
 ## Library

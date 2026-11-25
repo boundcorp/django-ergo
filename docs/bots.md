@@ -2634,6 +2634,15 @@ strip the suffix. Native compaction defaults to 75% of that window and
 keeps 25% verbatim. `max_context_tokens` remains a threshold alias;
 `rolling`/`stream` map to `context_size` and ignore message-count keys.
 
+## Model pools
+
+providers.yaml can group routes into ordered **pools** (`pools:`), with an
+`auto_rollover` gate, per-pool budgets for metered (API-billed) routes,
+provider on/off switches and inherited **privacy** policies (`privacy:`;
+every private pool is one). Chats, titles, browser tasks, coding agents and
+background work all select through `django_ergo.bots.pools`. Without a
+`pools:` section nothing changes. See [Model pools](model-pools.md).
+
 ## Private inference
 
 A **private pool** is a set of API-billed models that only the bots it
@@ -2812,7 +2821,9 @@ so set one.
 
 ### Coding agents
 
-`ergo_agent_start`, `orca_start_worker` and `agents.start` refuse a private
+Coding workers follow the active pool ([Model pools](model-pools.md#coding-agents));
+a privacy-restricted origin (a private pool's bots, their nested bots and
+threads) can't start them. `ergo_agent_start`, `orca_start_worker` and `agents.start` refuse a private
 selector, a Fireworks model ID or any model containing `fireworks`, before
 any side effect, including a model picked from an `agents` tier. Their
 harnesses can't carry or enforce a grant, so private coding agents aren't
