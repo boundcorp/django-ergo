@@ -132,6 +132,18 @@ def _coverage(discovery) -> str:
     return "complete for classified non-personal sessions with recorded activity in the window"
 
 
+def _work_assertions(completions) -> dict:
+    """Project only the structured scalar; never load report prose or infer success."""
+    counts = dict.fromkeys(("completed", "partial", "blocked", "failed", "unknown"), 0)
+    for value in completions.values_list("result__work_disposition", flat=True):
+        key = value if isinstance(value, str) and value in counts else "unknown"
+        counts[key] += 1
+    return {
+        "counts": counts,
+        "basis": "explicit worker result work_disposition assertions; missing or malformed fields unknown; not authenticated acceptance or verified execution",
+    }
+
+
 def report(ctx, end_utc: str, session_ids: list[str] | None = None) -> dict:
     """Aggregate counts for explicitly selected or automatically discovered non-personal sessions; never read payloads."""
     try:
@@ -238,6 +250,7 @@ def report(ctx, end_utc: str, session_ids: list[str] | None = None) -> dict:
                 .annotate(n=Count("id"))
                 .order_by("status")
             },
+            "work_assertions": _work_assertions(completions),
             "basis": "one Worker row per attempt; created_at for starts, completed_at for results",
         },
         "wakes": {

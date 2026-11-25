@@ -643,6 +643,33 @@ Orca transport status: `completed`, `partial`, `blocked`, or `failed` only when
 the dispatch-scoped report explicitly supplies that value in its JSON payload;
 otherwise it is null. Orca’s existing `--payload` option can carry this field;
 its `--outcome` still describes transport completion or failure.
+New worker briefs explain how to emit it. Orca rejects mixing `--payload` with
+structured payload flags, so replace **all** of `--task-id`, `--dispatch-id`,
+`--outcome`, `--files-modified` and `--report-path` with a complete JSON payload
+on the original, single `worker_done` command (keep its sender and capability):
+
+```sh
+--payload '{"taskId":"<task>","dispatchId":"<dispatch>","outcome":"succeeded","work_disposition":"partial","filesModified":["example.py"],"reportPath":"report.md"}'
+```
+
+Here `partial` is the worker's assertion even if the transport settled
+successfully. Missing or malformed payloads remain unknown; no report prose is
+parsed. The structured field precedes prose in the coordinator's bounded result
+preview and remains in the full `ergo_worker_list` result. It proves neither
+authenticated task acceptance nor verified execution.
+
+The separate `plugins/orca_native_usage.py` consumer is an integration seam,
+currently **unwired**. It accepts a trusted, exact-dispatch `worker-show`
+`nativeUsageIdentity` receipt only on its explicitly mapped files host, with a
+closed fresh-session exclusive byte interval, file identity and digest. It reads
+only that interval and emits timestamped deduplicated token metadata, never
+transcript text. Missing identity, scope, interval or timestamps stays unknown;
+cwd and time are never session identity. The upstream export must be shipped and
+captured by the watcher before this can account for production native workers.
+Profile identity remains unverified, so this seam does not assign ledger ownership
+or change thread totals. Caller authorization for the worker and session is
+required before any host-side read.
+
 `orca_start_worker(spec, worktree, agent)` is the
 same as `ergo_agent_start` with Orca's parameter names; workers started before
 agents existed (`orca:watch`) keep working. Each check also
@@ -2840,7 +2867,11 @@ to the calling bot. No message text, titles or tool arguments are returned.
 
 Workers are counted once per stored worker row by creation or completion time,
 with current status for completed rows; one-shot and recurring wakes use separate
-fired and dispatch timestamps. Tool failures are stored error result blocks, with
+fired and dispatch timestamps. `workers.work_assertions.counts` separately counts
+the explicit structured result field (`completed`, `partial`, `blocked`, `failed`,
+or `unknown`); absent/malformed fields are unknown regardless of transport status
+or report prose. These are worker assertions, not acceptance/execution evidence.
+Tool failures are stored error result blocks, with
 stored result blocks as denominator, not a complete count of attempted calls.
 Agent token totals come only from timestamped native usage events linked to the
 selected workers, never cumulative worker totals. When multiple native sessions

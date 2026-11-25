@@ -33,6 +33,16 @@ For the latest instruction, send its requested status acknowledgement naming the
 instruction id, version and concrete next action BEFORE proceeding. A read flag,
 transport receipt or heartbeat is not this acknowledgement. Repeat acknowledgements
 idempotently on replay; never re-execute side effects because mail was replayed.
+In your one worker_done command, use --payload with a complete JSON object
+containing taskId, dispatchId, outcome, work_disposition, filesModified and
+reportPath (when applicable). Copy the exact task and dispatch IDs from your
+preamble. Replace the structured --task-id, --dispatch-id, --outcome,
+--files-modified and --report-path flags; Orca rejects mixing those with --payload.
+Set work_disposition to "completed" when all requested work is done, or use
+"partial", "blocked", or "failed" as appropriate. This is your work assertion,
+separate from --outcome transport status, authenticated acceptance and verified
+execution; omitting it leaves the work disposition unknown. Never send a second
+worker_done just to add or correct this field.
 When work cannot proceed within its authorized scope, use the
 normal failed worker_done command and begin its subject with "[scope_blocked] ".
 This is your assertion, not a grant or an authorization decision. Use ordinary

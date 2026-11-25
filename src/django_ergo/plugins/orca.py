@@ -1576,11 +1576,13 @@ class OrcaPlugin(BotPlugin):
                 )
             result = {
                 "status": status or "completed",
+                # Keep the structured assertion ahead of potentially long prose:
+                # the coordinator's worker event has a bounded text preview.
+                "work_disposition": self._work_disposition(report, dispatch),
                 "subject": (report or {}).get("subject") or "",
                 "report": body,
                 "dispatch": dispatch,
             }
-            result["work_disposition"] = self._work_disposition(report, dispatch)
             result.update(self._scope_blocked_report(report, dispatch, status))
             return AgentCheck("done", questions=questions, report=result)
         if not ctx.stopping:

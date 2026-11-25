@@ -409,3 +409,55 @@ def test_discovery_returns_no_content(scope):
     SessionMessage.objects.filter(pk=message.pk).update(created_at=now)
     result = report(scope, (now + timedelta(seconds=1)).isoformat())
     assert "secret chat words" not in str(result)
+
+
+def test_explicit_work_assertions_are_scoped_and_separate_from_transport(scope):
+    end = datetime.now(UTC) + timedelta(seconds=1)
+    for value in (
+        "completed",
+        "partial",
+        "blocked",
+        "failed",
+        None,
+        [],
+        True,
+        "invented",
+    ):
+        Worker.objects.create(
+            session=scope.session,
+            bot_name="shop",
+            title="work",
+            function="agent:orca",
+            status="completed",
+            completed_at=end - timedelta(seconds=1),
+            result={"work_disposition": value, "report": "completed successfully"},
+        )
+    # Missing evidence, prose and a transport status alone remain unknown.
+    Worker.objects.create(
+        session=scope.session,
+        bot_name="shop",
+        title="legacy",
+        function="agent:orca",
+        status="completed",
+        completed_at=end - timedelta(seconds=1),
+        result="Work completed",
+    )
+    foreign = _session(get_user_model().objects.create(username="foreign-assertion"))
+    Worker.objects.create(
+        session=foreign,
+        bot_name="shop",
+        title="foreign",
+        function="agent:orca",
+        status="completed",
+        completed_at=end - timedelta(seconds=1),
+        result={"work_disposition": "completed"},
+    )
+    result = report(scope, end.isoformat(), [str(scope.session.pk)])["workers"]
+    assert result["results_by_current_status"] == {"completed": 9}
+    assert result["work_assertions"]["counts"] == {
+        "completed": 1,
+        "partial": 1,
+        "blocked": 1,
+        "failed": 1,
+        "unknown": 5,
+    }
