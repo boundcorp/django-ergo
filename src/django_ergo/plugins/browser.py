@@ -211,7 +211,7 @@ class BrowserPlugin(BotPlugin):
     name = "browser"
     description = "Drive a Chrome browser (open pages, read them, click and type)"
 
-    def task_model(self, session, model: str = "") -> str:  # noqa: C901, PLR0912
+    def task_model(self, session, model: str = "") -> str:  # noqa: PLR0915, C901, PLR0912
         """Resolve the browser's model at execution, without an API fallback."""
         from django_ergo.bots import routing
         from django_ergo.conversation.inference_policy import PolicyError
@@ -232,6 +232,17 @@ class BrowserPlugin(BotPlugin):
 
         ref = str(model or self.configured_driver).strip()
         providers.check_public(ref, where="Browser")
+        from django_ergo.bots import pools
+
+        privacy = pools.privacy_for(self.bot, session)
+        if privacy.restricted:
+            msg = f"Privacy policy {privacy.label()} covers this chat; the browser driver has no approved model"
+            raise PolicyError(msg)
+        if not providers.pools.legacy:
+            # The chat's active pool decides, like a chat turn (no CLI-only rule).
+            return pools.select_route(
+                self.bot, session, ref=ref, consumer=pools.BROWSER
+            ).route
         if routing.is_auto(ref):
             tier = routing.tier_of(ref)
             if tier not in providers.routing.tiers:
@@ -257,6 +268,7 @@ class BrowserPlugin(BotPlugin):
             else:
                 refs = [m.id for m in providers.models() if m.name == ref]
         usage = routing.current_usage()
+        off = routing.switched_off()
         candidates = []
         for candidate in refs:
             found = providers.find(candidate)
@@ -266,6 +278,7 @@ class BrowserPlugin(BotPlugin):
                     provider.transport == "cli"
                     and not provider.worker_only
                     and provider.available
+                    and provider.name not in off
                     and not routing.pace_block(provider.name, usage, selected.name)
                 ):
                     candidates.append(candidate)
@@ -1020,12 +1033,26 @@ class BrowserPlugin(BotPlugin):
             wrap_up=True,
         )
         started = time.monotonic()
+        driver = self.task_model(ctx.session, model)
+        decision = None
+        if not self.bot.providers.pools.legacy and not self.bot.private_pool:
+            from django_ergo.bots import pools
+
+            # The spend authority for a metered driver route (record=False: the
+            # selection above already left its receipt).
+            decision = pools.select_route(
+                self.bot,
+                ctx.session,
+                ref=driver,
+                consumer=pools.BROWSER,
+                record=False,
+            )
         result = async_to_sync(run_structured_call)(
             spec,
             request,
             user=ctx.user,
             engine=self.bot.make_engine(
-                ctx.session, self.task_model(ctx.session, model), purpose="browser"
+                ctx.session, driver, purpose="browser", decision=decision
             ),
             control=Stop(),
             metadata={"session": str(ctx.session.pk), "worker": str(ctx.worker.pk)},

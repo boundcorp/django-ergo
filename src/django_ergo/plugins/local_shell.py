@@ -109,6 +109,14 @@ NEVER_PASS = {
     "OPENAI_BASE_URL",
 }
 DEFAULT_PASS_ENV = ("PATH", "HOME", "LANG", "LC_ALL", "TZ", "USER")
+# A confined metered launch (bots.pools) gets exactly one provider credential;
+# every variable that names another provider's key, endpoint or cloud switch
+# is dropped, whatever pass_env or secrets list.
+CREDENTIAL_SUFFIXES = ("_API_KEY", "_AUTH_TOKEN", "_ACCESS_TOKEN", "_BASE_URL")
+CONFINED_KEYS = {
+    "codex": ("OPENAI_API_KEY", "CODEX_API_KEY"),
+    "claude": ("ANTHROPIC_API_KEY",),
+}
 DEFAULT_TOOLS = ("Read", "Write", "Edit", "Glob", "Grep", "Bash")
 MAX_ATTACH_BYTES = 50_000_000  # a job file attached to the chat
 MAX_UPLOAD_BYTES = 200_000_000  # a chat file copied into a job (streamed)
@@ -543,7 +551,9 @@ class LocalShellPlugin(BotPlugin):
             notes["missing_secrets"] = missing
         return notes
 
-    def env(self, ctx) -> dict[str, str]:
+    def env(
+        self, ctx, confinement: dict | None = None, folder: Path | None = None
+    ) -> dict[str, str]:
         env = {
             k: os.environ[k]
             for k in self.pass_env
@@ -552,7 +562,57 @@ class LocalShellPlugin(BotPlugin):
         for name in self.secrets:
             if value := ctx.secret(name):
                 env[name] = value
+        if confinement:
+            return self.confined_env(env, confinement, folder)
         return env
+
+    @staticmethod
+    def confined_env(
+        env: dict[str, str], confinement: dict, folder: Path | None
+    ) -> dict[str, str]:
+        """``env`` limited to one metered provider: other credentials, endpoint
+        overrides and cloud switches removed, the selected key added under the
+        agent CLI's name, and HOME a fresh job-local folder, so no logged-in
+        subscription or user config can move the CLI to another provider."""
+        agent = str(confinement.get("agent") or "")
+        names = CONFINED_KEYS.get(agent)
+        key_env = str(confinement.get("key_env") or "")
+        if not names or not key_env:
+            msg = f"local_shell can't confine {agent or 'this agent'} to a metered provider"
+            raise LocalShellError(msg)
+        key = os.environ.get(key_env, "")
+        if not key:
+            msg = f"{key_env} isn't set; the metered route can't launch"
+            raise LocalShellError(msg)
+        clean = {
+            k: v
+            for k, v in env.items()
+            if k not in NEVER_PASS
+            and not is_protected_env(k)
+            and not k.endswith(CREDENTIAL_SUFFIXES)
+            and not k.startswith(("CLAUDE_CODE_USE_", "AWS_", "GOOGLE_", "AZURE_"))
+        }
+        for name in names:
+            clean[name] = key
+        if folder is not None:
+            home = folder / META / "home"
+            home.mkdir(parents=True, exist_ok=True)
+            clean["HOME"] = str(home)
+        return clean
+
+    @staticmethod
+    def confined_argv(agent: str, confinement: dict) -> list[str]:
+        """Flags that pin the CLI to the confined provider and model."""
+        model = str(confinement.get("model") or "")
+        if not model:
+            msg = "A confined launch needs an explicit model"
+            raise LocalShellError(msg)
+        if agent == "codex":
+            return ["-c", 'model_provider="openai"', "--model", model]
+        if agent == "claude":
+            return ["--model", model]
+        msg = f"local_shell can't confine {agent}"
+        raise LocalShellError(msg)
 
     def argv(
         self, agent: str, prompt: str, *, model: str, number: int, resume: str = ""
@@ -600,6 +660,7 @@ class LocalShellPlugin(BotPlugin):
         number: int,
         *,
         question_id: str = "",
+        confinement: dict | None = None,
     ) -> None:
         meta = folder / META
         meta.mkdir(parents=True, exist_ok=True)
@@ -622,7 +683,7 @@ class LocalShellPlugin(BotPlugin):
             subprocess.Popen(  # noqa: S603 — fixed interpreter and runner; argv from config
                 [sys.executable, str(RUNNER), str(folder), str(number)],
                 cwd=folder,
-                env=self.env(ctx),
+                env=self.env(ctx, confinement, folder),
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -662,8 +723,25 @@ class LocalShellPlugin(BotPlugin):
         (folder / "brief.md").write_text(spec.brief, encoding="utf-8")
         number = (self.runs(folder) or [0])[-1] + 1
         prompt = "Do the task in brief.md.\n\n" + spec.brief
-        argv = self.argv(agent, prompt, model=spec.model, number=number)
-        self.launch(ctx, folder, agent, argv, number)
+        confinement = spec.confinement
+        if confinement:
+            if confinement.get("agent") != agent:
+                msg = (
+                    f"The metered route is for {confinement.get('agent')}, not {agent}"
+                )
+                raise LocalShellError(msg)
+            argv = self.argv(agent, prompt, model="", number=number)
+            argv = self._with_confinement(argv, agent, confinement)
+        else:
+            argv = self.argv(agent, prompt, model=spec.model, number=number)
+        self.launch(
+            ctx,
+            folder,
+            agent,
+            argv,
+            number,
+            **({"confinement": confinement} if confinement else {}),
+        )
         handle = {"job": folder.name, "dir": str(folder), "agent": agent, "run": number}
         if warnings := _warnings(notes):
             handle["warnings"] = warnings
@@ -950,7 +1028,7 @@ class LocalShellPlugin(BotPlugin):
             },
         )
 
-    def reply(self, ctx, handle: dict, question_id: str, text: str) -> str:
+    def reply(self, ctx, handle: dict, question_id: str, text: str) -> str:  # noqa: C901
         folder = Path(handle["dir"])
         meta = folder / META
         if not meta.is_dir():
@@ -1001,9 +1079,33 @@ class LocalShellPlugin(BotPlugin):
             number += 1
             notes = self.prepare(ctx, folder)
             argv = self.argv(agent, text, model="", number=number, resume=session)
-            self.launch(ctx, folder, agent, argv, number, question_id=question_id)
+            confinement = handle.get("confinement") or None
+            if confinement:
+                from django_ergo.bots import pools
+
+                # A resumed run is a new launch: same pool rules, a fresh reservation.
+                pools.revalidate_launch(ctx.bot, ctx.session, confinement)
+                argv = self._with_confinement(argv, agent, confinement)
+            self.launch(
+                ctx,
+                folder,
+                agent,
+                argv,
+                number,
+                question_id=question_id,
+                **({"confinement": confinement} if confinement else {}),
+            )
             done = f"Resumed job {folder.name} with the answer (run {number})."
             return " ".join([done, *_warnings(notes)])
+
+    def _with_confinement(
+        self, argv: list[str], agent: str, confinement: dict
+    ) -> list[str]:
+        """``argv`` with the confined provider/model flags right after the CLI."""
+        flags = self.confined_argv(agent, confinement)
+        prefix = len(self.command_prefix)
+        cli = argv[prefix : prefix + (2 if agent == "codex" else 1)]  # codex exec
+        return [*argv[:prefix], *cli, *flags, *argv[prefix + len(cli) :]]
 
     def stop(self, handle: dict) -> str:
         folder = Path(handle["dir"])
@@ -1291,6 +1393,13 @@ class LocalShellAgents(AgentManager):
 
     name = "local"
     default_agent = "claude"
+    # Each run's environment and argv are built here, so a launch can be held to
+    # one provider key and model (LocalShellPlugin.confined_env), as defense in
+    # depth. That isn't a spend bound: claude/codex run many turns with no
+    # enforced dollar or token ceiling, so metered_spend_bound stays False and
+    # metered pool routes are refused (bots.agents.AgentManager).
+    metered_confinement = True
+    metered_spend_bound = False
 
     def __init__(self, plugin: LocalShellPlugin):
         self.plugin = plugin

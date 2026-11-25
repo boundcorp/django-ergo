@@ -46,7 +46,7 @@ MODEL = "model"
 KINDS = (AGENT, MODEL)
 
 
-def available(bot: Bot, kind: str = "") -> dict:
+def available(bot: Bot, kind: str = "", session=None) -> dict:
     """What ``bot`` may hand a task it starts, with routing's pick for each tier
     right now (runs the ORM). ``kind`` (``agent`` or ``model``) narrows it."""
     if kind and kind not in KINDS:
@@ -55,6 +55,8 @@ def available(bot: Bot, kind: str = "") -> dict:
     if pool := bot.private_pool:
         return _pool_view(bot, pool)
     providers = bot.providers
+    if not providers.pools.legacy:
+        return _active_pool_view(bot, kind, session)
     out: dict = {}
     if kind in ("", AGENT):
         out["agent_tiers"] = [
@@ -84,6 +86,57 @@ def available(bot: Bot, kind: str = "") -> dict:
         "for lookups and mechanical edits, medium for ordinary tasks, large or "
         "xlarge for hard design or debugging. Coding agents take an agent tier "
         "(tier=...); model tasks take auto/<tier> or a listed model (model=...)."
+    )
+    return out
+
+
+def _active_pool_view(bot: Bot, kind: str, session=None) -> dict:
+    """With pools configured: what the chat's active pool offers (the same
+    eligibility selection uses, ``bots.pools.listing``)."""
+    from django_ergo.bots import pools
+
+    view = pools.listing(bot, session)
+    active = next((p for p in view["pools"] if p["name"] == view["active"]), None)
+    out: dict = {
+        "pool": view["active"],
+        "pool_mode": view["mode"],
+        "pools": [
+            {"name": p["name"], "label": p["label"], "status": p["status"]}
+            for p in view["pools"]
+        ],
+    }
+    if active is None:
+        out["how_to_pick"] = "No pool is usable now; ask the person to pick one."
+        return out
+    pool = bot.providers.pools.get(active["name"])
+    if kind in ("", AGENT) and pool is not None:
+        out["agent_tiers"] = [
+            {"tier": tier, "candidates": [agent_label(c) for c in choices]}
+            for tier in bot.providers.routing.agents
+            if (choices := pools.agent_candidates(bot.providers, pool, tier))
+        ]
+    if kind in ("", MODEL):
+        tiers = []
+        for tier, refs in active["tiers"].items():
+            try:
+                pick = pools.select_route(
+                    bot, session, ref=f"{AUTO}{tier}", record=False
+                ).route
+            except pools.PoolRefusal as exc:
+                pick = f"none now ({exc})"
+            tiers.append(
+                {"model": f"{AUTO}{tier}", "pick_now": pick, "candidates": refs}
+            )
+        out["model_tiers"] = tiers
+        out["models"] = [
+            {"model": m["id"], "label": m["label"], "available": m["available"]}
+            for m in active["models"]
+        ]
+        if default := bot.model_ref():
+            out["default"] = default
+    out["how_to_pick"] = (
+        f"Work runs in the {active['label']} pool. Pass a tier unless the task "
+        "needs one model; a pinned model must be one of this pool's models."
     )
     return out
 
@@ -218,6 +271,6 @@ def models_toolkit(bot: Bot, ctx: ToolContext):
         },
     )
     def list_models(ctx: ToolContext, kind: str = "") -> dict:
-        return available(ctx.bot, kind)
+        return available(ctx.bot, kind, ctx.session)
 
     return FunctionToolkit([list_models.__bot_tool__], ctx)
