@@ -149,6 +149,27 @@ DEFAULT_PRICES: dict[str, dict[str, float]] = {
         "cache_write": 0.125,
         "cache_read": 0.01,
     },
+    # Google Gemini API, standard paid tier, checked 2026-11-25 at
+    # https://ai.google.dev/gemini-api/docs/pricing (now served from
+    # aistudio.google.com/docs/pricing). Output includes thinking tokens;
+    # cache_read is the cached-input rate. gemini-3.1-pro-preview and
+    # gemini-3-flash-preview were read from the page; the 2.5 rows came from a
+    # page summary: re-verify before relying on them for budgets.
+    "gemini-2.5-pro": {
+        "long_context": {"threshold": 200_000, "input": 2, "output": 1.5},
+        "input": 1.25,
+        "output": 10.00,
+        "cache_read": 0.125,
+    },
+    "gemini-2.5-flash": {"input": 0.30, "output": 2.50, "cache_read": 0.03},
+    "gemini-2.5-flash-lite": {"input": 0.10, "output": 0.40, "cache_read": 0.01},
+    "gemini-3.1-pro-preview": {
+        "long_context": {"threshold": 200_000, "input": 2, "output": 1.5},
+        "input": 2.00,
+        "output": 12.00,
+        "cache_read": 0.20,
+    },
+    "gemini-3-flash-preview": {"input": 0.50, "output": 3.00, "cache_read": 0.05},
     "gpt-6-sol": {
         "long_context": {"threshold": 272_000, "input": 2, "output": 1.5},
         "input": 2.00,

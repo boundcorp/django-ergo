@@ -5,6 +5,7 @@ ENGINE_REGISTRY = {
     ("claude", "cli"): "django_ergo.conversation.engines.claude_code.ClaudeCodeEngine",
     ("openai", "api"): "django_ergo.conversation.engines.openai_api.OpenAIAPIEngine",
     ("openai", "cli"): "django_ergo.conversation.engines.codex_cli.CodexCLIEngine",
+    ("google", "api"): "django_ergo.conversation.engines.google_api.GoogleAPIEngine",
     # Private pools only (bots.providers private_pools); it refuses to send
     # without a grant (conversation.inference_policy).
     (

@@ -35,6 +35,20 @@ defaults from the listed subscription models (``DEFAULT_TIER_MODELS``); YAML
 can replace them or add tiers. ``low`` and ``high`` are aliases of small and
 large.
 
+``type: google`` is the Gemini API (``conversation.engines.google_api``). Its
+key is read from ``api_key_env`` (alias ``key_env``, default ``GEMINI_API_KEY``,
+falling back to ``GOOGLE_API_KEY``) when a request is sent. A model may list a
+exact ``price`` (USD per million tokens; see ``_price``): a metered pool route
+needs it, and the built-in telemetry table is never spend authority::
+
+      google:
+        type: google
+        key_env: GEMINI_API_KEY
+        config: {reasoning_effort: medium}
+        models:
+          - name: gemini-2.5-flash
+            price: {input: 0.30, cached: 0.03, output: 2.50}
+
 ``transport: cli`` runs models on the subscription a CLI on this machine is
 logged in with: Claude models through the Claude Code CLI
 (``conversation.engines.claude_code``), OpenAI models through the Codex CLI
@@ -121,6 +135,7 @@ PROVIDERS_FILE = "providers.yaml"
 ROUTING_FILE = "routing.md"
 ENGINE_TYPES = ("openai", "claude", "google")
 PROVIDER_TYPES = (*ENGINE_TYPES, "omp")
+GOOGLE_KEY_ENV = "GEMINI_API_KEY"
 TRANSPORTS = {
     "openai": ("api", "cli"),
     "claude": ("api", "cli"),
@@ -215,6 +230,10 @@ class Provider:
             from django_ergo.conversation.engines.claude_code import claude_installed
 
             return claude_installed(self.config.get("command", ""))
+        if self.type == "google":
+            from django_ergo.conversation.engines.google_wire import configured
+
+            return configured(self.api_key_env)
         return not self.api_key_env or bool(os.environ.get(self.api_key_env))
 
 
@@ -346,7 +365,11 @@ class Providers:
                 name=str(name),
                 type=kind,
                 transport=transport,
-                api_key_env=str(spec.get("api_key_env") or ""),
+                api_key_env=str(
+                    spec.get("api_key_env")
+                    or spec.get("key_env")
+                    or (GOOGLE_KEY_ENV if kind == "google" else "")
+                ),
                 config=dict(spec.get("config") or {}),
                 account=_worker_account(name, kind, spec),
                 enabled=enabled,

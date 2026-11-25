@@ -2643,6 +2643,58 @@ metered (API-billed) routes, provider on/off switches and inherited
 background work all select through `django_ergo.bots.pools`. Without a
 `pools:` section nothing changes. See [Model pools](model-pools.md).
 
+### Google Gemini models
+
+`type: google` runs Gemini models on the Gemini API
+(`generativelanguage.googleapis.com`, `v1beta` `generateContent`) with chats,
+tool loops (parallel calls included), structured calls, image and PDF input,
+and thinking. It needs no extra package. The key is read from the environment
+when a request is sent (`key_env`, also spelled `api_key_env`; it defaults to
+`GEMINI_API_KEY`, and `GOOGLE_API_KEY` is the fallback). The key is never
+stored in config, metadata or errors; a missing key fails the turn with an
+authentication error and sends nothing.
+
+```yaml
+providers:
+  google:
+    type: google
+    key_env: GEMINI_API_KEY
+    config: {reasoning_effort: medium} # none|minimal|low|medium|high -> thinking config
+    models:
+      - name: gemini-2.5-pro
+        price: {input: 1.25, cached: 0.125, output: 10.00, long_context: {threshold: 200000, input: 2, output: 1.5}}
+      - name: gemini-2.5-flash
+        price: {input: 0.30, cached: 0.03, output: 2.50}
+      - name: gemini-3-pro-preview # not on the pricing page when checked: fill in or leave out `price`
+        price: {input: 2.00, cached: 0.20, output: 12.00}
+```
+
+- **Prices are configuration, not facts.** `price` is USD per million tokens
+  (`output` includes thinking tokens; `cached` defaults to `input`;
+  `long_context` multiplies a request's rates once its prompt passes
+  `threshold`). `Providers.price("google/gemini-2.5-flash")` returns it for a
+  budget that estimates worst-case cost. Verify every number on
+  <https://ai.google.dev/gemini-api/docs/pricing> before relying on it. The
+  examples were read there on 2026-11-25 (the 2.5 rows from a page summary);
+  `gemini-3-pro-preview` was not listed, so its numbers above are copied from
+  `gemini-3.1-pro-preview`. Cost accounting of finished calls uses the built-in
+  table (`pricing.DEFAULT_PRICES`) or `DJANGO_ERGO["MODEL_PRICES"]`.
+- **Thinking.** Chat effort (or `reasoning_effort`) maps to `thinkingLevel` on
+  Gemini 3 and `thinkingBudget` on 2.5, clamped to what each model accepts
+  (2.5 Pro and Gemini 3 can't turn thinking off). `thinking_level`,
+  `thinking_budget` and `include_thoughts` set them directly. Thinking tokens
+  count as output and toward `max_tokens`.
+- **Other config:** `max_tokens`, `temperature`, `timeout` (seconds), `stream:
+  true` (uses `streamGenerateContent` and merges the chunks).
+- **Errors** are typed so routing can tell them apart: `AuthenticationError`
+  (missing or rejected key), `QuotaExhaustedError` (429 for a daily, billing or
+  spend quota: move to another model), `RateLimitError` (429 per minute, with
+  `retry_after`), `OverloadedError` and `InternalServerError` (retried by
+  structured calls), `BadRequestError`. A safety block ends the turn as a
+  refusal, so the chat can offer it on another model.
+- Google is never a coding-agent provider here; pools and tiers decide where
+  Gemini may be used.
+
 ## Private inference
 
 A **private pool** is a set of API-billed models that only the bots it
