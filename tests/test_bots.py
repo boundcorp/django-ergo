@@ -1900,6 +1900,35 @@ async def test_idle_threads_are_archived_and_reopen_on_a_message(tmp_path):
 
 
 @pytest.mark.django_db(transaction=True)
+async def test_browser_session_alone_does_not_block_idle_archival(tmp_path):
+    from datetime import timedelta
+
+    from django.utils import timezone
+
+    from django_ergo.bots import archival
+    from django_ergo.conversation.models import Worker
+
+    user = await User.objects.acreate(username="idle-browser")
+    bot, _ = make_bot(tmp_path, say("ok"))
+    session = await bot.create_session(user)
+    await Worker.objects.acreate(
+        session=session, function="browser:session", status="running"
+    )
+    await ConversationSession.objects.filter(pk=session.pk).aupdate(
+        updated_at=timezone.now() - timedelta(days=8)
+    )
+    assert await sync_to_async(
+        lambda: archival.idle_threads(bot).filter(pk=session.pk).exists()
+    )()
+    await Worker.objects.acreate(
+        session=session, function="browser:task", status="running"
+    )
+    assert not await sync_to_async(
+        lambda: archival.idle_threads(bot).filter(pk=session.pk).exists()
+    )()
+
+
+@pytest.mark.django_db(transaction=True)
 async def test_archiving_a_thread_cancels_its_workers(tmp_path):
     from datetime import timedelta
 
@@ -4531,54 +4560,6 @@ def test_configured_permanence_respects_explicit_unmark_after_reload(tmp_path):
 
 
 @pytest.mark.django_db(transaction=True)
-def test_closure_waits_for_concurrent_permanence_change(monkeypatch):
-    import threading
-    from concurrent.futures import ThreadPoolExecutor
-
-    from django.db import DatabaseError
-    from django.db import close_old_connections
-    from django.db import transaction
-
-    user = User.objects.create(username="closure-race-owner")
-    session = ConversationSession.objects.create(
-        user=user, status="active", engine_type="claude"
-    )
-    guarded = threading.Event()
-    release = threading.Event()
-    original_guard = ConversationSession.require_closable
-
-    def pause_after_guard(row):
-        original_guard(row)
-        guarded.set()
-        assert release.wait(10)
-
-    monkeypatch.setattr(ConversationSession, "require_closable", pause_after_guard)
-
-    def close():
-        try:
-            stale = ConversationSession.objects.get(pk=session.pk)
-            stale.status = "completed"
-            stale.save(update_fields=["status"])
-        finally:
-            close_old_connections()
-
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(close)
-        try:
-            assert guarded.wait(10)
-            # NOWAIT proves the guard is still inside the row-locked section.
-            with pytest.raises(DatabaseError), transaction.atomic():
-                ConversationSession.objects.select_for_update(nowait=True).get(
-                    pk=session.pk
-                )
-        finally:
-            release.set()
-            future.result(timeout=10)
-    session.refresh_from_db()
-    assert session.status == "completed"
-
-
-@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("native_history", ["full", "turn"])
 async def test_record_message_is_history_without_a_turn(
     tmp_path, thread_messages, native_history
@@ -4609,6 +4590,8 @@ async def test_record_message_is_history_without_a_turn(
     assert stored.role == "user"
     assert stored.author["kind"] == "bot"
     assert stored.provenance["delivery_mode"] == "record"
+    if native_history == "full":
+        assert await sync_to_async(messaging.recorded_reports)(recipient) == ""
     message = await ThreadMessage.objects.aget(id=result["message_id"])
     assert message.status == "answered" and message.metadata["report"]
     # Even if history has already been compacted, the next real turn sees it.
@@ -4633,7 +4616,7 @@ async def test_record_message_is_history_without_a_turn(
 @pytest.mark.parametrize(
     ("kind", "mode", "ask", "main", "expected"),
     [
-        ("message", "auto", False, False, "record"),
+        ("message", "auto", False, False, "invoke"),
         ("question", "auto", False, False, "invoke"),
         ("message", "response", False, False, "invoke"),
         ("message", "auto", True, False, "invoke"),
@@ -4700,7 +4683,6 @@ async def test_record_rejects_action_options(tmp_path, thread_messages):
 async def test_worker_followup_to_task_starter(tmp_path, thread_messages, mode):
     from django_ergo.bots import messaging
     from django_ergo.bots import orchestrator
-    from django_ergo.conversation.models import StructuredCall
     from django_ergo.conversation.models import ThreadMessage
 
     user = await User.objects.acreate(username="worker-followup")
@@ -4731,33 +4713,17 @@ async def test_worker_followup_to_task_starter(tmp_path, thread_messages, mode):
         .afirst()
     )
     assert "Key checked." in followup.text
-    if mode == "auto":
-        assert followup.metadata["reply_mode"] == "record"
-        assert SENT == []
-        assert not await StructuredCall.objects.filter(session=starter).aexists()
-    else:
-        assert [str(followup.id)] == SENT
+    assert [str(followup.id)] == SENT
 
 
 @pytest.mark.django_db(transaction=True)
 async def test_record_return_setting_and_human_facing_thread(tmp_path, settings):
     from django_ergo.bots import messaging
-    from django_ergo.conversation.models import StructuredCall
 
     user = await User.objects.acreate(username="return-compat")
     bot, _ = make_bot(tmp_path, say("Ready."))
     root = await bot.root_session(user)
     starter = await bot.create_session(user, metadata={"started_by": str(root.id)})
-    assert await sync_to_async(messaging.return_policy)(starter) == {
-        "reply_mode": "record",
-        "report": True,
-    }
-    call = await StructuredCall.objects.acreate(
-        session=starter, kind="chat_reply", status="in_progress"
-    )
-    assert await sync_to_async(messaging.return_policy)(starter) == {}
-    await call.adelete()
-    settings.DJANGO_ERGO = {**settings.DJANGO_ERGO, "THREAD_REPORTS_RECORD": False}
     assert await sync_to_async(messaging.return_policy)(starter) == {}
 
 
@@ -4807,3 +4773,120 @@ async def test_record_during_tool_work_defers_past_results(tmp_path, thread_mess
     )()
     assert [row.id for row in rows] == [tool.id, result.id, report.id]
     assert SENT == [] and engine._client.calls == []
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_explicit_record_return_and_originating_worker_request(
+    tmp_path, thread_messages
+):
+    from django_ergo.bots import messaging
+    from django_ergo.bots import orchestrator
+    from django_ergo.conversation.models import ThreadMessage
+
+    user = await User.objects.acreate(username="explicit-return")
+    bot, engine = make_bot(tmp_path, say("Started."))
+    root = await bot.root_session(user)
+    ctx = ToolContext(bot=bot, session=root, user=user)
+    sent = await sync_to_async(orchestrator.ergo_thread_send)(
+        ctx, thread="new", message="Run background work", return_mode="record"
+    )
+    await thread_messages()
+    request = await ThreadMessage.objects.aget(id=sent["message_id"])
+    answer = await ThreadMessage.objects.aget(in_reply_to=request)
+    assert answer.metadata["reply_mode"] == "record"
+    assert SENT == []
+    child = await ConversationSession.objects.aget(id=sent["thread_id"])
+    await sync_to_async(messaging.send)(root, child, "Later unrelated request")
+    SENT.clear()
+    await sync_to_async(messaging._report_worker_result)(
+        child,
+        await sync_to_async(messaging.send_event)(
+            child,
+            "Worker finished",
+            source="worker:w",
+            source_label="worker",
+            metadata={"worker_finished": True, "originating_message": str(request.id)},
+        ),
+        "Finished work",
+    )
+    followup = (
+        await ThreadMessage.objects.filter(sender_session=child, recipient_session=root)
+        .order_by("-created_at")
+        .afirst()
+    )
+    assert followup.metadata["reply_mode"] == "record"
+    assert "Finished work" in followup.text
+    assert (
+        await sync_to_async(messaging.return_policy)(
+            root, request=request, question=True
+        )
+        == {}
+    )
+    assert len(engine._client.calls) == 1
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_record_to_resolved_thread_stays_resolved(tmp_path, thread_messages):
+    from django_ergo.bots import messaging
+
+    user = await User.objects.acreate(username="resolved-record")
+    bot, _ = make_bot(tmp_path, say("Ready."))
+    root = await bot.root_session(user)
+    recipient = await bot.create_session(user)
+    recipient.status = "completed"
+    await recipient.asave(update_fields=["status"])
+    await sync_to_async(messaging.send)(
+        root, recipient, "For the record", metadata={"reply_mode": "record"}
+    )
+    await recipient.arefresh_from_db()
+    assert recipient.status == "completed"
+    assert await recipient.messages.filter(provenance__delivery_mode="record").aexists()
+    assert SENT == []
+
+
+@pytest.mark.django_db(transaction=True)
+def test_closure_waits_for_concurrent_permanence_change(monkeypatch):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    from django.db import DatabaseError
+    from django.db import close_old_connections
+    from django.db import transaction
+
+    user = User.objects.create(username="closure-race-owner")
+    session = ConversationSession.objects.create(
+        user=user, status="active", engine_type="claude"
+    )
+    guarded = threading.Event()
+    release = threading.Event()
+    original_guard = ConversationSession.require_closable
+
+    def pause_after_guard(row):
+        original_guard(row)
+        guarded.set()
+        assert release.wait(10)
+
+    monkeypatch.setattr(ConversationSession, "require_closable", pause_after_guard)
+
+    def close():
+        try:
+            stale = ConversationSession.objects.get(pk=session.pk)
+            stale.status = "completed"
+            stale.save(update_fields=["status"])
+        finally:
+            close_old_connections()
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(close)
+        try:
+            assert guarded.wait(10)
+            # NOWAIT proves the guard is still inside the row-locked section.
+            with pytest.raises(DatabaseError), transaction.atomic():
+                ConversationSession.objects.select_for_update(nowait=True).get(
+                    pk=session.pk
+                )
+        finally:
+            release.set()
+            future.result(timeout=10)
+    session.refresh_from_db()
+    assert session.status == "completed"

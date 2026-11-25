@@ -44,7 +44,6 @@ from django.utils import timezone
 from django_ergo.bots import archival
 from django_ergo.bots import wakes
 from django_ergo.bots.admission_drain import execution
-from django_ergo.conversation import roles
 from django_ergo.conversation.budget import ERROR_CATEGORY as BUDGET_ERROR_CATEGORY
 from django_ergo.conversation.budget import NOT_RUN_PREFIX
 from django_ergo.conversation.budget import forbid
@@ -371,7 +370,11 @@ def _store_message(sender, recipient, text, in_reply_to, depth, metadata, regist
             "user",
             [{"block_type": "text", "text": text}],
             author=author,
-            provenance={**provenance, "delivery_mode": "record"},
+            provenance={
+                **provenance,
+                "delivery_mode": "record",
+                "thread_message_id": str(message.pk),
+            },
         )
         message.status = ThreadMessageStatus.ANSWERED
         message.save(update_fields=["status", "updated_at"])
@@ -851,12 +854,10 @@ def _report_worker_result(
                     starter,
                     question=question,
                     request=ThreadMessage.objects.filter(
+                        pk=message.metadata.get("originating_message"),
                         sender_session=starter,
                         recipient_session=session,
-                        in_reply_to__isnull=True,
-                    )
-                    .order_by("-created_at")
-                    .first(),
+                    ).first(),
                 ),
                 "report": True,
                 "worker": message.metadata.get("worker"),
@@ -872,34 +873,15 @@ def _report_worker_result(
 
 
 def return_policy(starter, *, question=False, request=None) -> dict:
-    """Only bot-started task threads receive quiet automatic reports.
-
-    Human-facing chats and explicit answer requests retain the waking route.
-    The setting allows hosts to restore the previous automatic-return policy.
-    """
+    """Record only when the originating request explicitly opted in."""
     if (
-        not api_settings.THREAD_REPORTS_RECORD
-        or question
-        or roles.role(starter) != roles.THREAD
-        or not (starter.metadata or {}).get("started_by")
-        or (
-            request
-            and (
-                (request.metadata or {}).get("ask")
-                or (request.metadata or {}).get("reply_mode") == "response"
-            )
-        )
+        api_settings.THREAD_REPORTS_RECORD
+        and not question
+        and request is not None
+        and (request.metadata or {}).get("return_mode") == "record"
     ):
-        return {}
-    # A direct human request in progress must still receive an answer.
-    latest = (
-        starter.structured_calls.filter(kind="chat_reply")
-        .order_by("-created_at")
-        .first()
-    )
-    if latest and not (latest.metadata or {}).get("thread_message"):
-        return {}
-    return {"reply_mode": "record", "report": True}
+        return {"reply_mode": "record", "report": True}
+    return {}
 
 
 def recorded_reports(session) -> str:
@@ -916,4 +898,15 @@ def recorded_reports(session) -> str:
     reports = session.thread_messages.filter(metadata__reply_mode="record")
     if latest:
         reports = reports.filter(created_at__gt=latest.created_at)
+    if (session.compaction_config or {}).get("native_history") != "turn":
+        from django_ergo.conversation.compaction import latest_compaction
+
+        compacted = latest_compaction(session)
+        if compacted is None:
+            return ""
+        ids = session.messages.filter(
+            sequence__lte=compacted.upto_sequence,
+            provenance__delivery_mode="record",
+        ).values_list("provenance__thread_message_id", flat=True)
+        reports = reports.filter(id__in=list(ids))
     return "\n\n".join(turn_text(row) for row in reports.order_by("created_at", "id"))

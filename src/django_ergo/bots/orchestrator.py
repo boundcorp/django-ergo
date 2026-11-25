@@ -654,6 +654,11 @@ def ergo_thread_list(
                 "be combined with ask=true; record cannot interrupt."
             ),
         },
+        "return_mode": {
+            "type": "string",
+            "enum": ["auto", "record"],
+            "description": "Set record only when the eventual answer needs no action; questions still wake you.",
+        },
         "attachments": {
             "type": "array",
             "items": {"type": "string"},
@@ -686,6 +691,7 @@ def ergo_thread_send(  # noqa: PLR0913
     ask: bool = False,
     interrupt: bool = False,
     reply_mode: str = "auto",
+    return_mode: str = "auto",
 ) -> dict:
     """Send a message to a bot's main chat, a named chat, a thread, or a new thread.
 
@@ -705,6 +711,7 @@ def ergo_thread_send(  # noqa: PLR0913
         ask=ask,
         interrupt=interrupt,
         reply_mode=reply_mode,
+        return_mode=return_mode,
     )
 
 
@@ -894,7 +901,7 @@ def _recipient(
     return recipient
 
 
-def _send(  # noqa: PLR0913
+def _send(  # noqa: C901, PLR0913
     ctx: ToolContext,
     target: Bot,
     message: str,
@@ -905,6 +912,7 @@ def _send(  # noqa: PLR0913
     ask: bool = False,
     interrupt: bool = False,
     reply_mode: str = "auto",
+    return_mode: str = "auto",
 ) -> dict:
     # Before anything the send does first, such as stopping the recipient's turn.
     forbid("send a thread message")
@@ -916,6 +924,12 @@ def _send(  # noqa: PLR0913
         raise ValueError(msg)
     if reply_mode == "record" and interrupt:
         msg = "reply_mode=record cannot be combined with interrupt=true"
+        raise ValueError(msg)
+    if return_mode not in ("auto", "record"):
+        msg = "return_mode must be auto or record"
+        raise ValueError(msg)
+    if return_mode == "record" and (ask or reply_mode != "auto"):
+        msg = "return_mode=record requires reply_mode=auto and ask=false"
         raise ValueError(msg)
     messaging.require_export(ctx.session, target.name, ctx.bot.registry)
     check_spacing(message, "message")
@@ -944,6 +958,7 @@ def _send(  # noqa: PLR0913
     metadata = {"attachments": shared} if shared else {}
     metadata["reply_mode"] = reply_mode
     metadata["ask"] = ask
+    metadata["return_mode"] = return_mode
     if report:
         metadata["report"] = True
     if reply_mode == "notification":
@@ -964,7 +979,11 @@ def _send(  # noqa: PLR0913
     note = (
         "Sent as a report: the recipient runs a turn; no automatic turn reply comes back."
         if report
-        else "The reply will arrive as a new message in this chat."
+        else (
+            "The reply will be recorded in this chat unless it is a question."
+            if return_mode == "record"
+            else "The reply will arrive as a new message in this chat."
+        )
     )
     if reply_mode == "record":
         note = "Recorded in recipient history; no model turn or reply. The chat is unread for its user."

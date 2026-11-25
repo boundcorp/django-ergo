@@ -1148,18 +1148,14 @@ route their reply back. A message from a person
 routes nothing back, so a bot's main chat can take delegated work without its
 replies reaching Telegram.
 
-Use notification/response only when the recipient must act or answer.
-Automatic final replies (including a thread's follow-up on a finished worker)
-are recorded when the recipient is a bot-started task thread. Questions
-(`ChatReply.type == "question"`), explicit `ask: true` / `reply_mode: "response"`
-requests, main/named chats, and task threads whose latest turn answered a
-human keep invoking the recipient. A request's explicit response preference
-also applies to later worker-result follow-ups. `DJANGO_ERGO["THREAD_REPORTS_RECORD"]`
-defaults to `True`; set it to `False` to restore waking automatic returns.
-Recorded reports since the recipient's previous turn are included in a dedicated
-context block as well as history, including with compaction or a per-turn native
-window. Records arriving during tool work are deferred past outstanding tool
-results when building model history.
+Use `return_mode: "record"` on an ordinary `auto` request only when its eventual
+answer is informational and needs no action. Its automatic answer and worker
+follow-up are recorded; questions still wake the sender. The default preserves
+waking replies. `THREAD_REPORTS_RECORD` may disable this opt-in. A record to a
+resolved thread stays in its history and does not reopen it; inspect resolved
+threads to see those records. Full history includes records once; compacted or
+per-turn history receives otherwise hidden records in context. Records arriving
+during tool work are deferred past outstanding tool results.
 
 Explicit notifications also suppress automatic delivery-failure messages.
 For compatibility, default one-way reports can still return a delivery failure.
