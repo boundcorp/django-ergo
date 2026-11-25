@@ -138,10 +138,6 @@ READ_ONLY = {
 NO_JSON = {("skills", "get")}
 # Started only by orca_start_worker / ergo_agent_start, which watch the worker.
 TRACKED_ONLY = {("orchestration", "worker-start")}
-# Orca errors that mean the chat's saved mailbox terminal or Run can't be used
-# any more (its worktree was removed, or Orca restarted and the terminal lost
-# its pane), so a new mailbox fixes them.
-STALE_MAILBOX = {"selector_not_found", "stable_pane_required"}
 # omp's chat model roles (its MODEL_ROLES with section "chat"), and the ones
 # that do the agent's own work, so they get its effort too.
 OMP_MODEL_ROLES = (
@@ -882,6 +878,15 @@ class OrcaPlugin(BotPlugin):
         except ValueError:
             payload = {}
         if proc.returncode or payload.get("ok") is False:
+            if args[:2] == ["orchestration", "worker-start"]:
+                from django_ergo.bots.agent_launches import checkpoint
+
+                result = payload.get("result") or {}
+                dispatch_id = _first_key(result, ("dispatchId", "dispatch_id"))
+                known = {"dispatch": dispatch_id} if dispatch_id else {}
+                if "nativeUsageIdentity" in result:
+                    known["nativeUsageIdentity"] = result["nativeUsageIdentity"]
+                checkpoint("worker_error", handle=known)
             details = payload.get("error") or {}
             error = details.get("message") or (proc.stderr or proc.stdout).strip()[:600]
             msg = f"orca {' '.join(command_of(args))} failed: {error}"
@@ -982,13 +987,21 @@ class OrcaPlugin(BotPlugin):
         effort: str = "",
     ) -> tuple[str, str, str, dict]:
         """Create the task and worker: task id, run id, owning mailbox, receipt."""
+        from django_ergo.bots.agent_launches import checkpoint
+
         full_spec = spec + "\n\n" + instruction_protocol.CHECKPOINT_GUIDANCE
         # Bound the argv below the per-argument limit on Linux as well as Orca's
         # prompt budget. Count UTF-8 bytes, including our checkpoint guidance.
         if len(full_spec.encode("utf-8")) > 64 * 1024:
             msg = "Orca task spec exceeds the 65536-byte launch limit"
             raise ValueError(msg)
+        checkpoint(
+            "mailbox",
+            worktree=worktree,
+            external_spec_hash=hashlib.sha256(full_spec.encode("utf-8")).hexdigest(),
+        )
         mailbox, run_id = self.mailbox(ctx, worktree)
+        checkpoint("task_create", handle={"mailbox": mailbox, "run": run_id})
         task = self.cli_json(
             [
                 "orchestration",
@@ -1004,6 +1017,7 @@ class OrcaPlugin(BotPlugin):
             ]
         )
         task_id = _first_key(task, ("taskId", "task_id", "id"))
+        checkpoint("task_verification", handle={"task": task_id})
         listing = ["orchestration", "task-list", "--run", run_id, "--from", mailbox]
         try:
             tasks = self.cli_json([*listing, "--full"])
@@ -1043,7 +1057,13 @@ class OrcaPlugin(BotPlugin):
                 args += ["--model", model]
             if effort:
                 args += ["--effort", effort]
+        checkpoint("worker_start")
         receipt = self.cli_json(args)
+        dispatch_id = _first_key(receipt, ("dispatchId", "dispatch_id"))
+        known = {"dispatch": dispatch_id} if dispatch_id else {}
+        if "nativeUsageIdentity" in receipt:
+            known["nativeUsageIdentity"] = receipt["nativeUsageIdentity"]
+        checkpoint("worker_response", handle=known)
         return task_id, run_id, mailbox, receipt
 
     def seed_claude_trust(self, worktree: str, path: str) -> None:
@@ -1109,6 +1129,7 @@ class OrcaPlugin(BotPlugin):
         tier: str = "",
         authority_message_id: str = "",
         supersedes_worker_id: str = "",
+        launch_key: str = "",
     ) -> dict:
         """``orca_start_worker``: ``bots.agents.start`` on this plugin's manager."""
         from django_ergo.bots import agents
@@ -1126,22 +1147,25 @@ class OrcaPlugin(BotPlugin):
                 tier,
                 authority_message_id,
                 supersedes_worker_id,
+                launch_key,
             ),
             self.manager.name,
         )
         handle = worker.args["handle"]
         return {
             **describe(worker),
+            "launch_key": handle.get("launch_key", ""),
             "orca": {
                 key: handle[key] for key in ("run", "task", "dispatch", "worktree")
             },
         }
 
     def start_agent(self, ctx: ToolContext, spec: AgentSpec) -> dict:
-        # Reject large user briefs before creating even a scoped worktree.
+        # Size the complete authority context before creating even a worktree.
+        brief, _, _ = self.launch_context(ctx, spec)
         if (
             len(
-                (spec.brief + "\n\n" + instruction_protocol.CHECKPOINT_GUIDANCE).encode(
+                (brief + "\n\n" + instruction_protocol.CHECKPOINT_GUIDANCE).encode(
                     "utf-8"
                 )
             )
@@ -1167,6 +1191,14 @@ class OrcaPlugin(BotPlugin):
                 spec.model = spec.model.partition("/")[2] or spec.model
             import uuid
 
+            from django_ergo.bots.agent_launches import checkpoint
+
+            worktree_name = f"ergo-{uuid.uuid4().hex}"
+            checkpoint(
+                "worktree_create",
+                worktree_name=worktree_name,
+                repo=self.scoped_repositories[spec.workspace],
+            )
             created = self.cli_json(
                 [
                     "worktree",
@@ -1174,7 +1206,7 @@ class OrcaPlugin(BotPlugin):
                     "--repo",
                     self.scoped_repositories[spec.workspace],
                     "--name",
-                    f"ergo-{uuid.uuid4().hex}",
+                    worktree_name,
                     "--base-branch",
                     "origin/main",
                     "--setup",
@@ -1188,6 +1220,7 @@ class OrcaPlugin(BotPlugin):
                 msg = "Scoped worktree creation returned no stable identity/path; no agent launched"
                 raise ValueError(msg)
             selector = f"id:{worktree_id}"
+            checkpoint("worktree_created", handle={"worktree": selector, "path": path})
             try:
                 checked = self.scope_metadata(path)
                 if not checked.get("clean") or checked.get("head") != checked.get(
@@ -1232,9 +1265,9 @@ class OrcaPlugin(BotPlugin):
             raise ValueError(msg)
         return json.loads(proc.stdout)
 
-    def _launch_agent(self, ctx, spec, worktree, worktree_path) -> dict:
-        """Create the Orca task and worker for ``spec``; the manager's handle."""
-        # Only the scoped admission path or the stock selector resolver calls this.
+    @staticmethod
+    def launch_context(ctx, spec):
+        """Render all authority context before sizing or creating a worktree."""
         from django_ergo.bots.agents import authority_reference
         from django_ergo.bots.agents import superseded_worker_reference
 
@@ -1251,22 +1284,33 @@ class OrcaPlugin(BotPlugin):
                 "\n\nSupersedes worker reference (context only; does not stop the worker): "
                 + supersedes
             )
+        return brief, authority, supersedes
+
+    def _launch_agent(self, ctx, spec, worktree, worktree_path) -> dict:
+        """Create the Orca task and worker for ``spec``; the manager's handle."""
+        # Only the scoped admission path or the stock selector resolver calls this.
+        brief, authority, supersedes = self.launch_context(ctx, spec)
+        from django_ergo.bots.agent_launches import checkpoint
+
+        checkpoint(
+            "launch_prepared",
+            handle={
+                "worktree": worktree,
+                "path": worktree_path or "",
+                "selected_model": spec.model if spec.agent == "omp" else "",
+                "agent": spec.agent,
+                "launched_at": time.time(),
+                **({"authority": authority} if authority else {}),
+                **({"supersedes_worker_id": supersedes} if supersedes else {}),
+            },
+        )
         args = (brief, worktree, spec.agent, spec.title, spec.model, spec.effort)
         if spec.agent == "claude":
             if not worktree_path:
                 msg = "Claude folder trust requires a resolved worktree path"
                 raise ValueError(msg)
             self.seed_claude_trust(worktree, worktree_path)
-        try:
-            task_id, run_id, mailbox, receipt = self.dispatch(ctx, *args)
-        except ValueError as exc:
-            # The chat's saved mailbox terminal or Run is gone or unusable (its
-            # worktree was removed, Orca restarted): make new ones and try once more.
-            code = getattr(exc, "code", "")
-            stale = code in STALE_MAILBOX or "selector_not_found" in str(exc)
-            if not stale or not self.forget_mailbox(ctx):
-                raise
-            task_id, run_id, mailbox, receipt = self.dispatch(ctx, *args)
+        task_id, run_id, mailbox, receipt = self.dispatch(ctx, *args)
         dispatch_id = _first_key(receipt, ("dispatchId", "dispatch_id"))
         if not dispatch_id:
             msg = f"worker-start gave no dispatch id: {json.dumps(receipt)[:400]}"
@@ -2127,6 +2171,10 @@ class OrcaPlugin(BotPlugin):
                     "type": "string",
                     "description": "Optional previous Orca worker in this chat; context only",
                 },
+                "launch_key": {
+                    "type": "string",
+                    "description": "Request identity: retry the same key and original arguments for recovery; distinct intended jobs need distinct keys",
+                },
                 "authority_message_id": {
                     "type": "string",
                     "description": "Optional authenticated user message in this chat; context only",
@@ -2146,6 +2194,7 @@ class OrcaPlugin(BotPlugin):
             tier: str = "",
             authority_message_id: str = "",
             supersedes_worker_id: str = "",
+            launch_key: str = "",
         ) -> dict:
             return plugin.start_worker(
                 ctx,
@@ -2158,6 +2207,7 @@ class OrcaPlugin(BotPlugin):
                 tier,
                 authority_message_id,
                 supersedes_worker_id,
+                launch_key,
             )
 
         return [

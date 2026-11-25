@@ -842,7 +842,7 @@ def test_orca_start_worker_skips_usage_for_id_selector_without_path(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_orca_start_worker_replaces_a_mailbox_whose_terminal_is_gone(
+def test_orca_stale_mailbox_failure_does_not_reissue_launch(
     tmp_path, workers, monkeypatch
 ):
     import subprocess
@@ -892,46 +892,20 @@ def test_orca_start_worker_replaces_a_mailbox_whose_terminal_is_gone(
     session.save(update_fields=["metadata"])
     ctx = ToolContext(bot=bot, session=session, user=user)
 
-    started = plugin.start_worker(ctx, "Fix it", "path:/home/dev/p/site")
-    assert started["orca"]["run"] == "run_new"
+    from django_ergo.conversation.models import AgentLaunch
+
+    with pytest.raises(ValueError, match="requires recovery"):
+        plugin.start_worker(ctx, "Fix it", "path:/home/dev/p/site", launch_key="stale")
     starts = [c for c in calls if c[1:3] == ["orchestration", "worker-start"]]
-    assert [c[c.index("--from") + 1] for c in starts] == ["term_gone", "term_new"]
+    assert len(starts) == 1
+    assert "term_gone" in starts[0]
+    assert AgentLaunch.objects.get().handle["run"] == "run_old"
+    before = list(calls)
+    with pytest.raises(ValueError, match="Do not issue a replacement start"):
+        plugin.start_worker(ctx, "Fix it", "path:/home/dev/p/site", launch_key="stale")
+    assert calls == before
     session.refresh_from_db()
-    assert session.metadata["orca"]["devbox"] == {
-        "mailbox": "term_new",
-        "run": "run_new",
-    }
-
-    # After an Orca restart the saved terminal can exist but have lost its pane.
-    calls.clear()
-
-    def no_pane(argv, **kwargs):
-        if argv[1:3] == ["orchestration", "task-create"] and "term_new" in argv:
-            calls.append(argv)
-            body = {
-                "ok": False,
-                "error": {
-                    "code": "stable_pane_required",
-                    "message": "The coordinator terminal has no stable pane identity.",
-                },
-            }
-            return subprocess.CompletedProcess(
-                argv, 1, stdout=json.dumps(body), stderr=""
-            )
-        fixed[("terminal", "create")] = {"terminal": {"handle": "term_fresh"}}
-        return fake_run(argv, **kwargs)
-
-    monkeypatch.setattr("django_ergo.plugins.orca.subprocess.run", no_pane)
-    plugin.start_worker(ctx, "Again", "path:/home/dev/p/site")
-    tasks = [c for c in calls if c[1:3] == ["orchestration", "task-create"]]
-    assert [c[c.index("--from") + 1] for c in tasks] == ["term_new", "term_fresh"]
-    session.refresh_from_db()
-    assert session.metadata["orca"]["devbox"]["mailbox"] == "term_fresh"
-
-    # Any other failure is reported as it is, without a retry.
-    fixed[("orchestration", "worker-start")] = {}
-    with pytest.raises(ValueError, match="no dispatch id"):
-        plugin.start_worker(ctx, "Again", "path:/home/dev/p/site")
+    assert session.metadata["orca"]["devbox"]["mailbox"] == "term_gone"
 
 
 @pytest.mark.django_db(transaction=True)

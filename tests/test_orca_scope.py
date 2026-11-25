@@ -484,7 +484,7 @@ def test_creation_or_launch_failure_never_schedules_untracked_watcher(scoped, fa
 
 
 @pytest.mark.django_db(transaction=True)
-def test_watcher_persistence_failure_stops_launched_dispatch(scoped, monkeypatch):
+def test_watcher_persistence_failure_retains_launched_dispatch(scoped, monkeypatch):
     from django_ergo.bots.workers import WorkerStarter
 
     def fail(*args, **kwargs):
@@ -492,11 +492,15 @@ def test_watcher_persistence_failure_stops_launched_dispatch(scoped, monkeypatch
         raise RuntimeError(msg)
 
     monkeypatch.setattr(WorkerStarter, "start", fail)
-    with pytest.raises(RuntimeError, match="watcher persistence unavailable"):
+    with pytest.raises(ValueError, match="watcher persistence unavailable"):
         start(scoped)
     assert scoped.runner.starts == 1
-    [stop] = scoped.runner.commands("orchestration", "worker-stop")
-    assert stop[stop.index("--dispatch") + 1] == "dispatch-1"
+    from django_ergo.conversation.models import AgentLaunch
+
+    assert scoped.runner.commands("orchestration", "worker-stop") == []
+    intent = AgentLaunch.objects.get()
+    assert intent.handle["dispatch"] == "dispatch-1"
+    assert intent.status == "recovery_needed"
     assert not Worker.objects.exists()
     assert scoped.scheduled == []
     assert scoped.runner.paths[0].is_dir()
