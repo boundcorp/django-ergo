@@ -1,7 +1,7 @@
 export { ChatView } from './ChatView'
 export { Transcript } from './Transcript'
 export { Composer } from './Composer'
-export { Markdown } from './Markdown'
+export { Markdown, MarkdownContent } from './Markdown'
 export { ToolCard } from './ToolCard'
 export { AttachmentView, AttachmentList } from './Attachments'
 export { safeLinkUrl, safeAttachmentUrl } from './url'

@@ -55,6 +55,9 @@ jobs:
           cache: npm
           cache-dependency-path: ergonaut/frontend/package-lock.json
       - if: steps.changed.outputs.frontend == 'true'
+        working-directory: packages/ergo-chat-ui
+        run: npm ci && npm run build
+      - if: steps.changed.outputs.frontend == 'true'
         working-directory: ergonaut/frontend
         run: npm ci && npx tsc -b
 

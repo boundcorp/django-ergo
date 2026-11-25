@@ -62,13 +62,13 @@ export function Markdown({
 }) {
   return (
     <div className={`ergo-chat__md ${className}`.trim()}>
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+      <MarkdownContent
+        text={text}
         urlTransform={url => safeLinkUrl(url) ?? ''}
         components={{
           a: Link,
           pre: Pre,
-          img: ({ src, alt }) =>
+          img: ({ src, alt }: ComponentProps<"img">) =>
             allowImages && typeof src === 'string' && /^https?:/i.test(src) ? (
               <img
                 src={src}
@@ -81,9 +81,21 @@ export function Markdown({
               <span className="ergo-chat__md-unsafe">{alt || 'image'}</span>
             ),
         }}
-      >
-        {text}
-      </ReactMarkdown>
+      />
     </div>
+  )
+}
+
+/** Host-configurable markdown renderer for applications with existing link and code behavior. */
+export function MarkdownContent({ text, components, rehypePlugins, urlTransform }: {
+  text: string
+  components?: Record<string, any>
+  rehypePlugins?: any[]
+  urlTransform?: (url: string) => string | undefined
+}) {
+  return (
+    <ReactMarkdown remarkPlugins={[remarkGfm]} components={components} rehypePlugins={rehypePlugins} urlTransform={urlTransform}>
+      {text}
+    </ReactMarkdown>
   )
 }

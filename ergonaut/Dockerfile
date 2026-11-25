@@ -35,10 +35,13 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
 # while the Python code changes.
 FROM base AS frontend
 
-WORKDIR /app/frontend
-COPY ergonaut/frontend/package.json ergonaut/frontend/package-lock.json* /app/frontend/
+WORKDIR /app/packages/ergo-chat-ui
+COPY packages/ergo-chat-ui/ /app/packages/ergo-chat-ui/
+RUN npm ci && npm run build
+WORKDIR /app/ergonaut/frontend
+COPY ergonaut/frontend/package.json ergonaut/frontend/package-lock.json* /app/ergonaut/frontend/
 RUN npm ci
-COPY ergonaut/frontend/ /app/frontend/
+COPY ergonaut/frontend/ /app/ergonaut/frontend/
 RUN npm run build
 
 #
@@ -212,7 +215,7 @@ RUN mkdir -p /app/static/uploads && chmod 777 /app/static/uploads
 
 COPY --from=deps /app/.venv /app/.venv
 COPY --from=voice-deps /app/.voice-venv /app/.voice-venv
-COPY --from=frontend /app/frontend/dist /app/frontend/dist
+COPY --from=frontend /app/ergonaut/frontend/dist /app/frontend/dist
 
 # Ergo, from this repo. Its dependencies are already in the virtualenv except
 # the few Ergonaut doesn't pin, which this pulls in (pure Python wheels).

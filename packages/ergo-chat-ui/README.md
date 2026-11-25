@@ -44,7 +44,7 @@ import '@ergo/chat-ui/styles.css' // Next Pages Router: import it in pages/_app.
 />
 ```
 
-`Transcript` and `Composer` are the same pieces for your own layout. Also exported: `Markdown`, `ToolCard`,
+`Transcript` and `Composer` are the same pieces for your own layout. `MarkdownContent` provides the shared GFM parser without a wrapper and accepts host components, rehype plugins and a URL transform; hosts supplying overrides own their safety policy. Also exported: `Markdown`, `ToolCard`,
 `AttachmentView`, `AttachmentList`, `safeLinkUrl`, `safeAttachmentUrl`.
 
 ### Types
@@ -122,7 +122,9 @@ The package is controlled and stateless about the outside world. The adapter you
 
 ## Ergonaut mapping
 
-Ergonaut's `api.ts` types map onto the contract in an adapter (not yet written; see follow-ups).
+Ergonaut adopts `MarkdownContent` in its existing Markdown adapter for chat transcripts and document views. This shares the GFM parser while Ergonaut supplies its existing code, thread link, document anchor, image and URL handling. The adapter intentionally retains its `.markdown` wrapper and host styles; no package stylesheet is needed for this primitive. The package's generic transcript and composer are not yet adopted: Ergonaut's existing rich cards, approval batching, attachment handling, voice, session controls, scrolling and send/interrupt behavior remain host-owned. The mapping below describes a possible later integration, not current behavior.
+
+For a clean Ergonaut frontend install, first run `npm ci && npm run build` in `packages/ergo-chat-ui`, then `npm ci` in `ergonaut/frontend`. The frontend uses a relative local package dependency, and CI and the container build perform these steps in order; generated `dist` is not committed. Vite deduplicates React across the local package link.
 
 | Ergonaut (`ergonaut/frontend/src/api.ts`) | `@ergo/chat-ui` | Notes |
 | --- | --- | --- |

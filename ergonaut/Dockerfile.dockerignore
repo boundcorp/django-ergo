@@ -4,6 +4,10 @@
 **/__pycache__
 ergonaut/static/
 ergonaut/frontend/node_modules
+packages/ergo-chat-ui/node_modules
+packages/ergo-chat-ui/dist
+packages/ergo-chat-ui/.react18
+packages/ergo-chat-ui/.fixtures
 ergo/
 examples/proprietary/
 old-code-inspiration/

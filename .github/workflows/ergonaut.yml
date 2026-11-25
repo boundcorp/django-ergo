@@ -116,6 +116,8 @@ jobs:
           cache: npm
           cache-dependency-path: ergonaut/frontend/package-lock.json
       - uses: oven-sh/setup-bun@v2
+      - working-directory: packages/ergo-chat-ui
+        run: npm ci && npm run build
       - run: npm ci
       - run: npx tsc -b
       - run: npm test
