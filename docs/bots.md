@@ -658,17 +658,9 @@ parsed. The structured field precedes prose in the coordinator's bounded result
 preview and remains in the full `ergo_worker_list` result. It proves neither
 authenticated task acceptance nor verified execution.
 
-The separate `plugins/orca_native_usage.py` consumer is an integration seam,
-currently **unwired**. It accepts a trusted, exact-dispatch `worker-show`
-`nativeUsageIdentity` receipt only on its explicitly mapped files host, with a
-closed fresh-session exclusive byte interval, file identity and digest. It reads
-only that interval and emits timestamped deduplicated token metadata, never
-transcript text. Missing identity, scope, interval or timestamps stays unknown;
-cwd and time are never session identity. The upstream export must be shipped and
-captured by the watcher before this can account for production native workers.
-Profile identity remains unverified, so this seam does not assign ledger ownership
-or change thread totals. Caller authorization for the worker and session is
-required before any host-side read.
+Native per-worker token usage is not attributed here; it waits on the exact
+session-interval export (stablyai/orca#44173) and its consumer (#361).
+Missing evidence remains unknown.
 
 `orca_start_worker(spec, worktree, agent)` is the
 same as `ergo_agent_start` with Orca's parameter names; workers started before
