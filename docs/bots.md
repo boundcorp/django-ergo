@@ -639,7 +639,31 @@ The Orca plugin's agent manager starts a supervised Orca worker (with
 approval) in the worktree the brief names, and its watcher polls the dispatch
 every `worker_poll_seconds` (default 120), passes the agent's questions to the
 chat (`ergo_agent_reply` answers them with `orchestration reply`), and returns
-its `worker_done` report. `orca_start_worker(spec, worktree, agent)` is the
+its `worker_done` report. The result includes `work_disposition`, separate from
+Orca transport status: `completed`, `partial`, `blocked`, or `failed` only when
+the dispatch-scoped report explicitly supplies that value in its JSON payload;
+otherwise it is null. Orca’s existing `--payload` option can carry this field;
+its `--outcome` still describes transport completion or failure.
+New worker briefs explain how to emit it. Orca rejects mixing `--payload` with
+structured payload flags, so replace **all** of `--task-id`, `--dispatch-id`,
+`--outcome`, `--files-modified` and `--report-path` with a complete JSON payload
+on the original, single `worker_done` command (keep its sender and capability):
+
+```sh
+--payload '{"taskId":"<task>","dispatchId":"<dispatch>","outcome":"succeeded","work_disposition":"partial","filesModified":["example.py"],"reportPath":"report.md"}'
+```
+
+Here `partial` is the worker's assertion even if the transport settled
+successfully. Missing or malformed payloads remain unknown; no report prose is
+parsed. The structured field precedes prose in the coordinator's bounded result
+preview and remains in the full `ergo_worker_list` result. It proves neither
+authenticated task acceptance nor verified execution.
+
+Native per-worker token usage is not attributed here; it waits on the exact
+session-interval export (stablyai/orca#44173) and its consumer (#361).
+Missing evidence remains unknown.
+
+`orca_start_worker(spec, worktree, agent)` is the
 same as `ergo_agent_start` with Orca's parameter names; workers started before
 agents existed (`orca:watch`) keep working. Each check also
 reads the agent's latest output (`orchestration worker-read`: its transcript,
@@ -2854,7 +2878,11 @@ to the calling bot. No message text, titles or tool arguments are returned.
 
 Workers are counted once per stored worker row by creation or completion time,
 with current status for completed rows; one-shot and recurring wakes use separate
-fired and dispatch timestamps. Tool failures are stored error result blocks, with
+fired and dispatch timestamps. `workers.work_assertions.counts` separately counts
+the explicit structured result field (`completed`, `partial`, `blocked`, `failed`,
+or `unknown`); absent/malformed fields are unknown regardless of transport status
+or report prose. These are worker assertions, not acceptance/execution evidence.
+Tool failures are stored error result blocks, with
 stored result blocks as denominator, not a complete count of attempted calls.
 Agent token totals come only from timestamped native usage events linked to the
 selected workers, never cumulative worker totals. When multiple native sessions

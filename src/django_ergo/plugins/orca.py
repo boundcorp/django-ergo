@@ -1512,6 +1512,21 @@ class OrcaPlugin(BotPlugin):
             return {"disposition": "scope_blocked"}
         return {}
 
+    @staticmethod
+    def _work_disposition(report, dispatch):
+        """Accept only an explicit, dispatch-scoped work result, never prose."""
+        try:
+            payload = json.loads((report or {}).get("payload") or "{}")
+        except (TypeError, ValueError):
+            return None
+        if not isinstance(payload, dict) or dispatch not in (
+            payload.get("dispatchId"),
+            payload.get("dispatch_id"),
+        ):
+            return None
+        value = payload.get("work_disposition")
+        return value if value in ("completed", "partial", "blocked", "failed") else None
+
     def check(self, ctx, handle: dict) -> AgentCheck:
         """One look at an Orca worker: its status, new messages, latest output and
         usage. Fails it when its agent terminal is gone (``fail_if_terminal_gone``)."""
@@ -1561,6 +1576,9 @@ class OrcaPlugin(BotPlugin):
                 )
             result = {
                 "status": status or "completed",
+                # Keep the structured assertion ahead of potentially long prose:
+                # the coordinator's worker event has a bounded text preview.
+                "work_disposition": self._work_disposition(report, dispatch),
                 "subject": (report or {}).get("subject") or "",
                 "report": body,
                 "dispatch": dispatch,

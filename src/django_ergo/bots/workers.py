@@ -91,6 +91,10 @@ def result_for_chat(result: Any) -> str:
                 f"... {len(outputs) - EVENT_OUTPUTS} more; ergo_worker_list has them all"
             )
         result = {**result, "outputs": shown}
+    if isinstance(result, dict) and "work_disposition" in result:
+        # PostgreSQL JSONB does not preserve object key order. Put the assertion
+        # first whenever rendering, including results reloaded from storage.
+        result = {"work_disposition": result["work_disposition"], **result}
     return json.dumps(result, indent=2, ensure_ascii=False, default=str)
 
 

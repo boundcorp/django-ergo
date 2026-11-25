@@ -938,3 +938,66 @@ def test_scope_blocked_is_an_explicit_dispatch_scoped_assertion(
     result = Worker.objects.get(pk=worker_id).result
     assert result.get("disposition") == expected
     assert result["status"] == status
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        (
+            {
+                "dispatchId": "dispatch-1",
+                "outcome": "succeeded",
+                "work_disposition": "partial",
+            },
+            "partial",
+        ),
+        ({"dispatchId": "dispatch-1", "work_disposition": "completed"}, "completed"),
+        ({"dispatch_id": "dispatch-1", "work_disposition": "blocked"}, "blocked"),
+        ({"dispatchId": "dispatch-1", "work_disposition": "failed"}, "failed"),
+        ({"dispatchId": "dispatch-1", "outcome": "succeeded"}, None),
+        ({"dispatchId": "other", "work_disposition": "completed"}, None),
+        ({"dispatchId": "dispatch-1", "work_disposition": "invented"}, None),
+    ],
+)
+def test_work_disposition_is_explicit_and_separate_from_transport(
+    scoped, payload, expected
+):
+    from django_ergo.bots import workers as w
+
+    worker_id = start(scoped)["id"]
+    scoped.runner.status = "completed"
+    scoped.runner.messages = [
+        {
+            "id": "done-1",
+            "run_id": "run-1",
+            "type": "worker_done",
+            "body": "Work report " * 1000,
+            "payload": json.dumps(payload),
+            "sequence": 1,
+        }
+    ]
+    assert w.run(worker_id, scoped.bot.registry) == "completed"
+    result = Worker.objects.get(pk=worker_id).result
+    assert result["status"] == "completed"
+    assert result["work_disposition"] == expected
+    from django_ergo.bots.workers import MAX_RESULT_CHARS
+    from django_ergo.bots.workers import result_for_chat
+
+    preview = result_for_chat(result)[:MAX_RESULT_CHARS]
+    assert f'"work_disposition": {json.dumps(expected)}' in preview
+
+
+@pytest.mark.parametrize("payload", [None, "{", "[]", "true", "12", "null", [], {}, 7])
+def test_malformed_raw_work_disposition_payload_is_unknown(payload):
+    from django_ergo.plugins.orca import OrcaPlugin
+
+    assert OrcaPlugin._work_disposition({"payload": payload}, "dispatch-1") is None
+
+
+@pytest.mark.parametrize("value", [None, [], {}, True, 7])
+def test_malformed_work_disposition_value_is_unknown(value):
+    from django_ergo.plugins.orca import OrcaPlugin
+
+    payload = json.dumps({"dispatchId": "dispatch-1", "work_disposition": value})
+    assert OrcaPlugin._work_disposition({"payload": payload}, "dispatch-1") is None
