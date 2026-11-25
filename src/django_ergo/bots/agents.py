@@ -61,6 +61,7 @@ class AgentSpec:
     tier: str = ""
     authority_message_id: str = ""
     supersedes_worker_id: str = ""
+    launch_key: str = ""
 
 
 def authority_reference(ctx, message_id):
@@ -256,14 +257,24 @@ def worker_of(bot: Bot, worker: Worker) -> tuple[AgentManager, dict] | None:
 
 @sync_execution(wait=True)
 def start(ctx: ToolContext, spec: AgentSpec, manager: str = "") -> Worker:
-    """Start an agent and the Worker that watches it.
-
-    With ``spec.tier``, the agent, model and effort come from providers.yaml's
-    ``agents`` tiers, on the subscription with the best safe pace score."""
+    """Launch Orca once per explicit key; recover its original watcher on replay."""
     forbid("start an agent")
     if ctx.session is None:
         msg = "Agents belong to a chat"
         raise ValueError(msg)
+    found = manager_for(ctx.bot, manager, ctx)
+    if found.name == "orca":
+        from django_ergo.bots.agent_launches import launch
+
+        return launch(ctx, spec, found, lambda: _start(ctx, spec, found.name))
+    return _start(ctx, spec, found.name)
+
+
+def _start(ctx: ToolContext, spec: AgentSpec, manager: str = "") -> Worker:
+    """Start an agent and the Worker that watches it.
+
+    With ``spec.tier``, the agent, model and effort come from providers.yaml's
+    ``agents`` tiers, on the subscription with the best safe pace score."""
     from django_ergo.bots.model_choice import AGENT
     from django_ergo.bots.model_choice import check
 
@@ -315,17 +326,6 @@ def start(ctx: ToolContext, spec: AgentSpec, manager: str = "") -> Worker:
             f"{found.name} agent · {spec.title}",
             ctx.session,
         )
-    handle = found.start(ctx, spec)
-    handle.update(
-        {
-            key: value
-            for key, value in (
-                ("authority", authority),
-                ("supersedes_worker_id", supersedes),
-            )
-            if value
-        }
-    )
     state = {
         "agent": spec.agent,
         "model": spec.model,
@@ -348,6 +348,30 @@ def start(ctx: ToolContext, spec: AgentSpec, manager: str = "") -> Worker:
             "billing_mode_provenance": "not independently verified",
         },
     }
+    from django_ergo.bots.agent_launches import prepare
+
+    prepare(state, f"{spec.agent}: {spec.title}")
+    handle = found.start(ctx, spec)
+    # Scoped managers normalize provider/model to the native CLI selector.
+    state.update(agent=spec.agent, model=spec.model, effort=spec.effort)
+    state["dispatch_receipt"]["selected"] = {
+        key: state[key] for key in ("agent", "model", "effort")
+    }
+    handle.update(
+        {
+            key: value
+            for key, value in (
+                ("authority", authority),
+                ("supersedes_worker_id", supersedes),
+            )
+            if value
+        }
+    )
+    from django_ergo.bots.agent_launches import register
+
+    recovered = register(ctx, handle, state, f"{spec.agent}: {spec.title}")
+    if recovered is not None:
+        return recovered
     try:
         return ctx.workers.start(
             f"agent:{found.name}",
@@ -622,6 +646,10 @@ def agent_toolkit(bot: Bot, ctx: ToolContext):
                 "type": "string",
                 "description": "Optional previous Orca worker in this chat; context only",
             },
+            "launch_key": {
+                "type": "string",
+                "description": "Orca request identity: reuse this exact key and unchanged arguments for recovery; use a new key only for an intentionally distinct job",
+            },
             "authority_message_id": {
                 "type": "string",
                 "description": "Optional authenticated user message in this chat; context only",
@@ -642,6 +670,7 @@ def agent_toolkit(bot: Bot, ctx: ToolContext):
         manager: str = "",
         authority_message_id: str = "",
         supersedes_worker_id: str = "",
+        launch_key: str = "",
     ) -> dict:
         check_spacing(brief, "brief")
         spec = AgentSpec(
@@ -654,14 +683,18 @@ def agent_toolkit(bot: Bot, ctx: ToolContext):
             tier,
             authority_message_id,
             supersedes_worker_id,
+            launch_key,
         )
         worker = start(ctx, spec, manager)
         out = {
             **describe(worker),
             "agent": {
-                k: getattr(spec, k) for k in ("agent", "model", "effort", "tier")
+                k: (worker.state or {}).get(k, getattr(spec, k))
+                for k in ("agent", "model", "effort", "tier")
             },
         }
+        if key := ((worker.args or {}).get("handle") or {}).get("launch_key"):
+            out["launch_key"] = key
         # A manager can flag what the agent will lack (a missing secret).
         if warnings := ((worker.args or {}).get("handle") or {}).get("warnings"):
             out["warnings"] = list(warnings)

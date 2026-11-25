@@ -706,6 +706,36 @@ class Worker(TimeStampedMixin):
         return self.status in (WorkerStatus.QUEUED, WorkerStatus.RUNNING)
 
 
+class AgentLaunch(TimeStampedMixin):
+    """Private launch journal: committed before effects, scoped to one chat and bot.
+
+    No public serializer/admin registration: briefs and external handles inherit
+    the session's access boundary. Never treat these references as new authority.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    session = models.ForeignKey(ConversationSession, on_delete=models.CASCADE)
+    bot_name = models.CharField(max_length=100)
+    key = models.CharField(max_length=200)
+    request = models.JSONField(default=dict)
+    spec_hash = models.CharField(max_length=64)
+    status = models.CharField(max_length=32, default="launching")
+    evidence = models.JSONField(default=dict)
+    handle = models.JSONField(default=dict)
+    watch_state = models.JSONField(default=dict)
+    watch_title = models.CharField(max_length=200, default="")
+    worker = models.OneToOneField(
+        Worker, null=True, blank=True, on_delete=models.RESTRICT, related_name="launch"
+    )
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["session", "bot_name", "key"], name="agent_launch_key"
+            )
+        ]
+
+
 class WakeStatus(models.TextChoices):
     PENDING = "pending", "Pending"
     FIRED = "fired", "Fired (its message went to the chat)"
