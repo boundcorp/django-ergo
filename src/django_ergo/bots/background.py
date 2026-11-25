@@ -45,6 +45,7 @@ if TYPE_CHECKING:
     from django_ergo.bots.registry import BotRegistry
     from django_ergo.bots.runtime import Bot
 
+PRIVACY_KWARG = "_ergo_privacy_origin"
 _pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="ergo-bot-task")
 
 
@@ -94,15 +95,22 @@ def execute(
     bot_name: str, task_name: str, args: list, kwargs: dict, registry=None
 ) -> Any:
     """Run a bot's task here and now (what a worker calls)."""
+    from django_ergo.bots import pools
+
+    carried = kwargs.pop(PRIVACY_KWARG, None) or []
     bot = find_bot(bot_name, registry)
     function = bot.tasks.get(task_name)
     if function is None:
         known = ", ".join(sorted(bot.tasks)) or "none"
         msg = f"{bot_name} has no task {task_name!r} (tasks: {known})"
         raise LookupError(msg)
-    if inspect.iscoroutinefunction(function):
-        return async_to_sync(function)(*args, **kwargs)
-    return function(*args, **kwargs)
+    # The starting turn's privacy origin (bots.pools) restricts the task too.
+    with pools.origin_scope(
+        [str(n) for n in carried if isinstance(n, str)], replace=True
+    ):
+        if inspect.iscoroutinefunction(function):
+            return async_to_sync(function)(*args, **kwargs)
+        return function(*args, **kwargs)
 
 
 def thread_runner(bot: Bot, task_name: str, args: list, kwargs: dict) -> TaskHandle:
@@ -126,6 +134,11 @@ class BotTasks:
     def start(self, task: Callable | str, *args, **kwargs) -> TaskHandle:
         forbid("start a background task")
         name = self._name(task)
+        from django_ergo.bots import pools
+
+        if origin := pools.current_origin():
+            # Persisted with the job, whichever runner (Celery) executes it.
+            kwargs = {**kwargs, PRIVACY_KWARG: list(origin)}
         runner = api_settings.BOT_TASK_RUNNER
         if runner is None:
             return thread_runner(self.bot, name, list(args), kwargs)

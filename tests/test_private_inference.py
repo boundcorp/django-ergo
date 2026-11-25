@@ -436,25 +436,30 @@ def test_unlisted_bot_cannot_pick_or_keep_a_private_chat_model(found, fireworks,
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_unlisted_bot_threads_and_delegated_threads_stay_public(found, fireworks):
+async def test_delegated_threads_inherit_the_origin_privacy_and_are_refused(
+    found, fireworks
+):
     user = await User.objects.acreate(username="lee2")
     both = bots(found, personal={"config": {"model": "personal/heavy"}}, devbox={})
     personal, devbox = both["personal"], both["devbox"]
     parent = await personal.create_session(user)
     assert parent.engine_type == "fireworks"
-    # No model: the delegate's own (public) default, nothing from its parent.
-    child = await devbox.create_session(user, parent=parent)
-    assert child.engine_type == "openai"
-    engine = devbox.make_engine(child)
-    assert type(engine) is OpenAIAPIEngine
-    # The parent's private selection handed over explicitly is refused.
+    # A thread under a privacy-restricted origin inherits its policy: a bot
+    # outside it is refused instead of running on its own public default.
+    with pytest.raises(PolicyError, match="privacy policy|Privacy policy"):
+        await devbox.create_session(user, parent=parent)
     with pytest.raises(PolicyError):
         await devbox.create_session(
             user, parent=parent, metadata={"model": "personal/heavy"}
         )
-    assert not await ConversationSession.objects.filter(
-        bot_name="devbox", model__startswith="personal"
-    ).aexists()
+    assert not await ConversationSession.objects.filter(bot_name="devbox").aexists()
+    # devbox's own (unrestricted) threads stay public.
+    own = await devbox.create_session(user)
+    assert own.engine_type == "openai"
+    assert type(devbox.make_engine(own)) is OpenAIAPIEngine
+    # The personal bot's own threads keep their private pool.
+    child = await personal.create_session(user, parent=parent)
+    assert child.engine_type == "fireworks"
     assert fireworks.requests == []
 
 

@@ -190,16 +190,38 @@ class WebSearchPlugin(BotPlugin):
         )
         raise WebSearchError(msg)
 
-    def search(self, query: str, count: int = 0) -> str:
+    def search(self, query: str, count: int = 0, *, session=None) -> str:
         query = query.strip()
         if not query:
             return "Give a search query."
         count = max(1, min(int(count or self.count), 20))
         try:
-            backend = self.resolved_backend()
+            backend = self.private_backend(session) or self.resolved_backend()
             return getattr(self, f"_search_{backend}")(query, count)
         except WebSearchError as exc:
             return f"Search failed: {exc}"
+
+    def private_backend(self, session=None) -> str:
+        """For a privacy-restricted origin (``bots.pools``): a non-LLM backend
+        its policy allows, or WebSearchError. The claude_code and anthropic
+        backends send the query to a model outside the policy, so they are
+        never used for such work. "" when the origin isn't restricted."""
+        from django_ergo.bots import pools
+
+        bot = getattr(self, "bot", None)
+        if bot is None:
+            return ""
+        privacy = pools.privacy_for(bot, session)
+        if not privacy.restricted:
+            return ""
+        if privacy.permits_search("brave") and os.environ.get(self.brave_key_env):
+            return "brave"
+        msg = (
+            f"privacy policy {privacy.label()} doesn't allow LLM search backends "
+            "(claude_code, anthropic); allow a non-LLM backend with privacy."
+            f"<policy>.web_search: [brave] and set {self.brave_key_env}"
+        )
+        raise WebSearchError(msg)
 
     def _search_brave(self, query: str, count: int) -> str:
         key = os.environ.get(self.brave_key_env)
@@ -385,9 +407,10 @@ class WebSearchPlugin(BotPlugin):
                 },
             },
             required=["query"],
+            takes_context=True,
         )
-        def web_search(query: str, count: int = 0) -> str:
-            return plugin.search(query, count)
+        def web_search(ctx, query: str, count: int = 0) -> str:
+            return plugin.search(query, count, session=getattr(ctx, "session", None))
 
         @bot_tool(
             name="ergo_web_fetch",

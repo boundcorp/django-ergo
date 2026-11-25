@@ -55,6 +55,7 @@ from django_ergo.conversation.identity import session_label
 from django_ergo.conversation.identity import session_origin
 from django_ergo.conversation.identity import system_identity
 from django_ergo.conversation.identity import thread_message_identity
+from django_ergo.conversation.inference_policy import PolicyError
 from django_ergo.conversation.lifecycle import record_event
 from django_ergo.conversation.models import ConversationSession
 from django_ergo.conversation.models import StructuredCallStatus
@@ -124,8 +125,50 @@ def require_export(sender, recipient_bot, registry=None) -> None:
         raise ValueError(msg)
 
 
-def _check_delivery(sender, recipient, text, metadata, registry):
-    """One policy for send, forward, replies, and attachment provenance."""
+def _bot_named(name: str, registry=None):
+    if registry is not None and name in registry:
+        return registry.get(name)
+    return KNOWN_BOTS.get(name)
+
+
+def origin_names(sender, registry=None) -> list[str]:
+    """Privacy policies (``bots.pools``) a message from ``sender`` carries: the
+    sender bot's own, its chat's recorded origin and the turn it runs in."""
+    from django_ergo.bots import pools
+
+    names = list(pools.current_origin())
+    if sender is not None:
+        names += pools.session_origin(sender)
+        bot = _bot_named(sender.bot_name, registry)
+        if bot is not None:
+            names += pools.bot_policy_names(bot)
+    return list(dict.fromkeys(names))
+
+
+def _check_privacy(sender, recipient, metadata, registry, *, approved: bool) -> None:
+    """A privacy-restricted origin's work stays with bots its policy approves;
+    the message carries the origin so the recipient's turn is restricted too.
+    A user-approved private export is the one way out (it carries no origin)."""
+    from django_ergo.bots import pools
+
+    names = origin_names(sender, registry)
+    if not names or approved:
+        return
+    bot = _bot_named(recipient.bot_name, registry)
+    if bot is None:
+        msg = f"Privacy policy {', '.join(names)}: {recipient.bot_name!r} isn't loaded"
+        raise PolicyError(msg)
+    privacy = pools.privacy_for(bot, None, names)
+    pools.check_delegation(pools.lineage(bot), privacy, what=f"bot {bot.name!r}")
+    own = set(pools.bot_policy_names(bot))
+    carried = [n for n in names if n not in own]
+    if carried:
+        metadata[pools.ORIGIN_KEY] = carried
+
+
+def _check_delivery(sender, recipient, text, metadata, registry) -> bool:
+    """One policy for send, forward, replies, and attachment provenance.
+    Returns whether this is a user-approved private export."""
     from django_ergo.conversation.models import ConversationAttachment
 
     files = (metadata or {}).get("attachments") or []
@@ -156,6 +199,7 @@ def _check_delivery(sender, recipient, text, metadata, registry):
         ):
             msg = "Private source files cannot be shared; export a snapshot."
             raise ValueError(msg)
+    return approved
 
 
 def shared_with(session: ConversationSession, file_id: str) -> bool:
@@ -282,7 +326,9 @@ def send(  # noqa: C901, PLR0913 - provenance and inherited execution restrictio
     ``depth``: the hops a message with no sender continues (a self-wake keeps
     the depth of the message its turn was answering)."""
     forbid("send a thread message")
-    _check_delivery(sender, recipient, text, metadata, registry)
+    approved = _check_delivery(sender, recipient, text, metadata, registry)
+    metadata = dict(metadata or {})
+    _check_privacy(sender, recipient, metadata, registry, approved=approved)
     handling = (
         current_thread_message(sender)
         if sender is not None and in_reply_to is None

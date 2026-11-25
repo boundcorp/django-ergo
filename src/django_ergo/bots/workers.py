@@ -363,6 +363,9 @@ def resolve(bot: Bot, function: str):
     return found
 
 
+PRIVACY_ARG = "_privacy_origin"
+
+
 def start(  # noqa: PLR0913
     bot: Bot,
     session: ConversationSession,
@@ -402,13 +405,21 @@ def start(  # noqa: PLR0913
         origin = ThreadMessage.objects.filter(
             pk=call_metadata.get("thread_message"), recipient_session=session
         ).first()
+    from django_ergo.bots import pools
+
+    # The privacy origin of the turn that started it travels with the worker,
+    # so its steps (in any process) stay restricted (bots.pools).
+    privacy_origin = list(pools.current_origin())
     with transaction.atomic():
         worker = Worker.objects.create(
             session=session,
             bot_name=bot.name,
             title=(title or function)[:200],
             function=function,
-            args=dict(args),
+            args={
+                **dict(args),
+                **({PRIVACY_ARG: privacy_origin} if privacy_origin else {}),
+            },
             notify=notify,
             recurring_origin=recurring_origin or None,
             originating_message=origin,
@@ -554,9 +565,17 @@ def _run(worker_id: str, registry=None) -> str:
         args.pop("_agent_replies", None)
         args.pop("_agent_instructions", None)
         args.pop("_agent_mail_closed", None)
-        outcome = (
-            function(ctx, **args) if params and params[0] == "ctx" else function(**args)
-        )
+        carried = args.pop(PRIVACY_ARG, None) or []
+        from django_ergo.bots import pools
+
+        with pools.origin_scope(
+            [str(n) for n in carried if isinstance(n, str)], replace=True
+        ):
+            outcome = (
+                function(ctx, **args)
+                if params and params[0] == "ctx"
+                else function(**args)
+            )
         if inspect.isawaitable(outcome):
             from asgiref.sync import async_to_sync
 

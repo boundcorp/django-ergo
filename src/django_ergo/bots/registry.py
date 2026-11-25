@@ -51,11 +51,39 @@ def closed_to(bot: Bot, session) -> bool:
     Approved exports are destination-owned snapshots, never source-ID grants.
     """
     registry = bot.registry
-    return bool(
+    if (
         registry is not None
         and session.bot_name != bot.name
         and registry.is_private(session.bot_name)
+    ):
+        return True
+    return not privacy_readable(bot, session)
+
+
+def privacy_readable(bot: Bot, session) -> bool:
+    """Whether ``bot`` (in the current turn) may read ``session``'s history:
+    a session under a privacy policy (its bot's, or an inherited origin,
+    ``bots.pools``) is readable only by work under that same policy."""
+    from django_ergo.bots import pools
+
+    names = set(pools.session_origin(session))
+    registry = getattr(bot, "registry", None)
+    owner = (
+        bot
+        if session.bot_name == bot.name
+        else (registry.bots.get(session.bot_name) if registry is not None else None)
     )
+    if owner is not None:
+        names |= set(pools.bot_policy_names(owner))
+    else:
+        names |= {
+            name
+            for name, policy in bot.providers.pools.privacy.items()
+            if session.bot_name in policy.bots
+        }
+    if not names:
+        return True
+    return names <= set(pools.privacy_for(bot).names)
 
 
 def find_bot_folders(directory: str | Path) -> list[Path]:
