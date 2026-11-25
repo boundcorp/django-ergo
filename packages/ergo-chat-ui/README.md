@@ -82,6 +82,35 @@ renderPart={part =>
 keeps its own state. Enter sends, Shift+Enter is a newline, and an Enter that confirms an IME candidate is ignored.
 A rejected `onSend` keeps the text and attachments and shows the error message.
 
+### Host integration (optional props)
+
+Everything below is additive; without these props the components behave as described above.
+
+`Transcript` / `ChatView`:
+
+| Prop | Purpose |
+| --- | --- |
+| `renderMessage(message, { index, parts, defaultRender })` | Message-level slot. Return a node to replace the whole message (the host lays out `parts`, which are already run through `renderPart` and keyed, and adds its own labels, anchors and cards before/after), `null` to hide it, `undefined` for the default. |
+| `header` | Rendered before the first message. |
+| `scroll="host"` | A plain, non-scrolling list (no `role="log"`, no tab stop, no pinning). The host owns the scroller, jump-to-bottom, scroll anchoring and deep links. Default `"pin"` is unchanged. |
+| `Message.meta` | Host data carried untouched (never rendered) so slots can read the host's own record back. |
+
+`Composer`:
+
+| Prop | Purpose |
+| --- | --- |
+| `textareaRef` | Ref to the textarea (focus, selection, auto-resize, voice insertion). |
+| `canSend` | Host-owned guard. Replaces the computed rule for the Send button; Enter/submit then call `onSend` whenever the composer is not `disabled`/sending, so the host can explain a refusal. |
+| `clearOnSend={false}` | The host clears the draft/attachments itself (e.g. only if the text is unchanged since the send). |
+| `sendWhileBusy` | Keep Send next to Stop while `busy` (steer a running turn). |
+| `stopDisabled`, `attachDisabled` | Disable only that button. |
+| `renderPending(attachment, remove)` | Custom pending-attachment chip; `remove()` takes the normal `onRemoveAttachment` path. |
+| `afterInput`, `actions`, `footer` | Slots: after the textarea (a voice button), between Stop and Send ("Stop & send"), under the row (a model link). |
+| `buttons`, `titles`, `icons` | Accessible names, tooltips and visible content for send/stop/attach. |
+| `classNames`, `unstyled` | Add classes per element; `unstyled` drops the package's layout/visual classes (keeps the scoped root tokens). |
+
+Pasting files into the textarea goes through `onAttach` (when given and not `attachDisabled`); pasted text is untouched.
+
 ### Safety
 
 - Markdown: raw HTML is shown as text; links allow `http(s)`, `mailto`, `tel`, `#x` and same-origin paths only
@@ -122,9 +151,15 @@ The package is controlled and stateless about the outside world. The adapter you
 
 ## Ergonaut mapping
 
-Ergonaut adopts `MarkdownContent` in its existing Markdown adapter for chat transcripts and document views. This shares the GFM parser while Ergonaut supplies its existing code, thread link, document anchor, image and URL handling. The adapter intentionally retains its `.markdown` wrapper and host styles; no package stylesheet is needed for this primitive. The package's generic transcript and composer are not yet adopted: Ergonaut's existing rich cards, approval batching, attachment handling, voice, session controls, scrolling and send/interrupt behavior remain host-owned. The mapping below describes a possible later integration, not current behavior.
+Ergonaut adopts `MarkdownContent` (its Markdown adapter keeps its own wrapper, code, thread links and URL policy), the `Transcript` list and the `Composer`, through `ergonaut/frontend/src/chatAdapter.ts`:
 
-For a clean Ergonaut frontend install, first run `npm ci && npm run build` in `packages/ergo-chat-ui`, then `npm ci` in `ergonaut/frontend`. The frontend uses a relative local package dependency, and CI and the container build perform these steps in order; generated `dist` is not committed. Vite deduplicates React across the local package link.
+- **Transcript** (`scroll="host"`): `toChatMessages` maps sessions to package messages (id = line). `renderPart` draws every block with Ergonaut's own cards (messaging/worker/tool cards, folds, reply bubble, attachment galleries); `renderMessage` wraps each message with its anchor, call header, sent-to notes, bot files, context panel, compaction divider and voice cards, and replaces event and attributed messages wholesale. No package default part is shown in Ergonaut.
+- **Composer**: the package supplies the form, textarea, attach/paste/pending-list flow, Stop and Send. Ergonaut passes `canSend`, `clearOnSend={false}`, `sendWhileBusy`, controlled `draft`/`attachments`, and slots for the voice recorder, "Stop & send" and the model link.
+- **Host-side by design**: scroller, pinning, "See more", jump-to-bottom, deep-link reveal (the list lives in Ergonaut's `.chat-transcript`); approvals (a docked panel that stays in view while scrolled and gates the composer; batching and stale handling are `chooseApproval`); transport, EventSource merge by line, auth/CSRF, stop vs interrupt, the ambiguous-send warning, upload/delete, drafts, model selection, voice, suggestion chips, queued-message echo and unsend.
+
+For a clean Ergonaut frontend install, first run `npm ci && npm run build` in `packages/ergo-chat-ui`, then `npm ci` in `ergonaut/frontend`. The frontend uses a relative local package dependency, and CI and the container build perform these steps in order; generated `dist` is not committed. Vite deduplicates React across the local package link; `bun test` does so through `ergonaut/frontend/test-react-dedupe.ts`.
+
+The table below is the data mapping.
 
 | Ergonaut (`ergonaut/frontend/src/api.ts`) | `@ergo/chat-ui` | Notes |
 | --- | --- | --- |
@@ -134,8 +169,8 @@ For a clean Ergonaut frontend install, first run `npm ci && npm run build` in `p
 | `Block {type:'text'}` | `{type:'text'}` | Markdown. |
 | `Block {type:'tool_use'}` + matching `tool_result` | one `{type:'tool'}` | `id` = `tool_use.id`; `result` = `tool_result.content`; `status` = `error` if `is_error`, `done` if a result exists, else `running`. |
 | `Block {type:'attachment'}` | `{type:'attachment'}` | `label`→`name`, `id`→`id`, `media_type`→`mediaType`; `url` from `api.ts` view/download URLs. |
-| `Approval` (pending tool call) | `{type:'custom', kind:'approval', id, data}` | Host `renderPart` renders it; batching and revalidation stay in the adapter. |
-| `Block {type:'thinking'}`, `{type:'context'}` | host `custom` parts or dropped | Not generic. |
+| `Approval` (pending tool call) | host panel (Ergonaut) or `{type:'custom', kind:'approval', id, data}` | Ergonaut keeps a docked panel; other hosts can render it via `renderPart`. Batching and revalidation stay in the host. |
+| `Block {type:'thinking'}`, `{type:'context'}` | `custom` parts (`kind` thinking/context) | Ergonaut renders them; not generic. |
 | Delegated messages, worker/thread cards, voice, compaction | `custom` parts + `renderPart` | Stay in Ergonaut. |
 | `chatSend.prepareChatSend` | adapter around `onSend` | Suggestion sends keep the draft; use `draft`/`onDraftChange`. |
 | Chat status (`Chat.tsx`) | `status` | busy → `sending`/`streaming`. |
