@@ -51,10 +51,14 @@ import logging
 import os
 import re
 import sys
+import types
 from dataclasses import dataclass
 from dataclasses import field
 from typing import TYPE_CHECKING
 from typing import Any
+from typing import Union
+from typing import get_args
+from typing import get_origin
 from typing import get_type_hints
 
 from asgiref.sync import sync_to_async
@@ -231,6 +235,20 @@ class PageAction:
         }
 
 
+def _parameter_schema(hint) -> dict:
+    """Infer the supported JSON shape, including optional typed lists."""
+    origin = get_origin(hint)
+    if origin in (Union, types.UnionType):
+        choices = [item for item in get_args(hint) if item is not type(None)]
+        if len(choices) == 1:
+            return _parameter_schema(choices[0])
+    schema = {"type": _JSON_TYPES.get(origin or hint, "string")}
+    if schema["type"] == "array":
+        args = get_args(hint)
+        schema["items"] = _parameter_schema(args[0]) if args else {}
+    return schema
+
+
 def _infer_parameters(func: Callable, skip_first: bool) -> tuple[dict, list[str]]:
     signature = inspect.signature(func)
     try:
@@ -246,8 +264,7 @@ def _infer_parameters(func: Callable, skip_first: bool) -> tuple[dict, list[str]
         if param.kind in (param.VAR_POSITIONAL, param.VAR_KEYWORD):
             continue
         hint = hints.get(param.name, str)
-        origin = getattr(hint, "__origin__", hint)
-        properties[param.name] = {"type": _JSON_TYPES.get(origin, "string")}
+        properties[param.name] = _parameter_schema(hint)
         if param.default is inspect.Parameter.empty:
             required.append(param.name)
     return properties, required

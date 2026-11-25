@@ -274,6 +274,18 @@ def test_bot_tool_infers_schema_and_runs():
         FunctionToolkit([search.__bot_tool__, search.__bot_tool__])
 
 
+def test_bot_tool_infers_postponed_optional_list_schema():
+    @bot_tool
+    def report(session_ids: list[str] | None = None):
+        return session_ids
+
+    assert report.__bot_tool__.json_schema() == {
+        "type": "object",
+        "properties": {"session_ids": {"type": "array", "items": {"type": "string"}}},
+        "required": [],
+    }
+
+
 def test_plugin_resolution():
     assert resolve_plugin_class("tests.test_bots:RecordingPlugin") is RecordingPlugin
     with pytest.raises(ValueError, match="Unknown bot plugin"):
