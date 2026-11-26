@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import type { Routing, RoutingCandidate, RoutingProvider, RoutingWindow } from '../api'
 import { api } from '../api'
 import { ago, agoLong } from '../time'
+import { PoolsSection } from '../components/Pools'
 import { CapacityLoading, CapacitySection } from './Capacity'
 
 function windowLabel(key: string, window?: RoutingWindow) {
@@ -360,6 +361,7 @@ export function RoutingPage() {
             refreshError={refreshError}
             onRefresh={refresh}
           />
+          <PoolsSection />
           <Providers providers={data.providers} />
 
           <section aria-labelledby="routing-tiers">
