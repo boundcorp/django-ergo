@@ -205,6 +205,10 @@ class Terms:
     # children is bounded by ``budget_usd`` alone).
     cap_envelope: object = None
     cap_usd: Decimal | None = None
+    # The exact prices of the routes in the current config ({ref: price or
+    # None}); a send prices with these, not with the guard's copy from when
+    # it was built. None: not re-read (the guard's price applies).
+    prices: dict | None = None
 
     @classmethod
     def of(cls, grant) -> Terms:
@@ -238,6 +242,7 @@ class Terms:
             expires_at=min(self.expires_at, other.expires_at),
             cap_envelope=next(iter(envelopes), None),
             cap_usd=min(caps) if caps else None,
+            prices=other.prices if other.prices is not None else self.prices,
         )
 
 
@@ -765,7 +770,7 @@ class MeteredGuard:
     deny_reason: str = ""  # set: refuse every send with this reason
     attempts: int = 0
 
-    async def call(
+    async def call(  # noqa: C901
         self,
         kwargs: dict,
         adapter: SpendAdapter | str,
@@ -802,19 +807,30 @@ class MeteredGuard:
             grant_id=self.grant_id, user_id=self.user_id, current=self.current
         )
         ceiling = min(self.max_output_tokens, terms.max_output_tokens)
+        price = self.price
+        if terms.prices is not None:
+            # The price as providers.yaml has it now (a stale process's copy
+            # may be lower, or name a price that was removed).
+            price = terms.prices.get(f"{self.provider}/{self.model}")
+            if price is None:
+                msg = (
+                    f"{self.provider}/{self.model} has no exact price in the current "
+                    "providers.yaml; refusing to send"
+                )
+                raise SpendDenied(msg)
         try:
             bound = adapter.bound(kwargs, ceiling)
         except UnsupportedRequest as exc:
             msg = f"Pool {self.pool!r} can't bound this request's cost: {exc}; refusing to send"
             raise SpendDenied(msg) from exc
         amount = (
-            self.price.worst_case(
+            price.worst_case(
                 bound.input_tokens, bound.output_tokens, cache_write=bound.cache_write
             )
-            if self.price is not None
+            if price is not None
             else None
         )
-        if amount is None and self.price is not None:
+        if amount is None and price is not None:
             msg = (
                 f"{self.provider}/{self.model} can write prompt cache but its price "
                 "has no cache_write rate; refusing to send"
@@ -830,7 +846,7 @@ class MeteredGuard:
             "selector": f"{self.provider}/{self.model}"[:200],
             "purpose": (getattr(call, "kind", "") or self.purpose)[:32],
             "attempt": self.attempts,
-            "rates": self.price.snapshot() if self.price else {},
+            "rates": price.snapshot() if price else {},
         }
         pk = await sync_to_async(reserve, thread_sensitive=True)(
             grant_id=self.grant_id,
@@ -865,7 +881,7 @@ class MeteredGuard:
             pk,
             outcome=InferenceOutcome.OK,
             upstream_request_id=str(request_id or "")[:200],
-            **priced(usage, self.price),
+            **priced(usage, price),
         )
         return response
 

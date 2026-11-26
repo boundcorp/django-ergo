@@ -7,7 +7,10 @@
 - ``accounts``: the metered accounts a config envelope has funded, so a
   renamed (or removed and re-added) pool continues its envelope instead of
   being funded again by config sync.
-- ``linked_by``/``linked_at``/``link_note``: an admin's explicit link.
+- ``linked_by``/``linked_at``/``link_note``: an admin's explicit link (or
+  approval of new accounts, or lifting a person's revocation).
+- ``ProviderToggle.accounts``: a switched-off provider's account identity, so
+  renaming the provider in providers.yaml doesn't switch spend back on.
 
 Backfill, conservatively: an issued envelope's parent is its owner's config
 envelope on the same pool, when there is one (an issued envelope without a
@@ -91,6 +94,11 @@ class Migration(migrations.Migration):
             model_name="spendenvelope",
             name="link_note",
             field=models.CharField(blank=True, default="", max_length=200),
+        ),
+        migrations.AddField(
+            model_name="providertoggle",
+            name="accounts",
+            field=models.JSONField(blank=True, default=list),
         ),
         migrations.RunPython(backfill, migrations.RunPython.noop),
     ]

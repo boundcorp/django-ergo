@@ -18,6 +18,7 @@ from __future__ import annotations
 import datetime as dt
 import threading
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 from django.contrib.auth import get_user_model
@@ -31,6 +32,7 @@ from django_ergo.bots.providers import parse_providers
 from django_ergo.bots.registry import BotRegistry
 from django_ergo.bots.runtime import Bot
 from django_ergo.conversation import spend_guard
+from django_ergo.conversation.models import InferenceRequest
 from django_ergo.conversation.models import SpendEnvelope
 from django_ergo.conversation.models import SpendGrant
 from tests.test_model_pools import POOLS
@@ -513,3 +515,204 @@ def test_an_unreadable_config_fails_closed_for_metered_only(tmp_path, broken):
     # Fixed again: metered sends work again.
     path.write_text(POOLS)
     _send(guard)
+
+
+@pytest.mark.django_db
+def test_link_candidates_list_the_overlapping_envelopes_for_an_admin():
+    lee = User.objects.create(username="lee")
+    providers = parse_providers(EXTRA)
+    paid = _view(providers, lee).grant
+    _hold(paid, lee, "2", providers)
+    found = pools.link_candidates(providers, "extra")
+    assert "an admin must link" in found["problem"]
+    (row,) = found["envelopes"]
+    assert row["id"] == str(paid.envelope_id) and row["pool"] == "paid"
+    assert row["in_use"] and not row["continuable"]
+    assert Decimal(row["reserved_usd"]) == 2
+
+
+# -- review follow-ups ------------------------------------------------------------
+
+
+def _send_priced(guard, *, prompt=1000, output=0):
+    from asgiref.sync import async_to_sync
+
+    async def send():
+        usage = SimpleNamespace(
+            prompt_tokens=prompt,
+            completion_tokens=output,
+            total_tokens=prompt + output,
+            prompt_tokens_details=None,
+            completion_tokens_details=None,
+        )
+        return SimpleNamespace(id="mock", usage=usage)
+
+    return async_to_sync(guard.call)(
+        {"model": "gpt-6.1-sol", "messages": [{"role": "user", "content": "hi"}]},
+        "max_completion_tokens",
+        send,
+    )
+
+
+@pytest.mark.django_db
+def test_a_stale_process_prices_with_the_current_providers_yaml(tmp_path):
+    """The price is re-read at send too: raised 100x, the stale guard
+    reserves and prices at the new rate; removed, it refuses."""
+    lee = User.objects.create(username="lee")
+    path = tmp_path / "providers.yaml"
+    path.write_text(POOLS)
+    _registry, bot = _process(tmp_path)
+    guard = _guard(bot, lee)
+    path.write_text(
+        POOLS.replace(
+            "{input: 1, cached: 0.1, output: 10}",
+            "{input: 100, cached: 10, output: 10}",
+        )
+    )
+    _send_priced(guard, prompt=10_000)
+    row = InferenceRequest.objects.latest("pk")
+    assert row.cost_usd == Decimal(1)  # 10k tokens at $100 per million
+    path.write_text(
+        POOLS.replace(
+            "      - {name: gpt-6.1-sol, price: {input: 1, cached: 0.1, output: 10}}\n",
+            "      - gpt-6.1-sol\n",
+        )
+    )
+    with pytest.raises(spend_guard.SpendDenied, match="no exact price"):
+        _send_priced(guard)
+
+
+@pytest.mark.django_db
+def test_a_replaced_grant_isnt_revived_by_renaming_back():
+    lee = User.objects.create(username="lee")
+    friend = User.objects.create(username="friend")
+    old = grant(parse_providers(POOLS), friend, budget="9")
+    renamed = parse_providers(RENAMED)
+    owners_view = _view(renamed, lee, "paid-api")
+    assert str(old.pk) in {g["id"] for g in pools.issued_grants(owners_view)}
+    grant(renamed, friend, pool="paid-api", budget="1")
+    old.refresh_from_db()
+    assert old.revoked_at is not None  # replaced in the same family
+    back = parse_providers(POOLS)
+    assert _view(back, friend) is None or _view(back, friend).grant is None
+    with pytest.raises(spend_guard.SpendDenied):
+        _hold(old, friend, "0.01", back)
+
+
+@pytest.mark.django_db
+def test_the_owner_can_revoke_a_grant_issued_under_the_pools_old_name():
+    lee = User.objects.create(username="lee")
+    friend = User.objects.create(username="friend")
+    old = grant(parse_providers(POOLS), friend, budget="9")
+    renamed = parse_providers(RENAMED)
+    _view(renamed, lee, "paid-api")
+    pools.revoke_grant(renamed, old.pk, by_id=lee.pk)
+    old.refresh_from_db()
+    assert old.revoked_at is not None
+
+
+@pytest.mark.django_db
+def test_a_detour_through_an_empty_account_set_funds_nothing():
+    """Rename onto a metered provider with no models (no accounts), then
+    back onto the funded routes: no second budget on the OpenAI key."""
+    lee = User.objects.create(username="lee")
+    first = _view(parse_providers(POOLS), lee).grant
+    _hold(first, lee, "10", parse_providers(POOLS))
+    stub = (
+        RENAMED.replace(
+            "  xai-oauth:",
+            "  stub: {type: openai, api_key_env: TEST_POOL_OPENAI_KEY_X, "
+            "billing: metered, models: []}\n  xai-oauth:",
+        )
+        .replace("routes: [openai, anthropic]", "routes: [stub]")
+        .replace(
+            "    tiers: {medium: [openai/gpt-6.1-sol, anthropic/claude-opus-5-5]}\n", ""
+        )
+    )
+    _view(parse_providers(stub), lee, "paid-api")
+    assert not SpendEnvelope.objects.filter(key=f"config:paid-api:{lee.pk}").exists()
+    view = _view(parse_providers(RENAMED), lee, "paid-api")
+    assert view.grant.envelope_id == first.envelope_id
+    with pytest.raises(spend_guard.SpendDenied, match="at its budget"):
+        _hold(view.grant, lee, "0.01", parse_providers(RENAMED))
+
+
+@pytest.mark.django_db
+def test_growing_onto_another_envelopes_account_waits_for_an_admin():
+    """extra (funded separately by an admin, OpenAI) later adds Anthropic,
+    which paid's envelope funds: extra's authority stops until an admin
+    approves the new account."""
+    lee = User.objects.create(username="lee")
+    admin = _admin()
+    providers = parse_providers(EXTRA)
+    _view(providers, lee)
+    pools.link_config_envelope(
+        providers, "extra", by_id=admin.pk, admin=True, fund=True
+    )
+    extra = _view(providers, lee, "extra").grant
+    _hold(extra, lee, "1", providers, ref="openai/gpt-6-luna")
+    grown = parse_providers(
+        EXTRA.replace(
+            "routes: [openai/gpt-6-luna]", "routes: [openai/gpt-6-luna, anthropic]"
+        )
+    )
+    view = _view(grown, lee, "extra")
+    assert view.grant is None
+    assert "an admin must approve" in view.grant_problem()[1]
+    with pytest.raises(spend_guard.SpendDenied, match="revoked"):
+        _hold(extra, lee, "0.01", grown, ref="openai/gpt-6-luna")
+    pools.link_config_envelope(grown, "extra", by_id=admin.pk, admin=True, fund=True)
+    view = _view(grown, lee, "extra")
+    assert view.grant.envelope_id == extra.envelope_id
+    assert view.reserved_usd == Decimal(1)
+
+
+@pytest.mark.django_db
+def test_a_provider_without_a_key_env_is_identified_by_the_sdk_default():
+    lee = User.objects.create(username="lee")
+    base = POOLS.replace("    api_key_env: TEST_POOL_OPENAI_KEY\n", "")
+    first = _view(parse_providers(base), lee).grant
+    _hold(first, lee, "10", parse_providers(base))
+    moved = (
+        base.replace("  - name: paid\n", "  - name: paid-api\n")
+        .replace("  openai:\n    type: openai\n", "  oai:\n    type: openai\n")
+        .replace("routes: [openai, anthropic]", "routes: [oai, anthropic]")
+        .replace(
+            "tiers: {medium: [openai/gpt-6.1-sol, ",
+            "tiers: {medium: [oai/gpt-6.1-sol, ",
+        )
+    )
+    view = _view(parse_providers(moved), lee, "paid-api")
+    assert view.grant.envelope_id == first.envelope_id
+
+
+@pytest.mark.django_db
+def test_runtime_switches_follow_a_rename():
+    """A pool switched off stays off under its new name; a provider switched
+    off stays off for spend under a new provider name on the same key."""
+    from tests.test_model_pools import set_state
+
+    lee = User.objects.create(username="lee")
+    providers = parse_providers(POOLS)
+    own = _view(providers, lee).grant
+    set_state("paid", providers, enabled=False)
+    view = _view(parse_providers(RENAMED), lee, "paid-api")
+    assert not view.enabled
+    with pytest.raises(spend_guard.SpendDenied, match="switched off"):
+        _hold(view.grant, lee, "0.01", parse_providers(RENAMED))
+    set_state("paid-api", parse_providers(RENAMED), enabled=True)
+    set_state("paid", providers, enabled=True)
+    pools.set_provider_enabled("openai", providers, False, version=0)
+    renamed_provider = (
+        POOLS.replace("  openai:\n    type: openai\n", "  oai:\n    type: openai\n")
+        .replace("routes: [openai, anthropic]", "routes: [oai, anthropic]")
+        .replace(
+            "tiers: {medium: [openai/gpt-6.1-sol, ",
+            "tiers: {medium: [oai/gpt-6.1-sol, ",
+        )
+    )
+    moved = parse_providers(renamed_provider)
+    current = _view(moved, lee).grant
+    assert current.envelope_id == own.envelope_id
+    with pytest.raises(spend_guard.SpendDenied, match="doesn't cover"):
+        _hold(current, lee, "0.01", moved, ref="oai/gpt-6.1-sol")

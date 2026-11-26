@@ -83,6 +83,7 @@ from __future__ import annotations
 import hashlib
 import os
 import shutil
+import threading
 from dataclasses import dataclass
 from dataclasses import field
 from decimal import Decimal
@@ -808,6 +809,7 @@ class ProvidersUnreadable(ProvidersError):  # noqa: N818
 # ``Providers`` in this process (bounded: a few recent versions).
 _CURRENT: dict[tuple[str, str], Providers] = {}
 _CURRENT_LIMIT = 8
+_CURRENT_LOCK = threading.Lock()
 
 
 def current_providers(providers: Providers) -> Providers:
@@ -845,7 +847,8 @@ def current_providers(providers: Providers) -> Providers:
     else:
         fresh = Providers()  # removed: no pools, so nothing metered is guarded
     fresh.source = ProvidersSource(paths=source.paths, file=file, sha=sha)
-    while len(_CURRENT) >= _CURRENT_LIMIT:
-        _CURRENT.pop(next(iter(_CURRENT)))
-    _CURRENT[(file, sha)] = fresh
+    with _CURRENT_LOCK:
+        while len(_CURRENT) >= _CURRENT_LIMIT:
+            _CURRENT.pop(next(iter(_CURRENT)), None)
+        _CURRENT[(file, sha)] = fresh
     return fresh

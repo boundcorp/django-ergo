@@ -143,9 +143,10 @@ cumulative ledger and the lock, and every revision of it shares both.
   Restoring the config, or lowering and then raising the budget, adds a
   revision to the **same** envelope: what was spent or held before still
   counts, so a config change never replenishes money. If a person revokes
-  the owner's config revision, config sync doesn't issue it again, even
-  after a route edit; only a change to its money terms (`budget_usd`,
-  `per_launch_usd`, `expires`) does.
+  the owner's config revision (a kill switch), no config edit issues it
+  again, not even a narrowing one; only an admin's
+  `pools.link_config_envelope(..., fund=True)` restores it, on the same
+  envelope.
 - **The envelope outlives the pool's name.** Each config envelope records
   the metered accounts it has funded (provider names, `api_key_env` names,
   `account` names; the list only grows). A pool with no envelope yet whose
@@ -166,7 +167,15 @@ cumulative ledger and the lock, and every revision of it shares both.
     who did it and when).
 
   Only accounts no envelope has ever funded get a new envelope from config
-  sync, from the pool's `budget_usd`.
+  sync, from the pool's `budget_usd`, and a pool with no identifiable
+  metered account gets none. An account identity is the provider's name,
+  its `api_key_env` (the SDK's default variable when it names none) and its
+  `account`. A pool whose envelope later grows onto an account another
+  envelope already funds stops spending until an admin approves it (`fund`
+  on its existing envelope; an admin's continuation approves the pool's
+  accounts too). A pool switched off at runtime stays off under its new
+  name, and a provider switched off at runtime stays off for metered sends
+  under a new provider name on the same account.
 - **Issued grants**: the owner (or an admin) issues grants to other users
   with `pools.issue_grant` (Ergonaut: the Pools page). Each is a new
   envelope **drawn from the owner's config envelope** (its `parent`):
@@ -177,8 +186,9 @@ cumulative ledger and the lock, and every revision of it shares both.
   every grant they issued on the pool together, so lowering, removing,
   expiring or revoking the owner's authority narrows or stops every grant
   at once, guards already built included. A new grant for the same
-  grantee and pool revokes their earlier issued one (never the owner's own
-  config authority), whose ledger stays. An issued grant also works only
+  grantee and pool revokes their earlier issued one, also one issued under
+  the pool's earlier name (never the owner's own config authority), whose
+  ledger stays; the owner can revoke and list those too. An issued grant also works only
   while its issuer owns the pool and the pool exists under its name: after
   a move to another owner or a rename it stops at once and works again only
   if that is undone. Config sync never revokes it, so a process still on an
@@ -284,7 +294,9 @@ configured:
   roles mount the same bot folders, so this is one source of truth. If the
   file can't be read or doesn't validate, metered sends are refused and
   config sync writes nothing until it loads again; subscription routes
-  don't depend on it and keep working. It checks the
+  don't depend on it and keep working. The price is re-read the same way:
+  a send reserves and prices at the current file's exact price, and
+  refuses when it has none. It checks the
   pool and provider switches, clamps the output limit to that ceiling, asks
   the adapter for a bound on the request,
   reserves the worst case at the exact tariff (the dearest input rate that
@@ -473,6 +485,9 @@ The model picker lists only what the chat may use: the active pool's models
    `0061_spend_envelope_families`) add the tables; with no `pools:` section
    and no rows, behavior is unchanged. `0061` links each issued grant to its
    owner's config envelope (a grant whose owner has none stops working).
+   A config revision an owner gave up before the upgrade (under 0060, an
+   owner issuing a grant to themselves revoked it) stays revoked until an
+   admin restores it.
 2. Add `pools:` (owners, prices, budgets with an end date) to providers.yaml;
    check the Routing page's Pools section; issue grants there.
 3. Rollback: remove the `pools:` section (behavior returns to legacy at the

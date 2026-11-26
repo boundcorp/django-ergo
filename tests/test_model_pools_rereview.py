@@ -291,8 +291,8 @@ def test_rr_revoked_issued_grant_refuses_an_already_built_guard():
 @pytest.mark.django_db
 def test_rr_a_person_revoking_config_terms_isnt_undone_by_sync():
     """The owner gives up their config revision: config sync doesn't mint
-    it again, even after a route edit; only a change to the money terms
-    (budget, per-launch amount, expiry) does, on the same envelope."""
+    it again, after a route edit or a money edit (even a narrowing one);
+    only an admin's explicit restore does, on the same envelope."""
     lee = User.objects.create(username="lee")
     providers = parse_providers(POOLS)
     own = _own(providers, lee).grant
@@ -306,6 +306,13 @@ def test_rr_a_person_revoking_config_terms_isnt_undone_by_sync():
     )
     assert _own(parse_providers(more), lee).grant is None
     later = POOLS.replace("expires: 2099-12-31", "expires: 2099-06-30")
+    assert _own(parse_providers(later), lee).grant is None
+    lower = POOLS.replace("budget_usd: 10", "budget_usd: 5")
+    assert _own(parse_providers(lower), lee).grant is None
+    admin = User.objects.create(username="admin", is_superuser=True)
+    pools.link_config_envelope(
+        parse_providers(later), "paid", by_id=admin.pk, admin=True, fund=True
+    )
     renewed = _own(parse_providers(later), lee).grant
     assert renewed.envelope_id == own.envelope_id
 

@@ -678,10 +678,11 @@ def test_r12_queued_work_on_a_paid_pool_never_widens(monkeypatch):
     assert policy["pool"] == "paid" and policy["grant"]
     own = pools.snapshot(bot.providers, user.pk).get("paid").grant
     pools.revoke_grant(bot.providers, own.pk, by_id=user.pk)
-    # New authority since (new money terms in providers.yaml, a new revision
-    # of the same envelope); the queued job doesn't pick it up.
-    bot.registry.providers = parse_providers(
-        POOLS.replace("expires: 2099-12-31", "expires: 2099-06-30")
+    # New authority since (an admin restores it: a new revision of the same
+    # envelope); the queued job doesn't pick it up.
+    admin = User.objects.create(username="admin", is_superuser=True)
+    pools.link_config_envelope(
+        bot.providers, "paid", by_id=admin.pk, admin=True, fund=True
     )
     with pools.policy_scope(policy), pytest.raises(pools.PoolRefusal):
         pools.select_route(bot, session, ref="auto/medium")

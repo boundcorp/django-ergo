@@ -1539,6 +1539,10 @@ class ProviderToggle(models.Model):
 
     name = models.CharField(max_length=64, unique=True)
     enabled = models.BooleanField(default=True)
+    # The provider's account identity when it was switched off
+    # (``bots.pools.provider_accounts``): metered sends stay off for it even
+    # after providers.yaml renames the provider.
+    accounts = models.JSONField(default=list, blank=True)
     version = models.PositiveIntegerField(default=1)
     updated_at = models.DateTimeField(auto_now=True)
 

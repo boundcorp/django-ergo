@@ -386,8 +386,7 @@ CONFIG_SOURCE = "config"
 # revoked_reason prefix of revocations made by following providers.yaml (any
 # other revocation was a person's, and config sync never undoes it).
 SYNC_REVOKED = "config sync: "
-# Format of the config_key fingerprint (see _config_terms); older keys are
-# treated as having the same money terms as any new one (conservative).
+# Format of the config_key fingerprint (see _config_terms).
 CONFIG_KEY_VERSION = "2"
 # One advisory lock for creating, continuing and linking config envelopes.
 CONFIG_ENVELOPES_LOCK = "config-envelopes"
@@ -415,18 +414,50 @@ def config_envelope_key(pool: str, owner_id) -> str:
     return f"config:{pool}:{owner_id}"
 
 
+# The key env each SDK reads when a provider names none.
+SDK_KEY_ENVS = {
+    "openai": ("OPENAI_API_KEY",),
+    "claude": ("ANTHROPIC_API_KEY",),
+    "google": ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
+}
+
+
+def provider_accounts(provider: Provider) -> list[str]:
+    """What identifies a provider's account across renames: its name, the
+    key env it reads (the SDK's default when it names none) and its account
+    name. Any one shared means the same money."""
+    out = {f"provider:{provider.name}"}
+    envs = (
+        (provider.api_key_env,)
+        if provider.api_key_env
+        else SDK_KEY_ENVS.get(provider.type, ())
+    )
+    out.update(f"env:{env}" for env in envs)
+    if provider.account:
+        out.add(f"account:{provider.account}")
+    return sorted(out)
+
+
 def pool_accounts(providers: Providers, pool: Pool) -> list[str]:
-    """The metered accounts a pool's routes spend on: provider names, their
-    key env names and account names (any one shared means the same money)."""
+    """The metered accounts a pool's routes spend on (``provider_accounts``)."""
     out = set()
     for ref in pool_refs(providers, pool, metered=True):
-        provider = providers.providers[ref.partition("/")[0]]
-        out.add(f"provider:{provider.name}")
-        if provider.api_key_env:
-            out.add(f"env:{provider.api_key_env}")
-        if provider.account:
-            out.add(f"account:{provider.account}")
+        out.update(provider_accounts(providers.providers[ref.partition("/")[0]]))
     return sorted(out)
+
+
+def _switched_off_accounts() -> set[str]:
+    """The accounts of providers switched off at runtime: a switch follows
+    the account even when providers.yaml renames the provider. Runs the ORM."""
+    from django_ergo.conversation.models import ProviderToggle
+
+    out = set()
+    for name, accounts in ProviderToggle.objects.filter(enabled=False).values_list(
+        "name", "accounts"
+    ):
+        out.add(f"provider:{name}")
+        out.update(accounts or ())
+    return out
 
 
 def _config_terms(pool: Pool, providers: Providers, owner_id) -> dict | None:
@@ -444,9 +475,8 @@ def _config_terms(pool: Pool, providers: Providers, owner_id) -> dict | None:
     ):
         return None
     routes = pool_refs(providers, pool, metered=True)
-    # The money terms leave out the pool's name: the envelope is the
-    # identity, so a rename continuing it keeps a person's revocation (see
-    # _same_money). The whole terms include it: a rename is a new revision
+    # The money terms leave out the pool's name (the envelope is the
+    # identity); the whole terms include it: a rename is a new revision
     # carrying the new name.
     money = [
         str(pool.budget_usd),
@@ -454,9 +484,7 @@ def _config_terms(pool: Pool, providers: Providers, owner_id) -> dict | None:
         pool.expires_at.isoformat(),
     ]
     whole = json.dumps([*money, pool.name, routes, pool.max_output_tokens])
-    # "2:<money terms>:<all terms>": a person's revocation sticks until the
-    # money terms (budget, per-launch, expiry) change, not on a route,
-    # ceiling or name edit.
+    # "2:<money terms>:<all terms>".
     key = (
         f"{CONFIG_KEY_VERSION}:"
         + hashlib.sha256(json.dumps(money).encode()).hexdigest()[:29]
@@ -493,14 +521,6 @@ def _revoke_envelope(envelope_id, reason: str, now) -> None:
     )
 
 
-def _same_money(stored_key: str, key: str) -> bool:
-    """Whether a stored config revision had the same money terms as ``key``
-    (a key from an earlier format counts as the same: conservative)."""
-    if not stored_key.startswith(f"{CONFIG_KEY_VERSION}:"):
-        return True
-    return stored_key.split(":")[1] == key.split(":")[1]
-
-
 def _envelope_problem(envelope, providers: Providers, owners: dict) -> str:
     """Why current providers.yaml no longer backs ``envelope``, or ""."""
     pool = providers.pools.get(envelope.pool)
@@ -516,7 +536,23 @@ def _envelope_problem(envelope, providers: Providers, owners: dict) -> str:
         return (
             f"providers.yaml no longer sets a budget and expiry for {envelope.pool!r}"
         )
+    if envelope.source == CONFIG_SOURCE:
+        return _growth_problem(envelope, providers, pool)
     return ""
+
+
+def _growth_problem(envelope, providers: Providers, pool: Pool) -> str:
+    """Why a config envelope can't take on its pool's new accounts (other
+    envelopes already fund them), or "". Runs the ORM when it grew."""
+    growth = set(pool_accounts(providers, pool)) - set(envelope.accounts or ())
+    others = [e for e in _overlapping(growth) if e.pk != envelope.pk]
+    if not others:
+        return ""
+    names = ", ".join(sorted({repr(e.pool) for e in others}))
+    return (
+        f"pool {envelope.pool!r} now spends on accounts that already have "
+        f"spend authority (pool {names}); an admin must approve them"
+    )
 
 
 def _settle(envelope, providers: Providers, owners: dict, now):
@@ -558,12 +594,13 @@ def _settle(envelope, providers: Providers, owners: dict, now):
         )
         if (
             newest is not None
+            and newest.revoked_at is not None
             and not newest.revoked_reason.startswith(SYNC_REVOKED)
-            and _same_money(newest.config_key, terms["config_key"])
+            and (envelope.linked_at is None or envelope.linked_at < newest.revoked_at)
         ):
-            # A person revoked these money terms; only a providers.yaml change
-            # to the budget, per-launch amount or expiry issues one again.
-            return None, "the spend grant was revoked"
+            # A person revoked it: no config edit (even a narrowing one)
+            # issues it again; only an admin's link_config_envelope does.
+            return None, "the spend grant was revoked (an admin can restore it)"
     revision = SpendGrant.objects.create(
         envelope=envelope,
         pool=envelope.pool,
@@ -613,8 +650,9 @@ def config_link_problem(pool: Pool, providers: Providers, owners: dict) -> str:
     if _config_terms(pool, providers, owner_id) is None:
         return ""
     key = config_envelope_key(pool.name, owner_id)
-    if SpendEnvelope.objects.filter(key=key).exists():
-        return ""
+    envelope = SpendEnvelope.objects.filter(key=key).first()
+    if envelope is not None:
+        return _growth_problem(envelope, providers, pool)
     _, problem = _continuable(pool, providers, owners)
     return problem
 
@@ -640,6 +678,21 @@ def _continuable(pool: Pool, providers: Providers, owners: dict):
     )
 
 
+def _carry_pool_switch(old: str, new: str) -> None:
+    """A pool switched off at runtime stays off under its new name (its
+    envelope continues under that name). Runs the ORM."""
+    from django_ergo.conversation.models import ModelPoolState
+
+    if ModelPoolState.objects.filter(name=old, enabled=False).exists():
+        state, _ = ModelPoolState.objects.get_or_create(
+            name=new, defaults={"version": 0}
+        )
+        if state.enabled is not False:
+            state.enabled = False
+            state.version += 1
+            state.save()
+
+
 def _config_envelope(pool: Pool, providers: Providers, owners: dict, now):
     """The owner's config envelope for ``pool``: its own, a continued one
     (renamed or re-added pool), a new one for accounts never funded, or
@@ -663,6 +716,8 @@ def _config_envelope(pool: Pool, providers: Providers, owners: dict, now):
         continued, problem = _continuable(pool, providers, owners)
         if problem:
             return None
+        if continued is None and not pool_accounts(providers, pool):
+            return None  # nothing to identify the money by: fund nothing
         if continued is not None:
             # Under its own lock too: a send on it never sees half a rename.
             lock(envelope_lock_key(continued.pk))
@@ -676,6 +731,7 @@ def _config_envelope(pool: Pool, providers: Providers, owners: dict, now):
             continued.link_note = (
                 f"continued from pool {continued.pool!r} by config sync"
             )[:200]
+            _carry_pool_switch(continued.pool, pool.name)
             continued.pool = pool.name
             continued.save(update_fields=["key", "pool", "link_note"])
             return continued
@@ -750,7 +806,46 @@ def sync_authority(providers: Providers, owners: dict | None = None) -> None:
             _settle(envelope, providers, owners, now)
 
 
-def link_config_envelope(  # noqa: PLR0913, C901
+def link_candidates(providers: Providers, pool: str) -> dict:
+    """For an admin deciding :func:`link_config_envelope`: why the pool
+    waits ("" when it doesn't) and the config envelopes overlapping its
+    metered accounts (id, pool, owner, accounts, whether a current pool
+    uses it, whether it may be continued, its spend). Runs the ORM."""
+    from django_ergo.conversation.spend_guard import family_spent_and_reserved
+
+    providers = fresh_providers(providers)
+    config = providers.pools.get(pool)
+    if config is None or config.legacy:
+        msg = f"No configured pool named {pool!r}"
+        raise ValueError(msg)
+    owners = owner_ids(providers)
+    owner_id = owners.get(config.owner) if config.owner else None
+    claimed = _claimed_keys(providers, owners) - {config_envelope_key(pool, owner_id)}
+    rows = []
+    for envelope in _overlapping(pool_accounts(providers, config)):
+        spent, held = family_spent_and_reserved(envelope.pk)
+        used = envelope.key in claimed
+        rows.append(
+            {
+                "id": str(envelope.pk),
+                "pool": envelope.pool,
+                "owner_id": envelope.owner_id,
+                "accounts": list(envelope.accounts or ()),
+                "in_use": used,
+                "continuable": not used and envelope.owner_id == owner_id,
+                "spent_usd": str(spent),
+                "reserved_usd": str(held),
+            }
+        )
+    return {
+        "pool": pool,
+        "accounts": pool_accounts(providers, config),
+        "problem": config_link_problem(config, providers, owners),
+        "envelopes": rows,
+    }
+
+
+def link_config_envelope(  # noqa: PLR0913, PLR0915, C901
     providers: Providers,
     pool: str,
     *,
@@ -763,7 +858,9 @@ def link_config_envelope(  # noqa: PLR0913, C901
     """An admin's explicit decision for a config pool whose metered accounts
     already have spend authority (:func:`config_link_problem`): continue
     ``envelope_id`` (its cumulative ledger and any revocation carry over), or
-    ``fund`` a new envelope (new money, so only by an admin). Returns the
+    ``fund`` a new envelope (new money, so only by an admin). On a pool that
+    has its envelope, ``fund`` approves the accounts it now spends on and
+    lifts a person's revocation of it (its ledger carries on). Returns the
     envelope. Runs the ORM."""
     from django.db import transaction
 
@@ -791,10 +888,25 @@ def link_config_envelope(  # noqa: PLR0913, C901
     now = timezone.now()
     with transaction.atomic():
         lock(CONFIG_ENVELOPES_LOCK)
-        if SpendEnvelope.objects.filter(key=key).exists():
+        existing = SpendEnvelope.objects.filter(key=key).first()
+        if existing is not None and not fund:
             msg = f"Pool {pool!r} already has its spend authority"
             raise ValueError(msg)
-        if fund:
+        if existing is not None:
+            # Approve: the pool's current accounts (new ones it overlaps)
+            # and lift a person's revocation of it. Its ledger carries on.
+            lock(envelope_lock_key(existing.pk))
+            existing.accounts = sorted(
+                set(existing.accounts or ()) | set(pool_accounts(providers, config))
+            )
+            existing.linked_by_id = by_id
+            existing.linked_at = now
+            existing.link_note = (note or "approved by an admin")[:200]
+            existing.save(
+                update_fields=["accounts", "linked_by", "linked_at", "link_note"]
+            )
+            envelope = existing
+        elif fund:
             envelope = SpendEnvelope.objects.create(
                 key=key,
                 pool=pool,
@@ -827,11 +939,23 @@ def link_config_envelope(  # noqa: PLR0913, C901
             envelope.link_note = (
                 note or f"continued from pool {envelope.pool!r} by an admin"
             )[:200]
+            _carry_pool_switch(envelope.pool, pool)
             envelope.pool = pool
+            # The admin's decision covers the accounts the pool spends on.
+            envelope.accounts = sorted(
+                set(envelope.accounts or ()) | set(pool_accounts(providers, config))
+            )
             envelope.linked_by_id = by_id
             envelope.linked_at = now
             envelope.save(
-                update_fields=["key", "pool", "link_note", "linked_by", "linked_at"]
+                update_fields=[
+                    "key",
+                    "pool",
+                    "accounts",
+                    "link_note",
+                    "linked_by",
+                    "linked_at",
+                ]
             )
     sync_authority(providers, owners)
     return envelope
@@ -869,7 +993,7 @@ class SendAuthority:
 
         webhooks.refresh_registry()
 
-    def __call__(self, grant):  # noqa: PLR0911
+    def __call__(self, grant):  # noqa: PLR0911, C901
         from django_ergo.conversation.spend_guard import Terms
 
         try:
@@ -913,17 +1037,24 @@ class SendAuthority:
             root_budget = owners_current.budget_usd
         if envelope.source == CONFIG_SOURCE:
             root_budget = current.budget_usd
-        on = {
-            ref
-            for ref in pool_refs(providers, pool, metered=True)
-            if providers.providers[ref.partition("/")[0]].enabled
-        }
+        off = _switched_off_accounts()
+        on = set()
+        prices = {}
+        for ref in pool_refs(providers, pool, metered=True):
+            head, _, model = ref.partition("/")
+            provider = providers.providers[head]
+            if not provider.enabled or off & set(provider_accounts(provider)):
+                continue  # a provider switched off at runtime, renamed or not
+            on.add(ref)
+            found = provider.models.get(model)
+            prices[ref] = found.price if found is not None else None
         return replace(
             terms,
             routes=terms.routes & on,
             max_output_tokens=min(terms.max_output_tokens, pool.max_output_tokens),
             cap_envelope=root.pk,
             cap_usd=root_budget,
+            prices=prices,
         )
 
 
@@ -1142,12 +1273,12 @@ def _views(providers: Providers, user_id=None) -> list[PoolView]:
     from django_ergo.conversation.models import ModelPoolState
     from django_ergo.conversation.spend_guard import spent_and_reserved
 
-    try:
+    owners = owner_ids(providers) if not providers.pools.legacy else {}
+    sync_authority(providers, owners)
+    try:  # after the sync: a renamed pool's switch moves with its envelope
         states = {s.name: s for s in ModelPoolState.objects.all()}
     except DatabaseError:  # pragma: no cover
         states = {}
-    owners = owner_ids(providers) if not providers.pools.legacy else {}
-    sync_authority(providers, owners)
     views = []
     for index, pool in enumerate(providers.pools.pools):
         owner_id = owners.get(pool.owner) if pool.owner else None
@@ -2607,12 +2738,17 @@ def _grant_view(grant, spent=None) -> dict | None:
 
 def issued_grants(view: PoolView) -> list[dict]:
     """The grants on a pool its owner has issued (owner only). Runs the ORM."""
+    from django.db.models import Q
+
     from django_ergo.conversation.models import SpendGrant
 
     if not view.is_owner:
         return []
+    family = Q(pool=view.name) | Q(
+        envelope__parent__pool=view.name, envelope__parent__source=CONFIG_SOURCE
+    )
     rows = SpendGrant.objects.filter(
-        pool=view.name, revoked_at__isnull=True, superseded_at__isnull=True
+        family, revoked_at__isnull=True, superseded_at__isnull=True
     )
     return [_grant_view(g) for g in rows.order_by("-created_at")[:50]]
 
@@ -3093,6 +3229,8 @@ def issue_grant(  # noqa: PLR0912, PLR0913, C901, PLR0915
     if bad:
         msg = "expires_at must be in the future and after valid_from"
         raise ValueError(msg)
+    from django.db.models import Q
+
     sync_authority(providers)
     parent = SpendEnvelope.objects.filter(
         key=config_envelope_key(pool, owner_id), source=CONFIG_SOURCE
@@ -3106,9 +3244,12 @@ def issue_grant(  # noqa: PLR0912, PLR0913, C901, PLR0915
     with transaction.atomic():
         # Replaces the grantee's earlier issued grant, never the owner's own
         # config authority (every issued grant is drawn from it).
+        # Also under the pool's earlier names (the same family): a rename
+        # and rename back can't revive a grant this one replaced.
         for old in (
             SpendGrant.objects.select_for_update()
-            .filter(pool=pool, grantee_id=grantee_id, revoked_at__isnull=True)
+            .filter(Q(pool=pool) | Q(envelope__parent=parent))
+            .filter(grantee_id=grantee_id, revoked_at__isnull=True)
             .exclude(source=CONFIG_SOURCE)
         ):
             old.revoked_at = now
@@ -3153,9 +3294,16 @@ def revoke_grant(
         if grant is None:
             msg = "No such grant"
             raise ValueError(msg)
+        parent = grant.envelope.parent
         if not (
             grant.grantee_id == by_id
             or may_manage(providers, grant.pool, by_id, admin=admin)
+            # Its owner's envelope's pool now (after a rename).
+            or (
+                parent is not None
+                and parent.owner_id == by_id
+                and may_manage(providers, parent.pool, by_id, admin=admin)
+            )
         ):
             msg = "Only the pool's owner, an admin or the grantee can revoke it"
             raise PermissionError(msg)
@@ -3190,6 +3338,9 @@ def set_provider_enabled(
             msg = f"Provider {name!r} changed elsewhere (version {toggle.version}); reload"
             raise VersionConflict(msg)
         toggle.enabled = enabled
+        if not enabled:
+            # Remember the account, so a renamed provider stays off for spend.
+            toggle.accounts = provider_accounts(providers.providers[name])
         toggle.version += 1
         toggle.save()
     return toggle
