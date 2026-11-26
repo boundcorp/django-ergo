@@ -844,8 +844,16 @@ class Bot:
         else the tier's first available one. Never a private model. No ORM."""
         if not is_auto(ref):
             return ref
-        tier = self.providers.routing.tiers.get(tier_of(ref), [])
         routed = ((session.metadata or {}) if session else {}).get("routed_model")
+        if self._pooled():
+            # The pool chose the route (bots.pools); it needn't be in a global
+            # tier, and it is never swapped for one.
+            current = getattr(session, "_ergo_decision", None)
+            if current is not None and not current.legacy:
+                return self.providers.check_public(current.route, where=ref)
+            if routed:
+                return self.providers.check_public(routed, where=ref)
+        tier = self.providers.routing.tiers.get(tier_of(ref), [])
         picked = ""
         if routed in tier:
             picked = routed
@@ -1048,7 +1056,10 @@ class Bot:
             if privacy.restricted and not self.private_pool:
                 msg = f"Privacy policy {privacy.label()} covers this chat"
                 raise PolicyError(msg)
+        decision, model = self._pool_dispatch(session, model, decision, purpose)
         spec = self.engine_spec(session, model)
+        if decision is not None:
+            self._check_dispatch(spec, decision)
         if self._engine_factory is not None:
             if self.private_pool:
                 msg = "Private pool engines cannot use an engine factory override"
@@ -1090,6 +1101,89 @@ class Bot:
             user = session.user if cached else None
             engine.message_timezone = ToolContext(bot=self, user=user).timezone
         return engine
+
+    def _pooled(self) -> bool:
+        return not self.providers.pools.legacy and not self.private_pool
+
+    def _pool_dispatch(
+        self,
+        session: ConversationSession | None,
+        model: str,
+        decision: pools.Decision | None,
+        purpose: str,
+    ) -> tuple[pools.Decision | None, str]:
+        """With pools: the decision this engine sends under and the exact
+        route to build it from. A chat turn's engine is built from the turn's
+        decision (``route``), never re-resolved from global tiers; a chat
+        engine without a decision refuses."""
+        if not self._pooled():
+            return None, model
+        if decision is None and session is not None:
+            current = getattr(session, "_ergo_decision", None)
+            if current is not None and model in ("", current.route):
+                decision = current
+        if decision is None or decision.legacy or decision.mode == "private":
+            ref = model or self.session_model(session) or self.model_ref()
+            if (
+                decision is None
+                and session is not None
+                and (model or purpose == "chat")
+                and ref
+                and not self.providers.is_private(ref)
+            ):
+                msg = (
+                    f"Bot {self.name!r}: {ref} has no pool decision for this "
+                    f"{purpose} call; it must be routed through the chat's active "
+                    "pool before sending"
+                )
+                raise PolicyError(msg)
+            return decision, model
+        if model and model != decision.route:
+            msg = (
+                f"Pool {decision.pool!r} selected {decision.route}, not {model}; "
+                "refusing to build another engine"
+            )
+            raise PolicyError(msg)
+        return decision, decision.route
+
+    def _check_dispatch(self, spec: EngineSpec, decision: pools.Decision) -> None:
+        """The engine about to send must be exactly the decision's route: same
+        pool membership, provider (account), model, engine type, transport and
+        billing. PolicyError otherwise (nothing is sent)."""
+        if decision.legacy or decision.mode == "private":
+            return
+        provider = self.providers.providers.get(decision.provider)
+        pool = self.providers.pools.get(decision.pool)
+        expected_type, expected, _ = (
+            self.providers.engine(decision.route)
+            if provider is not None
+            else ("", {}, "")
+        )
+        problems = []
+        if provider is None:
+            problems.append(f"{decision.provider} isn't a provider")
+        if pool is None or not pool.contains_ref(decision.route):
+            problems.append(f"{decision.route} isn't in pool {decision.pool!r}")
+        if f"{decision.provider}/{decision.model}" != decision.route:
+            problems.append("the decision's provider/model don't match its route")
+        if str(spec.config.get("provider") or "") != decision.provider:
+            problems.append(f"the engine is for {spec.config.get('provider')!r}")
+        if spec.engine_type != expected_type or spec.config.get(
+            "model"
+        ) != expected.get("model"):
+            problems.append(
+                f"the engine is {spec.engine_type}/{spec.config.get('model')}"
+            )
+        if provider is not None and spec.transport_type != provider.transport:
+            problems.append(f"the engine's transport is {spec.transport_type}")
+        if provider is not None and provider.billing != decision.billing:
+            problems.append(f"{decision.provider} now bills as {provider.billing}")
+        if problems:
+            msg = (
+                f"Refusing to send: pool {decision.pool!r} selected {decision.route} "
+                f"but {'; '.join(problems)}"
+            )
+            raise PolicyError(msg)
 
     def _attach_spend_guard(self, engine, spec, session, decision, purpose) -> None:
         """Metered public API routes send only with a pool decision's guard."""
@@ -1703,7 +1797,9 @@ class Bot:
                 if not isinstance(source, OverviewSource)
             ]
             metadata["context_policy"] = "current_chat_only"
-        if budget is None:  # routing may move the chat to another (priced) model
+        if budget is None or self._pooled():
+            # Routing may move the chat to another (priced) model. With pools
+            # it is also the turn's spend and route authority, so it always runs.
             await sync_to_async(self.route, thread_sensitive=True)(session)
         from django_ergo.bots.recurring_reply import apply_notification_policy
 

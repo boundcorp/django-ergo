@@ -275,6 +275,10 @@ def start(ctx: ToolContext, spec: AgentSpec, manager: str = "") -> Worker:
     if ctx.session is None:
         msg = "Agents belong to a chat"
         raise ValueError(msg)
+    from django_ergo.bots.model_choice import AGENT
+    from django_ergo.bots.model_choice import check
+
+    check(ctx.bot, spec.model, AGENT)  # a private model refuses before any side effect
     found = manager_for(ctx.bot, manager, ctx)
     if found.name == "orca":
         from django_ergo.bots.agent_launches import launch
@@ -283,7 +287,7 @@ def start(ctx: ToolContext, spec: AgentSpec, manager: str = "") -> Worker:
     return _start(ctx, spec, found.name)
 
 
-def _start(ctx: ToolContext, spec: AgentSpec, manager: str = "") -> Worker:
+def _start(ctx: ToolContext, spec: AgentSpec, manager: str = "") -> Worker:  # noqa: PLR0915
     """Start an agent and the Worker that watches it.
 
     With ``spec.tier``, the agent, model and effort come from providers.yaml's
