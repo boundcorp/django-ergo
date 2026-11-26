@@ -139,18 +139,25 @@ cumulative ledger and the lock, and every revision of it shares both.
   `config:<pool>:<owner id>`. Editing those settings (or the pool's routes or
   ceiling) adds a revision and supersedes the previous one. Removing the
   budget, removing the pool, or moving the pool to another `owner` revokes
-  every revision at once, including the one a running guard holds, and
-  revokes the grants the previous owner issued. Restoring the config, or
-  lowering and then raising the budget, adds a revision to the **same**
-  envelope: what was spent or held before still counts, so a config change
-  never replenishes money. If a person revokes the owner's config revision,
-  config sync doesn't issue the same terms again; only a providers.yaml
-  change does.
+  every revision at once, including the one a running guard holds.
+  Restoring the config, or lowering and then raising the budget, adds a
+  revision to the **same** envelope: what was spent or held before still
+  counts, so a config change never replenishes money. If a person revokes
+  the owner's config revision, config sync doesn't issue it again, even
+  after a route edit; only a change to its money terms (`budget_usd`,
+  `per_launch_usd`, `expires`) does. Renaming a pool is a new pool, with its
+  own envelope: whoever edits providers.yaml already sets the owner's budget.
 - **Issued grants**: the owner (or an admin) issues grants to other users
   with `pools.issue_grant` (Ergonaut: the Pools page). Each is a new, funded
   envelope: that explicit, authenticated act is the only way to start a
   fresh ledger. A new grant for the same grantee and pool revokes the old
-  one, whose ledger stays.
+  one, whose ledger stays. An issued grant works only while its issuer owns
+  the pool and the pool exists: after a move to another owner it stops at
+  once (guards already built refuse) and works again only if the pool comes
+  back to its issuer. Config sync never revokes it, so a process still on
+  an older providers.yaml can't destroy the current owner's grants. Removing
+  the owner's own `budget_usd` doesn't touch grants they issued; revoke
+  those on the Pools page.
 
 The current config is applied whenever pools are read (`pools.snapshot`)
 and again at every send (below). A grantee sees the pool,
@@ -238,8 +245,9 @@ configured:
   decision's grant revision. For each attempt, under its envelope's
   PostgreSQL advisory lock, it re-reads the revision (revoked? this user?),
   re-reads providers.yaml as it is now (the process's most recently reloaded
-  registry: pool, owner, budget, expiry, routes, ceiling; revoking the
-  envelope if the config no longer backs it), and uses the **intersection**
+  registry: pool, owner, budget, expiry, routes, ceiling, and the pool's and
+  provider's `enabled`; revoking the envelope if the config no longer backs
+  it), and uses the **intersection**
   of the revision it holds with the current one (narrowing only: the lower
   budget and ceiling, the earlier expiry, the common routes). It checks the
   pool and provider switches, clamps the output limit to that ceiling, asks

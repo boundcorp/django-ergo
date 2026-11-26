@@ -394,16 +394,20 @@ def _config_terms(pool: Pool, providers: Providers, owner_id) -> dict | None:
     ):
         return None
     routes = pool_refs(providers, pool, metered=True)
-    fingerprint = json.dumps(
-        [
-            pool.name,
-            owner_id,
-            routes,
-            str(pool.budget_usd),
-            str(pool.per_launch_usd),
-            pool.max_output_tokens,
-            pool.expires_at.isoformat(),
-        ]
+    money = [
+        pool.name,
+        owner_id,
+        str(pool.budget_usd),
+        str(pool.per_launch_usd),
+        pool.expires_at.isoformat(),
+    ]
+    whole = json.dumps([*money, routes, pool.max_output_tokens])
+    # "<money terms>:<all terms>": a person's revocation sticks until the money
+    # terms (budget, per-launch, expiry) change, not on a route or ceiling edit.
+    key = (
+        hashlib.sha256(json.dumps(money).encode()).hexdigest()[:31]
+        + ":"
+        + hashlib.sha256(whole.encode()).hexdigest()[:32]
     )
     return {
         "routes": routes,
@@ -411,7 +415,7 @@ def _config_terms(pool: Pool, providers: Providers, owner_id) -> dict | None:
         "per_launch_usd": pool.per_launch_usd,
         "max_output_tokens": pool.max_output_tokens,
         "expires_at": pool.expires_at,
-        "config_key": hashlib.sha256(fingerprint.encode()).hexdigest(),
+        "config_key": key,
     }
 
 
@@ -433,6 +437,14 @@ def _revoke_envelope(envelope_id, reason: str, now) -> None:
     SpendGrant.objects.filter(envelope_id=envelope_id, revoked_at__isnull=True).update(
         revoked_at=now, revoked_reason=reason[:200]
     )
+
+
+def _same_money(stored_key: str, key: str) -> bool:
+    """Whether a stored config revision had the same money terms as ``key``
+    (a key from before the split format counts as the same: conservative)."""
+    if ":" not in stored_key:
+        return True
+    return stored_key.partition(":")[0] == key.partition(":")[0]
 
 
 def _envelope_problem(envelope, providers: Providers, owners: dict) -> str:
@@ -461,6 +473,12 @@ def _settle(envelope, providers: Providers, owners: dict, now):
     from django_ergo.conversation.models import SpendGrant
 
     problem = _envelope_problem(envelope, providers, owners)
+    if problem and envelope.source != CONFIG_SOURCE:
+        # An issued grant is suspended, not revoked: config sync never
+        # destroys a person's explicit grant (a process still on an older
+        # config could otherwise revoke the current owner's grants for good).
+        # It works again only if its issuer owns the pool again.
+        return None, problem
     if problem:
         _revoke_envelope(envelope.pk, SYNC_REVOKED + problem, now)
         return None, problem
@@ -479,11 +497,11 @@ def _settle(envelope, providers: Providers, owners: dict, now):
         )
         if (
             newest is not None
-            and newest.config_key == terms["config_key"]
             and not newest.revoked_reason.startswith(SYNC_REVOKED)
+            and _same_money(newest.config_key, terms["config_key"])
         ):
-            # A person revoked these exact terms; only a providers.yaml
-            # change (new terms) issues a revision again.
+            # A person revoked these money terms; only a providers.yaml change
+            # to the budget, per-launch amount or expiry issues one again.
             return None, "the spend grant was revoked"
     revision = SpendGrant.objects.create(
         envelope=envelope,
@@ -523,7 +541,8 @@ def sync_authority(providers: Providers, owners: dict | None = None) -> None:
     unsettled = {
         g.envelope_id: g.envelope
         for g in live
-        if _envelope_problem(g.envelope, providers, owners)
+        if g.envelope.source == CONFIG_SOURCE
+        and _envelope_problem(g.envelope, providers, owners)
     }
     for pool in providers.pools.pools:
         owner_id = owners.get(pool.owner) if pool.owner else None
@@ -596,12 +615,30 @@ class SendAuthority:
         if current is None:
             return problem
         pool = providers.pools.get(grant.pool)
+        if not pool_enabled_now(pool):
+            return f"pool {grant.pool!r} is switched off"
         terms = Terms.of(current)
+        on = {
+            ref
+            for ref in pool_refs(providers, pool, metered=True)
+            if providers.providers[ref.partition("/")[0]].enabled
+        }
         return replace(
             terms,
-            routes=terms.routes & set(pool_refs(providers, pool, metered=True)),
+            routes=terms.routes & on,
             max_output_tokens=min(terms.max_output_tokens, pool.max_output_tokens),
         )
+
+
+def pool_enabled_now(pool: Pool) -> bool:
+    """The pool's switch as selection sees it: the runtime state when set,
+    else providers.yaml's ``enabled``. Runs the ORM."""
+    from django_ergo.conversation.models import ModelPoolState
+
+    state = ModelPoolState.objects.filter(name=pool.name).first()
+    if state is not None and state.enabled is not None:
+        return state.enabled
+    return pool.enabled
 
 
 def active_grant(pool: Pool, providers: Providers, user_id, owner_id=None):

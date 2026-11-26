@@ -6,6 +6,7 @@ network or paid inference: providers and usage are synthetic.
 
 from __future__ import annotations
 
+import datetime as dt
 import threading
 from decimal import Decimal
 from types import SimpleNamespace
@@ -14,6 +15,7 @@ import pytest
 from asgiref.sync import async_to_sync
 from django.contrib.auth import get_user_model
 from django.db import connection
+from django.utils import timezone
 
 from django_ergo.bots import pools
 from django_ergo.bots.providers import parse_providers
@@ -168,9 +170,10 @@ def test_rr_lowering_then_raising_the_budget_never_replenishes():
 @pytest.mark.django_db
 def test_rr_ownership_move_revokes_the_previous_owners_authority():
     """owner: lee -> bob. lee no longer sees or spends on the pool (a guard
-    built before the move refuses), the grants lee issued are revoked, and
-    bob's authority is his own envelope. Moving it back to lee continues
-    lee's envelope; the grants stay revoked."""
+    built before the move refuses, and lee's config revisions are revoked);
+    the grants lee issued stop working at once (suspended: they work only
+    while lee owns the pool); bob's authority is his own envelope. Moving
+    the pool back to lee continues lee's envelope."""
     registry, bot = _config(POOLS)
     lee = User.objects.create(username="lee")
     bob = User.objects.create(username="bob")
@@ -178,20 +181,22 @@ def test_rr_ownership_move_revokes_the_previous_owners_authority():
     old = _own(bot.providers, lee).grant
     issued = grant(bot.providers, friend, budget="3")
     guard = _guard(bot, lee)
+    friends = _guard(bot, friend)
     _send(guard)
     moved = POOLS.replace("    owner: lee\n", "    owner: bob\n")
     registry.providers = parse_providers(moved)
-    with pytest.raises(spend_guard.SpendDenied, match="another owner"):
-        _send(guard)
+    for built in (guard, friends):
+        with pytest.raises(spend_guard.SpendDenied, match="another owner"):
+            _send(built)
     assert _own(bot.providers, lee) is None
+    assert _own(bot.providers, friend) is None
     session = chat(bot, lee)
     with pytest.raises(pools.PoolRefusal):  # lee's pick of paid is stale now
         pools.select_route(bot, session, ref="openai/gpt-6.1-sol")
     with pytest.raises(PermissionError):
         pools.update_preference(lee.pk, bot.providers, version=1, active_pool="paid")
-    for row in (old, issued):
-        row.refresh_from_db()
-        assert row.revoked_at is not None
+    old.refresh_from_db()
+    assert old.revoked_at is not None
     bobs = _own(bot.providers, bob).grant
     assert bobs.envelope_id != old.envelope_id
     assert spend_guard.spent_and_reserved(bobs.pk) == (Decimal(0), Decimal(0))
@@ -199,8 +204,62 @@ def test_rr_ownership_move_revokes_the_previous_owners_authority():
     back = _own(bot.providers, lee)
     assert back.grant.envelope_id == old.envelope_id and back.reserved_usd > 0
     issued.refresh_from_db()
-    assert issued.revoked_at is not None
-    assert _own(bot.providers, friend) is None
+    assert issued.revoked_at is None
+    assert _own(bot.providers, friend).grant.pk == issued.pk
+    _send(friends)  # lee's own grant to friend, lee's pool again
+
+
+@pytest.mark.django_db
+def test_rr_a_stale_config_never_destroys_the_current_owners_grants():
+    """A process still on the old config (owner lee) reads pools after the
+    move to bob: it can't revoke the grants bob issued, and bob's process
+    puts its own config back."""
+    lee = User.objects.create(username="lee")
+    bob = User.objects.create(username="bob")
+    friend = User.objects.create(username="friend")
+    stale = parse_providers(POOLS)
+    _own(stale, lee)
+    fresh = parse_providers(POOLS.replace("    owner: lee\n", "    owner: bob\n"))
+    assert _own(fresh, bob).grant is not None
+    bobs_grant = pools.issue_grant(
+        fresh,
+        "paid",
+        issuer_id=bob.pk,
+        grantee_id=friend.pk,
+        budget_usd="3",
+        expires_at=timezone.now() + dt.timedelta(days=3),
+    )
+    pools.snapshot(stale, lee.pk)  # the stale process
+    bobs_grant.refresh_from_db()
+    assert bobs_grant.revoked_at is None
+    assert _own(fresh, friend).grant.pk == bobs_grant.pk
+    _hold(bobs_grant, friend, "1", fresh)
+    assert _own(fresh, lee) is None
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        (
+            "  - name: paid\n    label: Paid API\n",
+            "  - name: paid\n    label: Paid API\n    enabled: false\n",
+        ),
+        (
+            "    api_key_env: TEST_POOL_OPENAI_KEY\n",
+            "    api_key_env: TEST_POOL_OPENAI_KEY\n    enabled: false\n",
+        ),
+    ],
+    ids=["pool", "provider"],
+)
+def test_rr_switching_off_in_providers_yaml_stops_a_built_guard(old, new):
+    registry, bot = _config(POOLS)
+    lee = User.objects.create(username="lee")
+    guard = _guard(bot, lee)
+    registry.providers = parse_providers(POOLS.replace(old, new))
+    with pytest.raises(spend_guard.SpendDenied):
+        _send(guard)
+    assert not InferenceRequest.objects.exists()
 
 
 @pytest.mark.django_db
@@ -220,12 +279,20 @@ def test_rr_revoked_issued_grant_refuses_an_already_built_guard():
 @pytest.mark.django_db
 def test_rr_a_person_revoking_config_terms_isnt_undone_by_sync():
     """The owner gives up their config revision: config sync doesn't mint
-    the same terms again; only a providers.yaml change does (same envelope)."""
+    it again, even after a route edit; only a change to the money terms
+    (budget, per-launch amount, expiry) does, on the same envelope."""
     lee = User.objects.create(username="lee")
     providers = parse_providers(POOLS)
     own = _own(providers, lee).grant
     pools.revoke_grant(providers, own.pk, by_id=lee.pk)
     assert _own(providers, lee).grant is None
+    # A route or ceiling edit leaves the money terms alone: still revoked.
+    more = POOLS.replace(
+        "      - {name: claude-opus-5-5, price: {input: 5, output: 25}}\n",
+        "      - {name: claude-opus-5-5, price: {input: 5, output: 25}}\n"
+        "      - claude-haiku-5\n",
+    )
+    assert _own(parse_providers(more), lee).grant is None
     later = POOLS.replace("expires: 2099-12-31", "expires: 2099-06-30")
     renewed = _own(parse_providers(later), lee).grant
     assert renewed.envelope_id == own.envelope_id
@@ -558,10 +625,6 @@ def test_rr_0060_backfills_envelopes_conservatively_and_reverses():
     and holds all count); an issued grant is its own; no ledger row changes.
     Reversing revokes superseded revisions and clears repeated config keys
     so 0059's unique constraint comes back."""
-    import datetime as dt
-
-    from django.utils import timezone
-
     before = ("django_ergo", "0059_model_pools")
     try:
         executor = _executor()
@@ -634,6 +697,20 @@ def test_rr_0060_backfills_envelopes_conservatively_and_reverses():
         apps = executor.loader.project_state([before]).apps
         grant_model = apps.get_model("django_ergo", "SpendGrant")
         assert grant_model.objects.get(pk=new.pk).revoked_at is not None
+        # 0059 totals per grant: the envelope's rows all moved to its current
+        # revision, so rolling back refunds nothing.
+        current = grant_model.objects.get(config_key="a", revoked_at__isnull=True)
+        request_model = apps.get_model("django_ergo", "InferenceRequest")
+        assert set(request_model.objects.values_list("pool", flat=True)) == {
+            spend_guard.ledger_key(current.pk),
+            spend_guard.ledger_key(issued.pk),
+        }
+        assert (
+            request_model.objects.filter(
+                pool=spend_guard.ledger_key(current.pk)
+            ).count()
+            == 2
+        )
         keys = list(
             grant_model.objects.exclude(config_key="").values_list(
                 "config_key", flat=True

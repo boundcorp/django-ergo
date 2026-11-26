@@ -8,9 +8,12 @@ holds of all its earlier revisions count against the current budget; an
 issued grant is its own envelope. Nothing is un-revoked and no ledger row
 changes (rows keep their ``grant:<id>`` key; totals are summed per envelope).
 
-Reverse: superseded revisions are revoked (the old code would treat them as
-current) and repeated ``config_key`` fingerprints are cleared on all but the
-newest row, so the old unique constraint can come back.
+Reverse, conservatively: each envelope's ledger rows move to one of its
+revisions (the current one, else the newest), because 0059 totals per grant
+and would otherwise refund what earlier revisions spent or hold; superseded
+revisions are revoked (0059 would treat them as current); and repeated
+``config_key`` fingerprints are cleared on all but the newest row, so the
+old unique constraint can come back.
 """
 
 import uuid
@@ -43,6 +46,21 @@ def backfill(apps, schema_editor):
 
 def unbackfill(apps, schema_editor):
     SpendGrant = apps.get_model("django_ergo", "SpendGrant")
+    InferenceRequest = apps.get_model("django_ergo", "InferenceRequest")
+    SpendEnvelope = apps.get_model("django_ergo", "SpendEnvelope")
+    for envelope in SpendEnvelope.objects.all():
+        revisions = list(
+            SpendGrant.objects.filter(envelope=envelope).order_by("-created_at")
+        )
+        if len(revisions) <= 1:
+            continue
+        target = next(
+            (g for g in revisions if g.revoked_at is None and g.superseded_at is None),
+            revisions[0],
+        )
+        InferenceRequest.objects.filter(
+            pool__in=[f"grant:{g.pk}"[:64] for g in revisions]
+        ).update(pool=f"grant:{target.pk}"[:64])
     for grant in SpendGrant.objects.filter(
         superseded_at__isnull=False, revoked_at__isnull=True
     ):

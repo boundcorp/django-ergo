@@ -554,8 +554,13 @@ class Bot:
 
     @property
     def providers(self) -> Providers:
+        """providers.yaml as it is now: a bot built before a reload reads the
+        registry that replaced its own (``BotRegistry.latest``)."""
         registry = getattr(self, "registry", None)
-        return registry.providers if registry is not None else Providers()
+        if registry is None:
+            return Providers()
+        latest = getattr(registry, "latest", None)
+        return (latest() if callable(latest) else registry).providers
 
     @property
     def private_pool(self) -> PrivatePool | None:
