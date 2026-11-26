@@ -303,13 +303,17 @@ def test_paid_pause_preserves_grants_and_holds(tmp_path):
     guard = _guard(bot, user)
     row = SpendGrant.objects.get(pk=guard.grant_id)
     _hold(row, user, "2", bot.providers)
-    pools.set_paid_pause(by_id=admin.pk, paused=True)
+    from django_ergo.conversation.models import PaidDispatchState
+
+    version = PaidDispatchState.objects.get(pk=1).updated_at.isoformat()
+    pools.set_paid_pause(by_id=admin.pk, paused=True, version=version)
     with pytest.raises(spend_guard.SpendDenied, match="paused"):
         _send(guard)
     assert spend_guard.spent_and_reserved(row.pk)[1] == 2
     row.refresh_from_db()
     assert row.revoked_at is None
-    pools.set_paid_pause(by_id=admin.pk, paused=False)
+    version = PaidDispatchState.objects.get(pk=1).updated_at.isoformat()
+    pools.set_paid_pause(by_id=admin.pk, paused=False, version=version)
     _send(guard)
 
 

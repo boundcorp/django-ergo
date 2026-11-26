@@ -35,6 +35,7 @@ from django_ergo.conversation import spend_guard
 from django_ergo.conversation.models import InferenceRequest
 from django_ergo.conversation.models import SpendEnvelope
 from django_ergo.conversation.models import SpendGrant
+from tests.pool_authority import authority
 from tests.pool_funding import fund
 from tests.test_model_pools import POOLS
 from tests.test_model_pools import chat
@@ -77,7 +78,7 @@ def _hold(grant_row, user, amount, providers, *, ref="openai/gpt-6.1-sol"):
         amount=Decimal(amount),
         user_id=user.pk,
         fields={"bot_name": "devbox", "selector": ref},
-        current=pools.SendAuthority(providers),
+        current=authority(providers, ref),
     )
 
 
@@ -336,7 +337,7 @@ def test_the_owners_expiry_routes_and_per_launch_narrow_an_issued_grant():
     User.objects.create(username="lee")
     friend = User.objects.create(username="friend")
     issued = grant(bot.providers, friend, budget="5", days=30, per_launch_usd="2")
-    current = pools.SendAuthority(bot)
+    current = authority(bot)
     # Owner's expiry earlier than the grant's: the grant ends with it.
     soon = (timezone.now() + dt.timedelta(days=2)).isoformat()
     registry.providers = parse_providers(
@@ -372,7 +373,7 @@ def test_the_owners_expiry_routes_and_per_launch_narrow_an_issued_grant():
             model="gpt-6.1-sol",
             amount=Decimal(1),
             user_id=friend.pk,
-            current=pools.SendAuthority(bot),
+            current=authority(bot),
         )
 
 

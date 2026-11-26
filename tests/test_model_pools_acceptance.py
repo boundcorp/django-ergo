@@ -23,6 +23,7 @@ from django_ergo.conversation.inference_policy import PolicyError
 from django_ergo.conversation.models import InferenceRequest
 from django_ergo.pricing import ExactPrice
 from django_ergo.pricing import LongContextRates
+from tests.pool_authority import authority
 from tests.pool_funding import fund
 from tests.test_agent_launches import launch_env  # noqa: F401 -- fake Orca
 from tests.test_bot_workers import workers  # noqa: F401 -- launch_env needs it
@@ -279,7 +280,7 @@ def metered_guard(held, **extra):
         grant_id=held.pk,
         user_id=held.grantee_id,
         price=price(),
-        current=pools.SendAuthority(parse_providers(POOLS)),
+        current=authority(parse_providers(POOLS)),
         **extra,
     )
 
@@ -388,7 +389,7 @@ def test_r11_cache_writes_need_an_exact_rate_and_are_covered_by_the_reserve(held
         grant_id=held.pk,
         user_id=held.grantee_id,
         price=anthropic_price(),
-        current=pools.SendAuthority(parse_providers(POOLS)),
+        current=authority(parse_providers(POOLS), "anthropic/claude-opus-5-5"),
     )
     with pytest.raises(spend_guard.SpendDenied, match="cache_write"):
         async_to_sync(guard.call)(cached_request(), adapter, lambda: None)
@@ -510,7 +511,7 @@ def test_r2_another_user_cannot_select_or_spend_on_an_owned_pool():
         grant_id=own.pk,
         user_id=stranger.pk,
         price=price(),
-        current=pools.SendAuthority(bot),
+        current=authority(bot),
     )
     with pytest.raises(spend_guard.SpendDenied, match="another user"):
         async_to_sync(guard.call)(request(), "max_completion_tokens", lambda: None)
@@ -564,7 +565,7 @@ def test_r2_an_explicit_shared_grant_is_scoped_and_private():
         amount=Decimal(2),
         user_id=lee.pk,
         fields={},
-        current=pools.SendAuthority(bot),
+        current=authority(bot),
     )
     assert spend_guard.spent_and_reserved(shared.pk) == (Decimal(0), Decimal(0))
     # lee (owner) sees the grants they issued; a third user sees no paid pool.

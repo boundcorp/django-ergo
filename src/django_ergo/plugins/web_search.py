@@ -331,6 +331,10 @@ class WebSearchPlugin(BotPlugin):
         return str(reply["result"]).strip()
 
     def _search_anthropic(self, query: str, count: int) -> str:
+        from django_ergo.conversation.spend_guard import paid_dispatch_problem
+
+        if problem := paid_dispatch_problem(legacy=True):
+            raise WebSearchError(problem)
         key = os.environ.get(self.anthropic_key_env)
         if not key:
             msg = f"{self.anthropic_key_env} is not set"

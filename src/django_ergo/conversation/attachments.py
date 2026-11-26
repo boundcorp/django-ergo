@@ -122,6 +122,9 @@ async def openai_transcription(
     """Return the OpenAI JSON response, including any provider usage."""
     import openai
 
+    from django_ergo.conversation.spend_guard import check_unguarded_dispatch
+
+    await check_unguarded_dispatch()
     # AsyncOpenAI() falls back to OPENAI_BASE_URL: refuse a private endpoint.
     what = "The audio transcriber"
     assert_public_endpoint(effective_openai_base_url(), what=what)

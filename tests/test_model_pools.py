@@ -31,6 +31,7 @@ from django_ergo.conversation.inference_policy import PolicyError
 from django_ergo.conversation.models import ConversationSession
 from django_ergo.conversation.models import InferenceRequest
 from django_ergo.conversation.models import RouteDecision
+from tests.pool_authority import authority
 from tests.pool_funding import fund
 
 User = get_user_model()
@@ -570,7 +571,7 @@ def test_reservations_are_serialized_under_concurrency():
                 amount=Decimal("0.40"),
                 user_id=owner.pk,
                 fields={"bot_name": "devbox", "selector": "openai/gpt-6.1-sol"},
-                current=pools.SendAuthority(providers),
+                current=authority(providers),
             )
             results.append("ok")
         except spend_guard.SpendDenied:
@@ -603,7 +604,7 @@ def test_guard_rereads_the_grant_at_send_time(user):
             amount=Decimal("0.01"),
             user_id=who.pk,
             fields={"bot_name": "x", "selector": "x"},
-            current=pools.SendAuthority(providers),
+            current=authority(providers),
         )
 
     small = grant(providers, user, budget="0.0001")
@@ -870,6 +871,11 @@ def test_resumed_confined_launch_revalidates_and_reserves_again(user):
         "model": "gpt-6.1-sol",
         "agent": "codex",
         "key_env": "TEST_POOL_OPENAI_KEY",
+        "transport_identity": pools.transport_identity(
+            bot.providers.providers["openai"], "gpt-6.1-sol"
+        ),
+        "bot_lineage": list(pools.lineage(bot)),
+        "origin": [],
     }
     pools.revalidate_launch(bot, session, confined)
     assert InferenceRequest.objects.filter(purpose="coding_launch").count() == 1

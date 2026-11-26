@@ -179,7 +179,9 @@ class FireworksAPIEngine(OpenAIAPIEngine):
     async def _create_completion(self, kwargs: dict):
         """One checked, recorded attempt: grant, then key, then cap, then HTTP."""
         from django_ergo.conversation import inference_ledger
+        from django_ergo.conversation.spend_guard import check_unguarded_dispatch
 
+        await check_unguarded_dispatch()
         model_id = kwargs.get("model")
         grant = check_grant(self._grant, model_id=model_id)
         if kwargs.get("stream"):

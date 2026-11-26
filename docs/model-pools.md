@@ -485,7 +485,7 @@ The model picker lists only what the chat may use: the active pool's models
 
 1. Deploy: the migrations (`0059_model_pools`, after main's
    `0058_agent_launch_intent`, then `0060_spend_envelopes` and
-   `0061_spend_envelope_families`) add the tables; with no `pools:` section
+   `0061_spend_envelope_families`, and `0062_explicit_funding_and_paid_latch`) add the tables; Google #406 adds `0063_google_engine_signatures` on top; with no `pools:` section
    and no rows, behavior is unchanged. `0061` links each issued grant to its
    owner's config envelope (a grant whose owner has none stops working).
    A config revision an owner gave up before the upgrade (under 0060, an
@@ -495,9 +495,11 @@ The model picker lists only what the chat may use: the active pool's models
    check the Routing page's Pools section; issue grants there.
 3. Rollback is a **paid-dispatch pause**, retaining schema, pools, grants,
    funding revisions and every unknown hold. An authenticated admin can use
-   `set_paid_pause(paused=True)` (Ergonaut: Pause paid dispatch); this is a
-   code-only control until an operator authorizes its use. Every guarded send
-   and legacy OpenAI/Claude API attempt rechecks the pause. Do not remove pools,
+   `set_paid_pause(paused=True, version=<current state version>, by_id=<admin>)` (Ergonaut: Pause paid dispatch); this is a
+   code-only control until an operator authorizes its use. Guarded sends and OpenAI, Claude, Google, Fireworks, OpenAI transcription,
+   Gemini video and Anthropic web-search attempts recheck the latch. Governed
+   ancillary adapters and private Fireworks currently refuse even when unpaused,
+   because they lack a pool-bounded authority; privacy remains independently enforced. Do not remove pools,
    clear switches or serve pre-guard code to regain capacity. First pool
    activation sets a durable latch; removing pools afterwards refuses new paid
    routing and unguarded API sends. Never-activated legacy installations retain

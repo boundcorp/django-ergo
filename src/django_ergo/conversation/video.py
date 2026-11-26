@@ -248,6 +248,11 @@ class Gemini:
         headers: dict | None = None,
         timeout: int = 0,
     ):
+        from django_ergo.conversation.spend_guard import SpendDenied
+        from django_ergo.conversation.spend_guard import paid_dispatch_problem
+
+        if problem := paid_dispatch_problem(legacy=True):
+            raise SpendDenied(problem)
         headers = {"x-goog-api-key": self.api_key, **(headers or {})}
         if body is not None:
             headers.setdefault("Content-Type", "application/json")

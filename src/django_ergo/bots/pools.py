@@ -499,7 +499,7 @@ def funding_accounts(providers: Providers, pool: Pool) -> list[str]:
     )
 
 
-def set_paid_pause(*, by_id, paused: bool):
+def set_paid_pause(*, by_id, paused: bool, version: str):
     from django.contrib.auth import get_user_model
     from django.db import transaction
 
@@ -518,7 +518,13 @@ def set_paid_pause(*, by_id, paused: bool):
         msg = "paused must be true or false"
         raise ValueError(msg)
     with transaction.atomic():
-        state, _ = PaidDispatchState.objects.select_for_update().get_or_create(pk=1)
+        state, created = PaidDispatchState.objects.select_for_update().get_or_create(
+            pk=1
+        )
+        current_version = "" if created else state.updated_at.isoformat()
+        if not isinstance(version, str) or version != current_version:
+            msg = "Paid dispatch state changed; refresh and try again"
+            raise VersionConflict(msg)
         state.paused, state.updated_by = paused, actor
         state.save()
         SpendControlAudit.objects.create(
@@ -1278,6 +1284,8 @@ class SendAuthority:
             return issue
         if providers.pools.legacy:
             return "providers.yaml no longer configures pools"
+        if not self.ref or not self.identity or self.privacy is None:
+            return "Captured route, transport identity and privacy are required for metered authority"
         if self.ref:
             head, _, model = self.ref.partition("/")
             provider = providers.providers.get(head)
@@ -2828,6 +2836,12 @@ def select_agent(  # noqa: C901, PLR0912, PLR0913, PLR0915
             )
         raise
     if decision.metered:
+        decision.origin = privacy.names
+        decision.privacy = privacy
+        decision.bot_lineage = tuple(lineage(bot))
+        decision.transport_identity = transport_identity(
+            bot_providers.providers[decision.provider], decision.model
+        )
         from django_ergo.conversation.spend_guard import reserve_launch
 
         decision.reservation_id = reserve_launch(
@@ -2839,7 +2853,7 @@ def select_agent(  # noqa: C901, PLR0912, PLR0913, PLR0915
             bot=bot.name,
             session_id=getattr(session, "pk", None),
             user_id=user_id,
-            current=SendAuthority(bot),
+            current=SendAuthority(bot, session=session, decision=decision),
         )
         decision.reserved_usd = decision.per_launch_usd
     if record:
@@ -2860,6 +2874,17 @@ def revalidate_launch(bot: Bot, session, confined: dict) -> Decision:
     budget again; PoolRefusal otherwise. Runs the ORM."""
     from django_ergo.conversation.spend_guard import reserve_launch
 
+    captured_identity = confined.get("transport_identity")
+    captured_lineage = confined.get("bot_lineage")
+    captured_origin = confined.get("origin")
+    if (
+        not captured_identity
+        or not isinstance(captured_lineage, list)
+        or not isinstance(captured_origin, list)
+    ):
+        raise PoolRefusal(
+            NO_CODING_ROUTE, "Confined launch lacks captured authority", consumer=CODING
+        )
     privacy = privacy_for(bot, session)
     if privacy.restricted:
         msg = f"Privacy policy {privacy.label()} has no approved coding route"
@@ -2897,6 +2922,10 @@ def revalidate_launch(bot: Bot, session, confined: dict) -> Decision:
         reason="resumed confined launch",
     )
     decision.grant_id = view.grant.pk if view.grant is not None else None
+    decision.origin = tuple(captured_origin)
+    decision.privacy = Privacy()
+    decision.bot_lineage = tuple(captured_lineage)
+    decision.transport_identity = captured_identity
     decision.reservation_id = reserve_launch(
         grant_id=decision.grant_id,
         pool=view.name,
@@ -2906,7 +2935,7 @@ def revalidate_launch(bot: Bot, session, confined: dict) -> Decision:
         bot=bot.name,
         session_id=getattr(session, "pk", None),
         user_id=getattr(session, "user_id", None),
-        current=SendAuthority(bot),
+        current=SendAuthority(bot, session=session, decision=decision),
     )
     decision.reserved_usd = view.per_launch_usd
     decision.receipt_id = _record(
@@ -2933,6 +2962,9 @@ def confinement(bot: Bot, decision: Decision) -> dict | None:
         "agent": decision.choice.agent,
         "model": decision.choice.model,
         "key_env": provider.api_key_env,
+        "transport_identity": decision.transport_identity,
+        "bot_lineage": list(decision.bot_lineage),
+        "origin": list(decision.origin),
     }
 
 

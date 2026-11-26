@@ -22,6 +22,7 @@ from django_ergo.bots.providers import parse_providers
 from django_ergo.conversation import spend_guard
 from django_ergo.conversation.models import InferenceRequest
 from django_ergo.pricing import ExactPrice
+from tests.pool_authority import authority
 from tests.pool_funding import fund
 from tests.test_model_pools import POOLS
 from tests.test_model_pools import chat
@@ -62,7 +63,7 @@ def _hold(grant_row, user, amount, providers):
         amount=Decimal(amount),
         user_id=user.pk,
         fields={"bot_name": "devbox", "selector": "openai/gpt-6.1-sol"},
-        current=pools.SendAuthority(providers),
+        current=authority(providers),
     )
 
 
@@ -342,7 +343,7 @@ def test_rr_queued_work_intersects_its_revision_with_the_current_config():
     )
     registry.providers = parse_providers(narrow)
     terms = spend_guard.authorize(
-        grant_id=captured.pk, user_id=lee.pk, current=pools.SendAuthority(bot)
+        grant_id=captured.pk, user_id=lee.pk, current=authority(bot)
     )
     assert (terms.budget_usd, terms.max_output_tokens) == (5, 100)
     with pytest.raises(spend_guard.SpendDenied, match="at its budget"):
@@ -351,7 +352,7 @@ def test_rr_queued_work_intersects_its_revision_with_the_current_config():
         POOLS.replace("budget_usd: 10", "budget_usd: 1000")
     )
     terms = spend_guard.authorize(
-        grant_id=captured.pk, user_id=lee.pk, current=pools.SendAuthority(bot)
+        grant_id=captured.pk, user_id=lee.pk, current=authority(bot)
     )
     assert terms.budget_usd == 10
     with pytest.raises(spend_guard.SpendDenied, match="at its budget"):
