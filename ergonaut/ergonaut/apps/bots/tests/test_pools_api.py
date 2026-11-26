@@ -205,3 +205,40 @@ def test_user_default_from_a_chat(client, kitchen):
     assert out["session"]["pool"] == ""
     assert pools.preference(user.pk).active_pool == "paid"
     assert client.get("/api/pools").json()["selected"] == "paid"
+
+
+def test_only_an_admin_links_a_pool_on_already_funded_accounts(client, kitchen):
+    """A second owned pool on the OpenAI account paid already funds gets no
+    budget from config sync. Its owner can't link it; an admin sees the
+    overlapping envelope and funds it separately (or continues one)."""
+    extra = PROVIDERS + (
+        "  - name: extra\n    owner: lee\n    routes: [openai]\n    budget_usd: 50\n    expires: 2099-12-31\n"
+    )
+    kitchen.providers = parse_providers(extra)
+    login(client, "lee")
+    rows = {p["name"]: p for p in client.get("/api/pools").json()["pools"]}
+    assert rows["paid"]["grant"] is not None
+    assert rows["extra"]["grant"] is None
+    assert client.get("/api/pools/extra/envelope").status_code == 403
+    assert send(client, "post", "/api/pools/extra/envelope", {"fund": True}).status_code == 403
+    client.logout()
+    login(client, "root", admin=True)
+    found = client.get("/api/pools/extra/envelope").json()
+    assert "an admin must link" in found["problem"]
+    (envelope,) = found["envelopes"]
+    assert envelope["pool"] == "paid" and envelope["in_use"] and not envelope["continuable"]
+    used = send(client, "post", "/api/pools/extra/envelope", {"envelope": envelope["id"]})
+    assert used.status_code == 400 and "still uses" in used.json()["detail"]
+    assert send(client, "post", "/api/pools/extra/envelope", {}).status_code == 400
+    assert send(client, "post", "/api/pools/extra/envelope", {"fund": True, "note": "own $50"}).status_code == 200
+    assert client.get("/api/pools/extra/envelope").json()["problem"] == ""
+    # The owner gives the authority up; only an admin's explicit restore lifts it.
+    lee = get_user_model().objects.get(username="lee")
+    own = pools.snapshot(kitchen.providers, lee.pk).get("extra").grant
+    pools.revoke_grant(kitchen.providers, own.pk, by_id=lee.pk)
+    assert send(client, "post", "/api/pools/extra/envelope", {"fund": True}).status_code == 200
+    assert pools.snapshot(kitchen.providers, lee.pk).get("extra").grant is None
+    assert send(client, "post", "/api/pools/extra/envelope", {"restore": True}).status_code == 200
+    lee = get_user_model().objects.get(username="lee")
+    own = pools.snapshot(kitchen.providers, lee.pk).get("extra")
+    assert own.grant is not None and own.grant.budget_usd == 50

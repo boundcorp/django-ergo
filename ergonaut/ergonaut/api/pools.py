@@ -58,6 +58,16 @@ class GrantIn(Schema):
     routes: list[str] | None = None  # default: the pool's metered routes
 
 
+class EnvelopeLinkIn(Schema):
+    # A pool without an envelope: the config envelope to continue, or
+    # fund=true (new money). A pool with one: fund=true approves the accounts
+    # it spends on now; restore=true lifts a person's revocation of it.
+    envelope: str | None = None
+    fund: bool = False
+    restore: bool = False
+    note: str = ""
+
+
 class ProviderIn(Schema):
     enabled: bool
     version: int  # 0 for a provider never switched
@@ -138,7 +148,8 @@ def update_pool(request, name: str, data: PoolStateIn):
 @router.post("/pools/{name}/grants")
 def issue_grant(request, name: str, data: GrantIn):
     """Issue a spend grant on a pool you own (admins: any). It replaces the
-    grantee's previous grant on the pool; its ledger is new."""
+    grantee's previous grant on the pool; its ledger is new, and it is drawn
+    from (and capped by) the owner's own budget on the pool."""
     _manager(request, name)
     grantee = get_user_model().objects.filter(username=data.grantee).first()
     if grantee is None:
@@ -156,6 +167,36 @@ def issue_grant(request, name: str, data: GrantIn):
         max_output_tokens=data.max_output_tokens,
         routes=data.routes,
         admin=request.auth.is_superuser,
+    )
+    return _settings(request)
+
+
+@router.get("/pools/{name}/envelope")
+def envelope_candidates(request, name: str):
+    """Admins: why a pool's owner budget waits for a link, and the spend
+    envelopes overlapping its metered accounts."""
+    if not request.auth.is_superuser:
+        raise HttpError(403, "Only admins can link a pool's spend authority")
+    return _apply(pools.link_candidates, registry().providers, name)
+
+
+@router.post("/pools/{name}/envelope")
+def link_envelope(request, name: str, data: EnvelopeLinkIn):
+    """Admins: give a pool whose metered accounts already have spend
+    authority its envelope, by continuing one (its spend carries over) or
+    funding a new one. Config sync never does either on its own."""
+    if not request.auth.is_superuser:
+        raise HttpError(403, "Only admins can link a pool's spend authority")
+    _apply(
+        pools.link_config_envelope,
+        registry().providers,
+        name,
+        by_id=request.auth.pk,
+        admin=True,
+        envelope_id=data.envelope,
+        fund=data.fund,
+        restore=data.restore,
+        note=data.note,
     )
     return _settings(request)
 
