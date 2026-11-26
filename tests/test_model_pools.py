@@ -71,8 +71,10 @@ pools:
     routes: [claude, chatgpt, xai-oauth]
   - name: paid
     label: Paid API
+    owner: lee
     routes: [openai, anthropic]
     budget_usd: 10
+    expires: 2099-12-31
     per_launch_usd: 2
     tiers: {{medium: [openai/gpt-6.1-sol, anthropic/claude-opus-5-5]}}
 private_pools:
@@ -143,6 +145,52 @@ def registry_of(text=POOLS, **engines):
 @pytest.fixture
 def user(db):
     return User.objects.create(username="lee")
+
+
+# Writers with the version last read (they require one).
+
+
+def set_pref(user_id, providers, **changes):
+    current = pools.preference(user_id)
+    return pools.update_preference(
+        user_id, providers, version=current.version if current else 0, **changes
+    )
+
+
+def set_state(name, providers, **changes):
+    from django_ergo.conversation.models import ModelPoolState
+
+    row = ModelPoolState.objects.filter(name=name).first()
+    return pools.update_pool_state(
+        name, providers, version=row.version if row else 0, **changes
+    )
+
+
+def set_provider(name, providers, enabled):
+    from django_ergo.conversation.models import ProviderToggle
+
+    row = ProviderToggle.objects.filter(name=name).first()
+    return pools.set_provider_enabled(
+        name, providers, enabled, version=row.version if row else 0
+    )
+
+
+def set_chat(session, pool, providers):
+    pools.set_chat_pool(session, pool, providers, version=pools.chat_revision(session))
+
+
+def grant(providers, grantee, *, pool="paid", budget="10", days=7, **extra):
+    """A grant from the pool's owner (lee) to ``grantee``."""
+    owner = User.objects.get(username="lee")
+    return pools.issue_grant(
+        providers,
+        pool,
+        issuer_id=owner.pk,
+        grantee_id=grantee.pk,
+        budget_usd=budget,
+        expires_at=timezone.now() + dt.timedelta(days=days),
+        **extra,
+    )
 
 
 def chat(bot, user, **metadata):
@@ -267,14 +315,14 @@ def test_manual_pool_user_default_chat_override_and_preferred_order(user):
     bot = found["devbox"]
     providers = bot.providers
     session = chat(bot, user)
-    pools.update_preference(user.pk, providers, version=None, active_pool="paid")
+    set_pref(user.pk, providers, active_pool="paid")
     assert bot.route(session) in ("openai/gpt-6.1-sol", "anthropic/claude-opus-5-5")
     assert session.metadata[pools.SESSION_ROUTE_KEY]["mode"] == "manual"
     # A chat override wins over the user default.
-    pools.set_chat_pool(session, "subs", providers)
+    set_chat(session, "subs", providers)
     assert bot.route(session).partition("/")[0] in ("claude", "chatgpt")
     # Back to the user's default, then "use preferred order".
-    pools.set_chat_pool(session, "", providers)
+    set_chat(session, "", providers)
     assert bot.route(session).partition("/")[0] in ("openai", "anthropic")
     pref = pools.preference(user.pk)
     pools.update_preference(user.pk, providers, version=pref.version, active_pool="")
@@ -288,9 +336,7 @@ def test_preferred_order_is_per_user(user):
     _, found = registry_of()
     bot = found["devbox"]
     other = User.objects.create(username="other")
-    pools.update_preference(
-        user.pk, bot.providers, version=None, order=["paid", "subs"]
-    )
+    set_pref(user.pk, bot.providers, order=["paid", "subs"])
     assert bot.route(chat(bot, user)).partition("/")[0] in ("openai", "anthropic")
     assert bot.route(chat(bot, other)).partition("/")[0] in ("claude", "chatgpt")
 
@@ -314,9 +360,9 @@ def test_rollover_needs_all_three_gates(user, monkeypatch, auto, out, entry, rol
     bot = found["devbox"]
     providers = bot.providers
     exhaust(monkeypatch, "claude", "chatgpt")
-    pools.update_preference(user.pk, providers, version=None, auto_rollover=auto)
-    pools.update_pool_state("subs", providers, version=None, rollover_out=out)
-    pools.update_pool_state("paid", providers, version=None, allow_auto_entry=entry)
+    set_pref(user.pk, providers, auto_rollover=auto)
+    set_state("subs", providers, rollover_out=out)
+    set_state("paid", providers, allow_auto_entry=entry)
     session = chat(bot, user)
     if rolls:
         picked = bot.route(session)
@@ -339,12 +385,12 @@ def test_non_exhaustion_errors_never_roll_over(user, monkeypatch, cause):
     _, found = registry_of()
     bot = found["devbox"]
     providers = bot.providers
-    pools.update_preference(user.pk, providers, version=None, auto_rollover=True)
-    pools.update_pool_state("paid", providers, version=None, allow_auto_entry=True)
+    set_pref(user.pk, providers, auto_rollover=True)
+    set_state("paid", providers, allow_auto_entry=True)
     session = chat(bot, user)
     if cause == "disabled":
-        pools.set_provider_enabled("claude", providers, False)
-        pools.set_provider_enabled("chatgpt", providers, False)
+        set_provider("claude", providers, False)
+        set_provider("chatgpt", providers, False)
         expected = pools.PROVIDER_DISABLED
     elif cause == "no_key":
         monkeypatch.setattr(
@@ -371,10 +417,10 @@ def test_budget_denial_on_the_active_pool_never_rolls_back(user):
     _, found = registry_of()
     bot = found["devbox"]
     providers = bot.providers
-    pools.update_preference(
-        user.pk, providers, version=None, active_pool="paid", auto_rollover=True
-    )
-    pools.update_pool_state("paid", providers, version=None, budget_usd=None)
+    set_pref(user.pk, providers, active_pool="paid", auto_rollover=True)
+    set_state("paid", providers, allow_auto_entry=True)
+    own = pools.snapshot(providers, user.pk).get("paid").grant
+    pools.revoke_grant(providers, own.pk, by_id=user.pk)
     with pytest.raises(pools.PoolRefusal) as refused:
         bot.route(chat(bot, user))
     assert refused.value.code == pools.BUDGET_REQUIRED
@@ -409,7 +455,7 @@ def test_a_pin_outside_the_active_pool_is_refused_not_substituted(user):
 def test_unpriced_metered_model_is_not_usable(user):
     _, found = registry_of()
     bot = found["devbox"]
-    pools.update_preference(user.pk, bot.providers, version=None, active_pool="paid")
+    set_pref(user.pk, bot.providers, active_pool="paid")
     session = chat(bot, user)
     with pytest.raises(pools.PoolRefusal) as refused:
         bot.pick_model(session, "openai/gpt-6-luna")
@@ -418,12 +464,10 @@ def test_unpriced_metered_model_is_not_usable(user):
 
 @pytest.mark.django_db
 def test_budget_expiry_makes_the_pool_ineligible(user):
-    _, found = registry_of()
+    _, found = registry_of(POOLS.replace("expires: 2099-12-31", "expires: 2000-01-01"))
     bot = found["devbox"]
     providers = bot.providers
-    pools.update_preference(user.pk, providers, version=None, active_pool="paid")
-    past = timezone.now() - dt.timedelta(minutes=1)
-    pools.update_pool_state("paid", providers, version=None, expires_at=past)
+    set_pref(user.pk, providers, active_pool="paid")
     with pytest.raises(pools.PoolRefusal) as refused:
         bot.route(chat(bot, user))
     assert refused.value.code == pools.BUDGET_EXPIRED
@@ -435,9 +479,9 @@ async def test_metered_engine_reserves_before_each_send_and_prices_after(monkeyp
 
     _, found = registry_of()
     bot = found["devbox"]
-    owner = await User.objects.acreate(username="lee-metered")
+    owner = await User.objects.acreate(username="lee")
     await sync_to_async(pools.update_preference)(
-        owner.pk, bot.providers, version=None, active_pool="paid"
+        owner.pk, bot.providers, version=0, active_pool="paid"
     )
     session = await ConversationSession.objects.acreate(
         user=owner,
@@ -463,7 +507,7 @@ async def test_metered_engine_reserves_before_each_send_and_prices_after(monkeyp
         {"model": "gpt-6.1-sol", "messages": [{"role": "user", "content": "hi"}]}
     )
     assert sent[0]["max_completion_tokens"] == 16_000  # bounded output
-    row = await InferenceRequest.objects.aget(pool="pool:paid")
+    row = await InferenceRequest.objects.aget(billing_mode="metered")
     assert row.cost_status == "priced"
     assert row.cost_usd == Decimal("0.002")  # 1000 * $1/M + 100 * $10/M
     assert row.billing_mode == "metered"
@@ -492,7 +536,9 @@ def test_metered_route_without_a_pool_decision_cannot_send(user):
 def test_reservations_are_serialized_under_concurrency():
     if connection.vendor != "postgresql":
         pytest.skip("advisory locks need PostgreSQL")
-    budget = Decimal("1.00")
+    owner = User.objects.create(username="lee")
+    providers = parse_providers(POOLS)
+    held = grant(providers, owner, budget="1.00")
     results = []
     barrier = threading.Barrier(4)
 
@@ -502,12 +548,11 @@ def test_reservations_are_serialized_under_concurrency():
         barrier.wait()
         try:
             spend_guard.reserve(
-                pool="race",
+                grant_id=held.pk,
                 provider="openai",
                 model="gpt-6.1-sol",
                 amount=Decimal("0.40"),
-                budget=budget,
-                expires_at=None,
+                user_id=owner.pk,
                 fields={"bot_name": "devbox", "selector": "openai/gpt-6.1-sol"},
             )
             results.append("ok")
@@ -522,41 +567,58 @@ def test_reservations_are_serialized_under_concurrency():
     for thread in threads:
         thread.join()
     assert sorted(results) == ["denied", "denied", "ok", "ok"]
-    spent, held = spend_guard.spent_and_reserved("race")
-    assert (spent, held) == (Decimal(0), Decimal("0.80"))
+    spent, reserved = spend_guard.spent_and_reserved(held.pk)
+    assert (spent, reserved) == (Decimal(0), Decimal("0.80"))
 
 
 @pytest.mark.django_db
-def test_guard_rereads_budget_and_expiry_at_send_time():
+def test_guard_rereads_the_grant_at_send_time(user):
+    from django_ergo.conversation.models import SpendGrant
+
     providers = parse_providers(POOLS)
-    pools.update_pool_state("paid", providers, version=None, budget_usd="0.0001")
-    with pytest.raises(spend_guard.SpendDenied, match="at its budget"):
-        spend_guard.reserve(
-            pool="paid",
+
+    def send(held, who=user, model="gpt-6.1-sol"):
+        return spend_guard.reserve(
+            grant_id=held.pk,
             provider="openai",
-            model="gpt-6.1-sol",
+            model=model,
             amount=Decimal("0.01"),
-            budget=Decimal(10),
-            expires_at=None,
+            user_id=who.pk,
             fields={"bot_name": "x", "selector": "x"},
         )
-    pools.update_pool_state(
-        "paid",
-        providers,
-        version=None,
+
+    small = grant(providers, user, budget="0.0001")
+    with pytest.raises(spend_guard.SpendDenied, match="at its budget"):
+        send(small)
+    big = grant(providers, user, budget="10", routes=["openai/gpt-6.1-sol"])
+    # (it replaced and revoked the small one)
+    with pytest.raises(spend_guard.SpendDenied, match="revoked"):
+        send(small)
+    stranger = User.objects.create(username="stranger")
+    with pytest.raises(spend_guard.SpendDenied, match="another user"):
+        send(big, who=stranger)
+    with pytest.raises(spend_guard.SpendDenied, match="doesn't cover"):
+        send(big, model="gpt-6-luna")
+    set_state("paid", providers, enabled=False)
+    with pytest.raises(spend_guard.SpendDenied, match="switched off"):
+        send(big)
+    set_state("paid", providers, enabled=True)
+    send(big)
+    expired = SpendGrant.objects.create(
+        pool="paid",
+        owner=user,
+        grantee=user,
+        routes=["openai/gpt-6.1-sol"],
         budget_usd=10,
+        max_output_tokens=100,
+        valid_from=timezone.now() - dt.timedelta(days=2),
         expires_at=timezone.now() - dt.timedelta(seconds=1),
     )
     with pytest.raises(spend_guard.SpendDenied, match="expired"):
-        spend_guard.reserve(
-            pool="paid",
-            provider="openai",
-            model="gpt-6.1-sol",
-            amount=Decimal("0.01"),
-            budget=Decimal(10),
-            expires_at=None,
-            fields={"bot_name": "x", "selector": "x"},
-        )
+        send(expired)
+    big.budget_usd = 100
+    with pytest.raises(ValueError, match="immutable"):
+        big.save()
 
 
 # -- provider switches -----------------------------------------------------------------------
@@ -567,7 +629,7 @@ def test_switched_off_provider_is_excluded_everywhere(user):
     _, found = registry_of()
     bot = found["devbox"]
     providers = bot.providers
-    pools.set_provider_enabled("claude", providers, False)
+    set_provider("claude", providers, False)
     session = chat(bot, user)
     # Routing and retries.
     assert bot.route(session) == "chatgpt/gpt-6.1-sol"
@@ -586,7 +648,7 @@ def test_switched_off_provider_is_excluded_everywhere(user):
     assert decision.choice.agent == "codex"
     # Legacy deployments honour the switch too.
     _, legacy = registry_of(LEGACY)
-    pools.set_provider_enabled("claude", legacy["devbox"].providers, False)
+    set_provider("claude", legacy["devbox"].providers, False)
     with pytest.raises(ValueError, match="No provider"):
         routing.pick_model(legacy["devbox"].providers, "medium")
 
@@ -602,7 +664,7 @@ def test_coding_inherits_the_active_pool(user):
     decision = pools.select_agent(bot, session, tier="medium")
     assert decision.choice.agent in ("claude", "codex")
     assert decision.billing == "subscription"
-    pools.set_chat_pool(session, "paid", bot.providers)
+    set_chat(session, "paid", bot.providers)
     # Metered coding is refused unless a manager confines the process AND
     # enforces a total spend bound; env/flag confinement alone isn't enough.
     for confinable in (False, True):
@@ -630,7 +692,7 @@ def test_a_manager_with_a_real_spend_bound_would_reserve_per_launch(user):
     confined = pools.confinement(bot, decision)
     assert confined["model"] == decision.choice.model
     assert confined["key_env"] in ("TEST_POOL_OPENAI_KEY", "TEST_POOL_ANTHROPIC_KEY")
-    row = InferenceRequest.objects.get(pool="pool:paid")
+    row = InferenceRequest.objects.get(pool=f"grant:{decision.grant_id}")
     assert row.reserved_usd == Decimal(2)
     assert row.purpose == "coding_launch"
 
@@ -684,7 +746,7 @@ def test_explicit_coding_model_must_be_in_the_pool(user):
     session = chat(bot, user)
     decision = pools.select_agent(bot, session, model="claude-opus-5-5", agent="claude")
     assert decision.choice.provider == "claude"
-    pools.set_chat_pool(session, "paid", bot.providers)
+    set_chat(session, "paid", bot.providers)
     with pytest.raises(pools.PoolRefusal) as refused:
         pools.select_agent(
             bot, session, model="claude-sonnet-5-5", confinable=True, spend_bounded=True
@@ -785,8 +847,8 @@ def test_resumed_confined_launch_revalidates_and_reserves_again(user):
         "key_env": "TEST_POOL_OPENAI_KEY",
     }
     pools.revalidate_launch(bot, session, confined)
-    assert InferenceRequest.objects.filter(pool="pool:paid").count() == 1
-    pools.set_provider_enabled("openai", bot.providers, False)
+    assert InferenceRequest.objects.filter(purpose="coding_launch").count() == 1
+    set_provider("openai", bot.providers, False)
     with pytest.raises(pools.PoolRefusal) as refused:
         pools.revalidate_launch(bot, session, confined)
     assert refused.value.code == pools.PROVIDER_DISABLED
@@ -830,9 +892,7 @@ def test_nested_bot_inherits_its_parents_private_pool_and_policy():
 @pytest.mark.django_db
 def test_switching_user_pools_never_widens_a_restricted_bot(user):
     _, personal, _sub, _devbox = nested()
-    pools.update_preference(
-        user.pk, personal.providers, version=None, active_pool="paid"
-    )
+    set_pref(user.pk, personal.providers, active_pool="paid")
     session = chat(personal, user)
     decision = pools.select_route(personal, session, ref="personal")
     assert decision.mode == "private"
@@ -980,7 +1040,7 @@ def test_video_analysis_is_refused_for_restricted_origins():
 def test_listing_matches_what_selection_accepts(user):
     _, found = registry_of()
     bot = found["devbox"]
-    pools.set_provider_enabled("chatgpt", bot.providers, False)
+    set_provider("chatgpt", bot.providers, False)
     for active in ("subs", "paid"):
         session = chat(bot, user, pool=active)
         view = pools.listing(bot, session)

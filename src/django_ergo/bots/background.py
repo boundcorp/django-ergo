@@ -46,6 +46,7 @@ if TYPE_CHECKING:
     from django_ergo.bots.runtime import Bot
 
 PRIVACY_KWARG = "_ergo_privacy_origin"
+POLICY_KWARG = "_ergo_pool_policy"
 _pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="ergo-bot-task")
 
 
@@ -98,15 +99,20 @@ def execute(
     from django_ergo.bots import pools
 
     carried = kwargs.pop(PRIVACY_KWARG, None) or []
+    policy = kwargs.pop(POLICY_KWARG, None)
     bot = find_bot(bot_name, registry)
     function = bot.tasks.get(task_name)
     if function is None:
         known = ", ".join(sorted(bot.tasks)) or "none"
         msg = f"{bot_name} has no task {task_name!r} (tasks: {known})"
         raise LookupError(msg)
-    # The starting turn's privacy origin (bots.pools) restricts the task too.
-    with pools.origin_scope(
-        [str(n) for n in carried if isinstance(n, str)], replace=True
+    # The starting turn's privacy origin (bots.pools) restricts the task too,
+    # and it runs on the pool and grant it was queued with, never wider.
+    with (
+        pools.origin_scope(
+            [str(n) for n in carried if isinstance(n, str)], replace=True
+        ),
+        pools.policy_scope(policy if isinstance(policy, dict) else None),
     ):
         if inspect.iscoroutinefunction(function):
             return async_to_sync(function)(*args, **kwargs)
@@ -116,6 +122,18 @@ def execute(
 def thread_runner(bot: Bot, task_name: str, args: list, kwargs: dict) -> TaskHandle:
     future = _pool.submit(execute, bot.name, task_name, args, kwargs, bot.registry)
     return FutureHandle(future)
+
+
+def _queued_by():
+    """(session, user id) of the turn queueing work, if any. Runs the ORM."""
+    from django_ergo.conversation.models import ConversationSession
+    from django_ergo.conversation.structured import current_call
+
+    call = current_call.get()
+    if call is None:
+        return None, None
+    session = ConversationSession.objects.filter(pk=call.session_id).first()
+    return session, getattr(call, "user_id", None) or getattr(session, "user_id", None)
 
 
 class BotTasks:
@@ -139,6 +157,8 @@ class BotTasks:
         if origin := pools.current_origin():
             # Persisted with the job, whichever runner (Celery) executes it.
             kwargs = {**kwargs, PRIVACY_KWARG: list(origin)}
+        if policy := pools.capture_policy(self.bot, *_queued_by()):
+            kwargs = {**kwargs, POLICY_KWARG: policy}
         runner = api_settings.BOT_TASK_RUNNER
         if runner is None:
             return thread_runner(self.bot, name, list(args), kwargs)

@@ -229,7 +229,10 @@ def _check_model(bot: Bot, model: str) -> str:
     providers.check_public(model, where=bot.name)
     if is_auto(model):
         tier = tier_of(model)
-        if tier not in providers.routing.tiers:
+        # A pool may define its own tiers (bots.pools resolves them in-pool).
+        if tier not in providers.routing.tiers and not any(
+            tier in pool.tiers for pool in providers.pools.pools
+        ):
             known = ", ".join(f"{AUTO}{t}" for t in providers.routing.tiers) or "none"
             msg = f"No model tier {tier!r} in providers.yaml (tiers: {known})"
             raise ValueError(msg)

@@ -13,15 +13,26 @@ metadata on the provider (``bots.providers``)::
         routes: [claude, chatgpt, xai-oauth]   # provider names or provider/model
       - name: paid-api
         label: Paid API
+        owner: lee                    # username; required with a metered route
         routes: [openai, anthropic/claude-opus-5-5]
-        budget_usd: 50                # required while it has a metered route
-        expires: 2026-12-31           # optional; after it the pool is ineligible
+        budget_usd: 50                # the owner's own spend grant: its ceiling
+        expires: 2026-12-31           # required with budget_usd: grants end
         per_launch_usd: 5             # reserved per metered coding-agent launch
         rollover_out: false           # default: true only for subscription-only pools
         allow_auto_entry: false       # default: false when any route is metered
         tiers: {medium: [openai/gpt-6.1-sol]}   # optional, else the global tiers in the pool
         agents:                                  # optional coding candidates
           medium: [{agent: codex, model: gpt-6.1-sol, provider: openai}]
+
+Pools are user-level groupings. A pool without ``owner`` is a deployment
+pool anyone may use, and can only hold subscription routes. A pool with an
+``owner`` is visible to that user and to users the owner has granted spend
+on it; its metered routes send only under a :class:`SpendGrant
+<django_ergo.conversation.models.SpendGrant>` (an immutable, time-bounded
+ceiling for one grantee and an exact set of routes). ``budget_usd`` and
+``expires`` here are the owner's own grant; the owner issues grants to
+others at runtime (``bots.pools.issue_grant``). A preference never mints
+authority.
 
 Without a ``pools:`` section the deployment keeps today's behavior: one
 synthesized pool, ``subscription``, holding every provider, with rollover
@@ -64,6 +75,7 @@ POOL_KEYS = frozenset(
     {
         "name",
         "label",
+        "owner",
         "routes",
         "enabled",
         "rollover_out",
@@ -93,6 +105,7 @@ class Pool:
 
     name: str
     label: str = ""
+    owner: str = ""  # username; "" = a deployment pool (subscription routes only)
     routes: tuple[str, ...] = ()  # provider, provider/*, or provider/model
     enabled: bool = True
     rollover_out: bool = True
@@ -301,9 +314,27 @@ def _pool(spec, index: int, providers: dict[str, Provider]) -> Pool:  # noqa: PL
     ):
         msg = f"{where}.max_output_tokens must be a positive integer"
         raise PoolConfigError(msg)
+    owner = spec.get("owner") or ""
+    if not isinstance(owner, str):
+        msg = f"{where}.owner must be a username"
+        raise PoolConfigError(msg)
+    if metered and not owner.strip():
+        msg = (
+            f"{where} has metered routes, so it needs an owner (the user whose "
+            "spend authority it is)"
+        )
+        raise PoolConfigError(msg)
+    expires = _expiry(spec.get("expires"), f"{where}.expires")
+    if budget is not None and expires is None:
+        msg = f"{where}.budget_usd needs expires: spend authority is time-bounded"
+        raise PoolConfigError(msg)
+    if per_launch is not None and budget is not None and per_launch > budget:
+        msg = f"{where}.per_launch_usd can't be more than budget_usd"
+        raise PoolConfigError(msg)
     pool = Pool(
         name=name,
         label=str(spec.get("label") or ""),
+        owner=owner.strip(),
         routes=tuple(selectors),
         enabled=_bool(spec.get("enabled"), f"{where}.enabled", True),  # noqa: FBT003
         rollover_out=_bool(
@@ -313,7 +344,7 @@ def _pool(spec, index: int, providers: dict[str, Provider]) -> Pool:  # noqa: PL
             spec.get("allow_auto_entry"), f"{where}.allow_auto_entry", not metered
         ),
         budget_usd=budget,
-        expires_at=_expiry(spec.get("expires"), f"{where}.expires"),
+        expires_at=expires,
         per_launch_usd=per_launch,
         max_output_tokens=max_output,
         metered=metered,

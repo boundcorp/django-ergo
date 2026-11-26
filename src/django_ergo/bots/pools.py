@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import contextlib
 import contextvars
+import datetime as dt
 import logging
 import time
 from dataclasses import dataclass
@@ -58,8 +59,6 @@ from django_ergo.bots.routing import tier_of
 from django_ergo.conversation.inference_policy import PolicyError
 
 if TYPE_CHECKING:
-    import datetime as dt
-
     from django_ergo.bots.providers import Provider
     from django_ergo.bots.providers import Providers
     from django_ergo.bots.runtime import Bot
@@ -91,10 +90,14 @@ PRIVACY_DENIED = "privacy_denied"
 NO_CODING_ROUTE = "no_coding_route"
 UNCONFINABLE = "unconfinable"
 UNGUARDED = "unguarded"  # metered route on an engine that can't enforce spend
+NOT_AUTHORIZED = "not_authorized"  # not this user's pool, or not in their grant
+GRANT_NOT_YET_VALID = "grant_not_yet_valid"
 
 SESSION_POOL_KEY = "pool"  # session.metadata: this chat's manual pool
 SESSION_ROUTE_KEY = "pool_route"  # session.metadata: the last decision (display)
 SESSION_REFUSAL_KEY = "pool_refusal"  # session.metadata: the last refusal (UI)
+SESSION_VERSION_KEY = "pool_version"  # session.metadata: the override's revision
+SESSION_ROLLED_KEY = "pool_rolled_from"  # session.metadata: set by a rollover
 ORIGIN_KEY = "privacy_origin"  # session/message/job metadata: inherited policies
 DEPLOYMENT_KEY = "deployment"
 # Agent CLI <-> provider engine type for metered coding confinement.
@@ -267,18 +270,156 @@ def provider_enabled(provider: Provider, disabled: set[str] | None = None) -> bo
     return provider.enabled and provider.name not in disabled
 
 
+def pool_refs(
+    providers: Providers, pool: Pool, *, metered: bool | None = None
+) -> list[str]:
+    """The exact ``provider/model`` routes a pool holds (``metered`` narrows
+    to metered or subscription routes). Coding-only (omp) routes excluded."""
+    out = []
+    for selector in pool.routes:
+        head, _, tail = selector.partition("/")
+        provider = providers.providers.get(head)
+        if provider is None or provider.worker_only:
+            continue
+        if metered is not None and provider.metered != metered:
+            continue
+        names = [tail] if tail not in ("", "*") else list(provider.models)
+        out.extend(f"{head}/{name}" for name in names)
+    return list(dict.fromkeys(out))
+
+
+def owner_ids(providers: Providers) -> dict[str, int | None]:
+    """{owner username: user id or None (no such user)}. Runs the ORM."""
+    from django.contrib.auth import get_user_model
+
+    names = {p.owner for p in providers.pools.pools if p.owner}
+    if not names:
+        return {}
+    model = get_user_model()
+    found = dict(
+        model.objects.filter(**{f"{model.USERNAME_FIELD}__in": names}).values_list(
+            model.USERNAME_FIELD, "pk"
+        )
+    )
+    return {name: found.get(name) for name in names}
+
+
+# A queued job's captured execution policy (``capture_policy``): while it
+# runs, selection uses the pool and grant it was queued under, never wider.
+_job_policy: contextvars.ContextVar[dict | None] = contextvars.ContextVar(
+    "ergo_pool_job_policy", default=None
+)
+
+
+@contextlib.contextmanager
+def policy_scope(policy: dict | None):
+    """Run queued work under the policy it captured when it was queued."""
+    token = _job_policy.set(dict(policy) if policy else None)
+    try:
+        yield
+    finally:
+        _job_policy.reset(token)
+
+
+def current_policy() -> dict | None:
+    return _job_policy.get()
+
+
+def _config_grant(pool: Pool, providers: Providers, owner_id):
+    """The owner's own grant from the pool's providers.yaml budget and expiry,
+    materialized once per distinct configuration (a changed budget, window
+    or route set is a new grant; the previous one is revoked)."""
+    import hashlib
+    import json
+
+    from django.db import IntegrityError
+    from django.db import transaction
+
+    from django_ergo.conversation.models import SpendGrant
+
+    if pool.budget_usd is None or pool.expires_at is None or owner_id is None:
+        return None
+    routes = pool_refs(providers, pool, metered=True)
+    fingerprint = json.dumps(
+        [
+            pool.name,
+            owner_id,
+            routes,
+            str(pool.budget_usd),
+            str(pool.per_launch_usd),
+            pool.max_output_tokens,
+            pool.expires_at.isoformat(),
+        ]
+    )
+    key = hashlib.sha256(fingerprint.encode()).hexdigest()
+    found = SpendGrant.objects.filter(config_key=key).first()
+    if found is not None:
+        return found
+    now = timezone.now()
+    try:
+        with transaction.atomic():
+            grant = SpendGrant.objects.create(
+                pool=pool.name,
+                owner_id=owner_id,
+                grantee_id=owner_id,
+                routes=routes,
+                budget_usd=pool.budget_usd,
+                per_launch_usd=pool.per_launch_usd,
+                max_output_tokens=pool.max_output_tokens,
+                valid_from=now,
+                expires_at=pool.expires_at,
+                source="config",
+                config_key=key,
+            )
+            for old in SpendGrant.objects.filter(
+                pool=pool.name, source="config", revoked_at__isnull=True
+            ).exclude(pk=grant.pk):
+                old.revoked_at = now
+                old.revoked_reason = "providers.yaml changed"
+                old.save(update_fields=["revoked_at", "revoked_reason"])
+    except IntegrityError:  # another process materialized it first
+        return SpendGrant.objects.filter(config_key=key).first()
+    return grant
+
+
+def active_grant(pool: Pool, providers: Providers, user_id, owner_id=None):
+    """The newest unrevoked grant on ``pool`` for ``user_id`` (even if expired
+    or not yet valid: :meth:`PoolView.grant_problem` says why it can't be
+    used), or None. With a job policy, only the grant it captured. Runs the ORM."""
+    from django_ergo.conversation.models import SpendGrant
+
+    if not user_id or pool.legacy:
+        return None
+    policy = current_policy()
+    if policy is not None:
+        # Queued work keeps exactly the authority it was queued with.
+        captured = policy.get("grant") or ""
+        if policy.get("pool") != pool.name or not captured:
+            return None
+        return SpendGrant.objects.filter(pk=captured, grantee_id=user_id).first()
+    if owner_id is not None and owner_id == user_id:
+        _config_grant(pool, providers, owner_id)
+    return (
+        SpendGrant.objects.filter(
+            pool=pool.name, grantee_id=user_id, revoked_at__isnull=True
+        )
+        .order_by("-created_at")
+        .first()
+    )
+
+
 @dataclass
 class PoolView:
-    """A pool with its runtime state merged in."""
+    """A pool with its runtime state, and this user's authority, merged in."""
 
     pool: Pool
     position: int
     enabled: bool
     rollover_out: bool
     allow_auto_entry: bool
-    budget_usd: Decimal | None
-    expires_at: dt.datetime | None
-    per_launch_usd: Decimal | None
+    owner_id: int | None = None
+    is_owner: bool = False
+    grant: object = None  # SpendGrant for this user, or None
     spent_usd: Decimal = Decimal(0)
     reserved_usd: Decimal = Decimal(0)
     version: int = 0
@@ -291,30 +432,86 @@ class PoolView:
     def title(self) -> str:
         return self.pool.title
 
+    @property
+    def budget_usd(self) -> Decimal | None:
+        return self.grant.budget_usd if self.grant is not None else None
+
+    @property
+    def expires_at(self) -> dt.datetime | None:
+        return self.grant.expires_at if self.grant is not None else None
+
+    @property
+    def per_launch_usd(self) -> Decimal | None:
+        return self.grant.per_launch_usd if self.grant is not None else None
+
+    @property
+    def max_output_tokens(self) -> int:
+        ceiling = self.pool.max_output_tokens
+        if self.grant is not None:
+            ceiling = min(ceiling, int(self.grant.max_output_tokens))
+        return ceiling
+
+    @property
+    def subscription_only(self) -> bool:
+        return not self.pool.metered
+
+    def grant_problem(self, now=None) -> tuple[str, str] | None:  # noqa: PLR0911
+        """Why this user can't spend on the pool's metered routes, or None."""
+        if self.pool.legacy or not self.pool.metered:
+            return None
+        grant = self.grant
+        if grant is None:
+            return (
+                BUDGET_REQUIRED,
+                f"You have no spend grant for pool {self.title!r}; its owner "
+                "can issue one (with a budget and an end date)",
+            )
+        now = now or timezone.now()
+        if grant.revoked_at is not None:
+            return BUDGET_REQUIRED, f"Your spend grant for {self.title!r} was revoked"
+        if now < grant.valid_from:
+            return (
+                GRANT_NOT_YET_VALID,
+                f"Your spend grant for {self.title!r} starts "
+                f"{grant.valid_from:%Y-%m-%d %H:%M} UTC",
+            )
+        if now >= grant.expires_at:
+            return (
+                BUDGET_EXPIRED,
+                f"Your spend grant for {self.title!r} expired "
+                f"{grant.expires_at:%Y-%m-%d %H:%M} UTC",
+            )
+        if self.spent_usd + self.reserved_usd >= grant.budget_usd:
+            return (
+                BUDGET_EXHAUSTED,
+                f"Your ${grant.budget_usd} grant for {self.title!r} is used "
+                f"(${self.spent_usd:.2f} spent, ${self.reserved_usd:.2f} reserved)",
+            )
+        return None
+
+    def route_granted(self, ref: str) -> bool:
+        """Whether this user may use ``ref`` in the pool at all: the owner and
+        anyone on a deployment pool may use every route; a grantee only the
+        routes of their grant."""
+        if self.pool.legacy or not self.pool.owner or self.is_owner:
+            return True
+        return self.grant is not None and ref in (self.grant.routes or [])
+
     def problem(self, now=None) -> tuple[str, str] | None:
-        """Why the pool can't be used at all (not exhaustion), or None."""
+        """Why the pool can't be used at all (not exhaustion), or None. A pool
+        of only metered routes is unusable without a valid grant; a mixed
+        pool's subscription routes stay usable (``route_problem``)."""
         if not self.enabled:
             return POOL_DISABLED, f"Pool {self.title!r} is switched off"
         if self.pool.legacy or not self.pool.metered:
             return None
-        now = now or timezone.now()
-        if self.expires_at is not None and now >= self.expires_at:
-            return (
-                BUDGET_EXPIRED,
-                f"Pool {self.title!r}'s spend authority expired {self.expires_at:%Y-%m-%d %H:%M} UTC",
-            )
-        if self.budget_usd is None:
-            return (
-                BUDGET_REQUIRED,
-                f"Pool {self.title!r} has metered routes and no budget; set budget_usd to use it",
-            )
-        if self.spent_usd + self.reserved_usd >= self.budget_usd:
-            return (
-                BUDGET_EXHAUSTED,
-                f"Pool {self.title!r} has used its ${self.budget_usd} budget "
-                f"(${self.spent_usd:.2f} spent, ${self.reserved_usd:.2f} reserved)",
-            )
+        if self.pool.owner and not self.is_owner and self.grant is None:
+            return NOT_AUTHORIZED, f"Pool {self.title!r} isn't yours"
+        if self._all_metered:
+            return self.grant_problem(now)
         return None
+
+    _all_metered: bool = False
 
 
 @dataclass
@@ -323,9 +520,12 @@ class Snapshot:
     pools: list[PoolView]
     auto_rollover: bool
     active_pool: str = ""  # manual pick ("" = automatic)
-    active_scope: str = ""  # chat, user or ""
+    active_scope: str = ""  # chat, user, job or ""
     disabled: set[str] = field(default_factory=set)
     user_version: int = 0
+    chat_version: int = 0
+    rolled_from: str = ""
+    user_id: object = None
 
     @property
     def legacy(self) -> bool:
@@ -334,8 +534,30 @@ class Snapshot:
     def get(self, name: str) -> PoolView | None:
         return next((p for p in self.pools if p.name == name), None)
 
+    def revision(self, view: PoolView | None = None) -> dict:
+        out = {"preference": self.user_version, "chat": self.chat_version}
+        if view is not None:
+            out.update(
+                pool=view.name,
+                pool_state=view.version,
+                grant=str(view.grant.pk) if view.grant is not None else "",
+            )
+        if (policy := current_policy()) is not None:
+            out["job"] = policy.get("revision") or {}
+        return out
 
-def _views(providers: Providers) -> list[PoolView]:
+
+def _visible(pool: Pool, user_id, owner_id, grant) -> bool:
+    """Deployment pools are everyone's; an owned pool is its owner's and its
+    grantees'."""
+    if pool.legacy or not pool.owner:
+        return True
+    if owner_id is not None and user_id == owner_id:
+        return True
+    return grant is not None
+
+
+def _views(providers: Providers, user_id=None) -> list[PoolView]:
     from django.db import DatabaseError
 
     from django_ergo.conversation.models import ModelPoolState
@@ -345,8 +567,17 @@ def _views(providers: Providers) -> list[PoolView]:
         states = {s.name: s for s in ModelPoolState.objects.all()}
     except DatabaseError:  # pragma: no cover
         states = {}
+    owners = owner_ids(providers) if not providers.pools.legacy else {}
     views = []
     for index, pool in enumerate(providers.pools.pools):
+        owner_id = owners.get(pool.owner) if pool.owner else None
+        grant = (
+            active_grant(pool, providers, user_id, owner_id)
+            if pool.metered and pool.owner
+            else None
+        )
+        if not _visible(pool, user_id, owner_id, grant):
+            continue
         state = states.get(pool.name)
         view = PoolView(
             pool=pool,
@@ -354,23 +585,18 @@ def _views(providers: Providers) -> list[PoolView]:
             enabled=pool.enabled,
             rollover_out=pool.rollover_out,
             allow_auto_entry=pool.allow_auto_entry,
-            budget_usd=pool.budget_usd,
-            expires_at=pool.expires_at,
-            per_launch_usd=pool.per_launch_usd,
+            owner_id=owner_id,
+            is_owner=owner_id is not None and owner_id == user_id,
+            grant=grant,
         )
+        view._all_metered = not pool_refs(providers, pool, metered=False)  # noqa: SLF001
         if state is not None and not pool.legacy:
             view.version = state.version
             for name in ("enabled", "rollover_out", "allow_auto_entry"):
                 if getattr(state, name) is not None:
                     setattr(view, name, getattr(state, name))
-            if state.budget_override:
-                view.budget_usd = state.budget_usd
-            if state.expires_override:
-                view.expires_at = state.expires_at
-            if state.per_launch_usd is not None:
-                view.per_launch_usd = state.per_launch_usd
-        if pool.metered and not pool.legacy:
-            view.spent_usd, view.reserved_usd = spent_and_reserved(pool.name)
+        if grant is not None:
+            view.spent_usd, view.reserved_usd = spent_and_reserved(grant.pk)
         views.append(view)
     return views
 
@@ -381,9 +607,18 @@ def preference(user_id):
     return ModelPoolPreference.objects.filter(key=preference_key(user_id)).first()
 
 
+def chat_revision(session) -> int:
+    value = (getattr(session, "metadata", None) or {}).get(SESSION_VERSION_KEY, 0)
+    return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
 def snapshot(providers: Providers, user_id=None, session=None) -> Snapshot:
-    """Config plus runtime state for one user (and chat). Runs the ORM."""
-    views = _views(providers)
+    """Config plus runtime state for one user (and chat). Runs the ORM.
+
+    Only pools this user may see are in it (deployment pools, pools they
+    own, pools they hold a grant on). Under a queued job's policy the active
+    pool is the one it was queued with."""
+    views = _views(providers, user_id)
     pref = None if providers.pools.legacy else preference(user_id)
     if pref is not None and pref.order:
         rank = {name: i for i, name in enumerate(pref.order)}
@@ -391,21 +626,34 @@ def snapshot(providers: Providers, user_id=None, session=None) -> Snapshot:
     auto_rollover = providers.pools.auto_rollover
     if pref is not None and pref.auto_rollover is not None:
         auto_rollover = pref.auto_rollover
-    active, scope = "", ""
-    chat_pool = ((getattr(session, "metadata", None) or {}).get(SESSION_POOL_KEY)) or ""
+    active, scope, rolled = "", "", ""
+    meta = getattr(session, "metadata", None) or {}
+    chat_pool = meta.get(SESSION_POOL_KEY) or ""
+    policy = current_policy()
     if not providers.pools.legacy:
-        if chat_pool:
+        if policy is not None:
+            active, scope = str(policy.get("pool") or ""), "job"
+            rolled = str(policy.get("rolled_from") or "")
+        elif chat_pool:
             active, scope = str(chat_pool), "chat"
+            rolled = str(meta.get(SESSION_ROLLED_KEY) or "")
         elif pref is not None and pref.active_pool:
             active, scope = pref.active_pool, "user"
+            rolled = pref.rolled_from
     return Snapshot(
         providers=providers,
         pools=views,
-        auto_rollover=bool(auto_rollover) and not providers.pools.legacy,
+        # Queued work never rolls into authority it wasn't queued with.
+        auto_rollover=bool(auto_rollover)
+        and not providers.pools.legacy
+        and policy is None,
         active_pool=active,
         active_scope=scope,
         disabled=disabled_providers(),
         user_version=pref.version if pref is not None else 0,
+        chat_version=chat_revision(session),
+        rolled_from=rolled,
+        user_id=user_id,
     )
 
 
@@ -447,19 +695,27 @@ def unavailable_reason(provider: Provider) -> str:
     return f"{provider.name} isn't available"
 
 
-def route_problem(  # noqa: C901, PLR0911, PLR0912
+def route_problem(  # noqa: C901, PLR0911, PLR0912, PLR0913
     snap: Snapshot,
     privacy: Privacy,
     consumer: str,
     provider_name: str,
     model: str,
+    view: PoolView | None = None,
 ) -> tuple[str, str] | None:
-    """Why a route can't serve ``consumer`` now (never pace), or None."""
+    """Why a route can't serve ``consumer`` now (never pace), or None. With
+    ``view`` (the pool it is selected in) the user's authority on it counts
+    too: a grantee only uses their grant's routes, a metered route needs a
+    valid grant."""
     providers = snap.providers
     ref = f"{provider_name}/{model}"
     provider = providers.providers.get(provider_name)
     if provider is None:
         return NO_ROUTE, f"{provider_name} isn't in providers.yaml"
+    if view is not None and not view.route_granted(
+        ref if not provider.worker_only else f"{provider_name}/*"
+    ):
+        return NOT_AUTHORIZED, f"{ref} isn't in your grant for pool {view.title!r}"
     if not provider.enabled or provider_name in snap.disabled:
         return PROVIDER_DISABLED, f"{provider_name} is switched off"
     if providers.is_private(ref):
@@ -490,6 +746,11 @@ def route_problem(  # noqa: C901, PLR0911, PLR0912
         found = provider.models.get(model)
         if found is None or found.price is None:
             return PRICE_UNKNOWN, f"{ref} has no exact price in providers.yaml"
+    if provider.metered and not snap.legacy and view is not None:
+        if problem := view.grant_problem():
+            return problem
+        if ref not in (view.grant.routes or []):
+            return NOT_AUTHORIZED, f"{ref} isn't one of your grant's routes"
     return None
 
 
@@ -576,11 +837,15 @@ class Decision:
     receipt_id: str = ""
     reservation_id: object = None
     reserved_usd: Decimal | None = None
-    # For metered routes: the spend envelope the guard enforces.
+    # For metered routes: the grant (spend authority) and its envelope as
+    # selected; the guard re-reads the grant row at every send.
+    grant_id: object = None
     budget_usd: Decimal | None = None
     expires_at: dt.datetime | None = None
     max_output_tokens: int = 16_000
     per_launch_usd: Decimal | None = None
+    scope: str = ""  # where the active pool came from: chat, user, job or ""
+    revision: dict = field(default_factory=dict)
 
     @property
     def metered(self) -> bool:
@@ -596,6 +861,7 @@ class Decision:
             "tier": self.tier,
             "rollover": self.rollover,
             "decision": self.receipt_id,
+            "grant": str(self.grant_id) if self.grant_id else "",
         }
 
     def guard(
@@ -608,16 +874,23 @@ class Decision:
 
         provider = bot.providers.providers.get(self.provider)
         found = provider.models.get(self.model) if provider else None
+        user_id = getattr(session, "user_id", None)
+        if self.grant_id is None or not user_id:
+            return deny_guard(
+                self.provider,
+                self.model,
+                f"Pool {self.pool!r}: {self.route} has no spend grant for this "
+                "user; refusing to send",
+            )
         return MeteredGuard(
             pool=self.pool,
             provider=self.provider,
             model=self.model,
+            grant_id=self.grant_id,
             price=found.price if found else None,
-            budget_usd=self.budget_usd,
-            expires_at=self.expires_at,
             max_output_tokens=self.max_output_tokens,
             bot=bot.name,
-            user_id=getattr(session, "user_id", None),
+            user_id=user_id,
             session_id=getattr(session, "pk", None),
             purpose=purpose,
         )
@@ -641,6 +914,7 @@ def _record(  # noqa: PLR0913
     origin=(),
     mode: str = "",
     rollover=(),
+    revision: dict | None = None,
 ) -> str:
     """Store a RouteDecision receipt (never fails the selection)."""
     from django.db import DatabaseError
@@ -668,6 +942,8 @@ def _record(  # noqa: PLR0913
             )[:50],
             rollover=list(decision.rollover if decision else rollover),
             reserved_usd=decision.reserved_usd if decision else None,
+            grant=decision.grant_id if decision else None,
+            revision=(decision.revision if decision else revision) or {},
         )
     except DatabaseError:  # pragma: no cover - receipts are best effort
         logger.exception("Couldn't record a route decision")
@@ -709,25 +985,48 @@ def _pool_permitted(snap: Snapshot, view: PoolView, privacy: Privacy) -> bool:
 
 
 def _start(snap: Snapshot, privacy: Privacy, consumer: str) -> tuple[int, str]:
-    """(index of the active pool, mode)."""
+    """(index of the active pool, mode). Automatic selection starts at the
+    first pool in the user's order; reaching any later pool automatically
+    (because earlier ones are off or not allowed) needs that pool's
+    ``allow_auto_entry``, so an opt-in boundary stops selection instead of
+    being skipped."""
+    if snap.active_scope == "job" and not snap.active_pool:
+        msg = "This queued work had no usable pool when it was queued; it can't pick one now"
+        raise PoolRefusal(POOL_DISABLED, msg, consumer=consumer)
     if snap.active_pool:
         for index, view in enumerate(snap.pools):
             if view.name == snap.active_pool:
                 return index, "manual"
-        msg = f"The selected pool {snap.active_pool!r} isn't configured any more; pick another"
+        msg = f"The selected pool {snap.active_pool!r} isn't available to you any more; pick another"
         raise PoolRefusal(
-            POOL_DISABLED,
+            NOT_AUTHORIZED
+            if snap.providers.pools.get(snap.active_pool) is not None
+            else POOL_DISABLED,
             msg,
             pool=snap.active_pool,
             next_choices=next_choices(snap, privacy, snap.active_pool),
             consumer=consumer,
         )
+    skipped: list[str] = []
     for index, view in enumerate(snap.pools):
-        if not view.enabled:
-            continue
-        if privacy.restricted and not _pool_permitted(snap, view, privacy):
-            continue
-        return index, "auto"
+        usable = view.enabled and not (
+            privacy.restricted and not _pool_permitted(snap, view, privacy)
+        )
+        if usable and skipped and not view.allow_auto_entry:
+            msg = (
+                f"{', '.join(skipped)} can't be used now and {view.title} needs to be "
+                "picked by hand; not entering it automatically"
+            )
+            raise PoolRefusal(
+                POOL_DISABLED,
+                msg,
+                pool=view.name,
+                next_choices=next_choices(snap, privacy, ""),
+                consumer=consumer,
+            )
+        if usable:
+            return index, "auto"
+        skipped.append(view.title)
     msg = "No pool is switched on" + (
         f" that privacy policy {privacy.label()} allows" if privacy.restricted else ""
     )
@@ -737,10 +1036,10 @@ def _start(snap: Snapshot, privacy: Privacy, consumer: str) -> tuple[int, str]:
 
 
 def _next_index(snap: Snapshot, index: int, privacy: Privacy) -> int | None:
+    """The next pool in order (a switched-off one included: it is a boundary
+    that stops a rollover, not one to skip)."""
     for later in range(index + 1, len(snap.pools)):
         view = snap.pools[later]
-        if not view.enabled:
-            continue
         if privacy.restricted and not _pool_permitted(snap, view, privacy):
             continue
         return later
@@ -749,7 +1048,7 @@ def _next_index(snap: Snapshot, index: int, privacy: Privacy) -> int | None:
 
 def _walk(snap: Snapshot, privacy: Privacy, consumer: str, attempt):  # noqa: C901
     """Try the active pool, rolling over on exhaustion only when all three
-    gates permit. Returns (decision, mode)."""
+    gates permit. Returns the decision."""
     index, mode = _start(snap, privacy, consumer)
     passed: list[str] = []
     while True:
@@ -801,10 +1100,14 @@ def _walk(snap: Snapshot, privacy: Privacy, consumer: str, attempt):  # noqa: C9
         decision.pool = view.name
         decision.pool_label = view.title
         decision.legacy = view.pool.legacy
+        decision.scope = snap.active_scope
+        decision.revision = snap.revision(view)
         if decision.metered and not decision.legacy:
+            grant = view.grant
+            decision.grant_id = grant.pk if grant is not None else None
             decision.budget_usd = view.budget_usd
             decision.expires_at = view.expires_at
-            decision.max_output_tokens = view.pool.max_output_tokens
+            decision.max_output_tokens = view.max_output_tokens
             decision.per_launch_usd = view.per_launch_usd
         return decision
 
@@ -845,7 +1148,9 @@ def _chat_attempt(  # noqa: C901, PLR0913
                     "it or switch pools"
                 )
                 raise PoolRefusal(PIN_OUT_OF_POOL, msg, pool=view.name)
-            if problem := route_problem(snap, privacy, consumer, provider_name, model):
+            if problem := route_problem(
+                snap, privacy, consumer, provider_name, model, view
+            ):
                 raise PoolRefusal(problem[0], f"{ref}: {problem[1]}", pool=view.name)
             provider = providers.providers[provider_name]
             return Decision(
@@ -870,7 +1175,9 @@ def _chat_attempt(  # noqa: C901, PLR0913
                     {"route": candidate, "code": "excluded", "reason": "failed"}
                 )
                 continue
-            if problem := route_problem(snap, privacy, consumer, provider_name, model):
+            if problem := route_problem(
+                snap, privacy, consumer, provider_name, model, view
+            ):
                 rejected.append(
                     {"route": candidate, "code": problem[0], "reason": problem[1]}
                 )
@@ -1010,6 +1317,8 @@ def select_route(  # noqa: PLR0913
     finally:
         _ROUTING_HOLDER.reset(token)
     decision.origin = privacy.names
+    if record and decision.rollover:
+        _persist_rollover(snap, decision, session, user_id)
     if record:
         decision.receipt_id = _record(
             bot=bot,
@@ -1021,6 +1330,49 @@ def select_route(  # noqa: PLR0913
             origin=privacy.names,
         )
     return decision
+
+
+def _persist_rollover(snap: Snapshot, decision: Decision, session, user_id) -> None:
+    """Keep work on the pool a rollover reached, in the scope that was in
+    effect (this chat's override, else the user's default), with the pool it
+    left recorded: it stays there until the person switches back or picks
+    "use preferred order". Never an invisible return to an earlier pool."""
+    from django.db import transaction
+
+    from django_ergo.conversation.models import ConversationSession
+    from django_ergo.conversation.models import ModelPoolPreference
+
+    target, left = decision.pool, decision.rollover[0]
+    if snap.active_scope == "job":
+        return
+    with transaction.atomic():
+        if snap.active_scope == "chat" and getattr(session, "pk", None):
+            row = ConversationSession.objects.select_for_update().get(pk=session.pk)
+            meta = dict(row.metadata or {})
+            if chat_revision(row) != snap.chat_version:
+                return  # changed since this selection; that choice wins
+            meta[SESSION_POOL_KEY] = target
+            meta[SESSION_ROLLED_KEY] = left
+            meta[SESSION_VERSION_KEY] = snap.chat_version + 1
+            row.metadata = meta
+            row.save(update_fields=["metadata", "updated_at"])
+            session.metadata = {
+                **(session.metadata or {}),
+                SESSION_POOL_KEY: target,
+                SESSION_ROLLED_KEY: left,
+                SESSION_VERSION_KEY: snap.chat_version + 1,
+            }
+            return
+        pref, _ = ModelPoolPreference.objects.select_for_update().get_or_create(
+            key=preference_key(user_id), defaults={"user_id": user_id, "version": 0}
+        )
+        if pref.version != snap.user_version:
+            return
+        pref.active_pool = target
+        pref.rolled_from = left
+        pref.version += 1
+        pref.save()
+    decision.scope = decision.scope or "user"
 
 
 # -- coding agents -----------------------------------------------------------------
@@ -1203,7 +1555,7 @@ def select_agent(  # noqa: C901, PLR0913, PLR0915
                 )
                 continue
             if problem := route_problem(
-                snap, privacy, CODING, provider_name, route_model
+                snap, privacy, CODING, provider_name, route_model, view
             ):
                 rejected.append(
                     {"route": ref, "code": problem[0], "reason": problem[1]}
@@ -1363,12 +1715,11 @@ def select_agent(  # noqa: C901, PLR0913, PLR0915
         from django_ergo.conversation.spend_guard import reserve_launch
 
         decision.reservation_id = reserve_launch(
+            grant_id=decision.grant_id,
             pool=decision.pool,
             provider=decision.provider,
             model=decision.model,
             amount=decision.per_launch_usd,
-            budget=decision.budget_usd,
-            expires_at=decision.expires_at,
             bot=bot.name,
             session_id=getattr(session, "pk", None),
             user_id=user_id,
@@ -1408,7 +1759,7 @@ def revalidate_launch(bot: Bot, session, confined: dict) -> Decision:
     if not view.pool.contains(provider, model):
         msg = f"{provider}/{model} isn't in pool {view.title!r} any more"
         raise PoolRefusal(PIN_OUT_OF_POOL, msg, pool=view.name, consumer=CODING)
-    if problem := route_problem(snap, privacy, CODING, provider, model):
+    if problem := route_problem(snap, privacy, CODING, provider, model, view):
         raise PoolRefusal(
             problem[0],
             f"{provider}/{model}: {problem[1]}",
@@ -1428,13 +1779,13 @@ def revalidate_launch(bot: Bot, session, confined: dict) -> Decision:
         per_launch_usd=view.per_launch_usd,
         reason="resumed confined launch",
     )
+    decision.grant_id = view.grant.pk if view.grant is not None else None
     decision.reservation_id = reserve_launch(
+        grant_id=decision.grant_id,
         pool=view.name,
         provider=provider,
         model=model,
         amount=view.per_launch_usd,
-        budget=view.budget_usd,
-        expires_at=view.expires_at,
         bot=bot.name,
         session_id=getattr(session, "pk", None),
         user_id=getattr(session, "user_id", None),
@@ -1526,11 +1877,54 @@ def settings_view(providers: Providers, user_id=None) -> dict:
     }
 
 
+def _grant_view(grant, spent=None) -> dict | None:
+    if grant is None:
+        return None
+    from django_ergo.conversation.spend_guard import spent_and_reserved
+
+    spent_usd, reserved_usd = (
+        spent if spent is not None else spent_and_reserved(grant.pk)
+    )
+    return {
+        "id": str(grant.pk),
+        "grantee": grant.grantee_id,
+        "routes": list(grant.routes or []),
+        "budget_usd": str(grant.budget_usd),
+        "per_launch_usd": str(grant.per_launch_usd)
+        if grant.per_launch_usd is not None
+        else None,
+        "max_output_tokens": grant.max_output_tokens,
+        "valid_from": grant.valid_from.isoformat(),
+        "expires_at": grant.expires_at.isoformat(),
+        "source": grant.source,
+        "revoked": grant.revoked_at is not None,
+        "spent_usd": str(spent_usd),
+        "reserved_usd": str(reserved_usd),
+    }
+
+
+def issued_grants(view: PoolView) -> list[dict]:
+    """The grants on a pool its owner has issued (owner only). Runs the ORM."""
+    from django_ergo.conversation.models import SpendGrant
+
+    if not view.is_owner:
+        return []
+    rows = SpendGrant.objects.filter(pool=view.name, revoked_at__isnull=True)
+    return [_grant_view(g) for g in rows.order_by("-created_at")[:50]]
+
+
 def public_view(providers: Providers, privacy: Privacy, snap: Snapshot) -> dict:
+    """Pools, routes and tiers with what is *selectable now* (the same full
+    eligibility selection uses: pool switch and authority, grant, provider,
+    price, adapter, and current capacity) as well as what is configured.
+    Spend figures are only this user's own grant (and, for a pool's owner,
+    the grants they issued); never another user's totals."""
     rows = []
+    usage = routing.current_usage()
     for view in snap.pools:
         problem = view.problem()
         models = []
+        selectable_refs = set()
         for selector in view.pool.routes:
             head, _, tail = selector.partition("/")
             provider = providers.providers.get(head)
@@ -1538,51 +1932,68 @@ def public_view(providers: Providers, privacy: Privacy, snap: Snapshot) -> dict:
                 continue
             names = [tail] if tail not in ("", "*") else list(provider.models)
             for name in names:
-                issue = route_problem(snap, privacy, CHAT, head, name)
+                ref = f"{head}/{name}"
+                issue = problem or route_problem(snap, privacy, CHAT, head, name, view)
+                status = issue[0] if issue else "selectable"
+                why = issue[1] if issue else ""
+                if issue is None and (blocked := routing.pace_block(head, usage, name)):
+                    status, why = "no_capacity", blocked
+                if status == "selectable":
+                    selectable_refs.add(ref)
                 model = provider.models.get(name)
                 models.append(
                     {
-                        "id": f"{head}/{name}",
+                        "id": ref,
                         "label": (model.label if model else "") or name,
                         "billing": provider.billing,
-                        "available": issue is None,
-                        "why": issue[1] if issue else "",
+                        "configured": True,
+                        "available": status == "selectable",
+                        "status": status,
+                        "why": why,
                     }
                 )
         tiers = {}
+        tier_available = {}
         token = _ROUTING_HOLDER.set(providers.routing)
         try:
             for tier in sorted({*providers.routing.tiers, *view.pool.tiers}):
                 refs = tier_candidates(providers, view.pool, tier)
                 if refs:
                     tiers[tier] = refs
+                    tier_available[tier] = any(r in selectable_refs for r in refs)
         finally:
             _ROUTING_HOLDER.reset(token)
+        grant = _grant_view(view.grant, (view.spent_usd, view.reserved_usd))
         rows.append(
             {
                 "name": view.name,
                 "label": view.title,
                 "position": view.position,
+                "owner": view.pool.owner,
+                "is_owner": view.is_owner,
                 "enabled": view.enabled,
                 "status": problem[0] if problem else "eligible",
                 "why": problem[1] if problem else "",
+                "selectable_now": bool(selectable_refs),
                 "metered": view.pool.metered,
                 "legacy": view.pool.legacy,
                 "rollover_out": view.rollover_out,
                 "allow_auto_entry": view.allow_auto_entry,
-                "budget_usd": str(view.budget_usd)
-                if view.budget_usd is not None
-                else None,
-                "spent_usd": str(view.spent_usd),
-                "reserved_usd": str(view.reserved_usd),
-                "expires_at": view.expires_at.isoformat() if view.expires_at else None,
-                "per_launch_usd": str(view.per_launch_usd)
-                if view.per_launch_usd is not None
-                else None,
+                "grant": grant,
+                "grants": [
+                    g for g in issued_grants(view) if g["id"] != (grant or {}).get("id")
+                ],
+                "budget_usd": grant["budget_usd"] if grant else None,
+                "spent_usd": grant["spent_usd"] if grant else None,
+                "reserved_usd": grant["reserved_usd"] if grant else None,
+                "expires_at": grant["expires_at"] if grant else None,
+                "per_launch_usd": grant["per_launch_usd"] if grant else None,
+                "max_output_tokens": view.max_output_tokens,
                 "version": view.version,
                 "routes": list(view.pool.routes),
                 "models": models,
                 "tiers": tiers,
+                "tier_available": tier_available,
             }
         )
     try:
@@ -1596,8 +2007,10 @@ def public_view(providers: Providers, privacy: Privacy, snap: Snapshot) -> dict:
         "mode": mode,
         "scope": snap.active_scope,
         "selected": snap.active_pool,
+        "rolled_from": snap.rolled_from,
         "auto_rollover": snap.auto_rollover,
         "user_version": snap.user_version,
+        "chat_version": snap.chat_version,
         "providers": [
             {
                 "name": p.name,
@@ -1607,11 +2020,19 @@ def public_view(providers: Providers, privacy: Privacy, snap: Snapshot) -> dict:
                 "enabled": provider_enabled(p, snap.disabled),
                 "configured_enabled": p.enabled,
                 "available": p.available,
+                "version": toggle_versions.get(p.name, 0),
             }
+            for toggle_versions in [_toggle_versions()]
             for p in providers.providers.values()
         ],
         "reset_times": _reset_times(providers),
     }
+
+
+def _toggle_versions() -> dict[str, int]:
+    from django_ergo.conversation.models import ProviderToggle
+
+    return dict(ProviderToggle.objects.values_list("name", "version"))
 
 
 def _reset_times(providers: Providers) -> dict:
@@ -1645,57 +2066,148 @@ def chat_models(bot: Bot, session=None, user_id=None) -> list[str]:
 # -- runtime selection state ------------------------------------------------------------
 
 
-def set_chat_pool(session, pool: str, providers: Providers) -> None:
-    """Pin a chat to ``pool`` ("" = follow the user's default). Runs the ORM."""
-    if pool and providers.pools.get(pool) is None:
-        msg = f"No pool named {pool!r}"
+class VersionConflict(ValueError):  # noqa: N818
+    pass
+
+
+def _require_version(version, what: str) -> int:
+    if isinstance(version, bool) or not isinstance(version, int) or version < 0:
+        msg = f"{what}: the version you last saw is required (reload and try again)"
         raise ValueError(msg)
-    if pool and providers.pools.legacy:
+    return version
+
+
+def selectable_pool(providers: Providers, user_id, pool: str) -> None:
+    """ValueError unless ``user_id`` may pick ``pool`` (a deployment pool, one
+    they own, or one they hold a grant on). Runs the ORM."""
+    if not pool:
+        return
+    if providers.pools.legacy:
         msg = "Pools aren't configured (providers.yaml has no pools section)"
         raise ValueError(msg)
-    meta = dict(session.metadata or {})
-    if pool:
-        meta[SESSION_POOL_KEY] = pool
-    else:
-        meta.pop(SESSION_POOL_KEY, None)
-    meta.pop(SESSION_REFUSAL_KEY, None)
-    meta.pop("routed_model", None)  # pick again inside the new pool
-    session.metadata = meta
-    session.save(update_fields=["metadata", "updated_at"])
+    if providers.pools.get(pool) is None:
+        msg = f"No pool named {pool!r}"
+        raise ValueError(msg)
+    if not any(v.name == pool for v in _views(providers, user_id)):
+        msg = f"Pool {pool!r} isn't yours and you hold no grant on it"
+        raise PermissionError(msg)
+
+
+def set_chat_pool(session, pool: str, providers: Providers, *, version: int) -> None:
+    """Pin a chat to ``pool`` ("" = follow the user's default), if the chat
+    override is still at ``version``. Runs the ORM."""
+    switch_pool(
+        session.user_id,
+        providers,
+        pool,
+        scope="chat",
+        session=session,
+        chat_version=version,
+    )
+
+
+def switch_pool(  # noqa: PLR0913
+    user_id,
+    providers: Providers,
+    pool: str,
+    *,
+    scope: str,
+    session=None,
+    version: int | None = None,
+    chat_version: int | None = None,
+) -> None:
+    """Set the active pool for new work in one scope, atomically.
+
+    ``scope="chat"``: this chat's override (``chat_version`` required).
+    ``scope="user"``: the user's default (``version`` required) AND, given a
+    ``session``, that chat's override cleared (``chat_version`` required),
+    in one transaction: both change or neither does. Clearing (``pool=""``)
+    returns to the preferred order. VersionConflict on a stale version,
+    PermissionError for a pool the user may not use. Runs the ORM."""
+    from django.db import transaction
+
+    from django_ergo.conversation.models import ConversationSession
+    from django_ergo.conversation.models import ModelPoolPreference
+
+    if scope not in ("chat", "user"):
+        msg = "scope must be chat or user"
+        raise ValueError(msg)
+    selectable_pool(providers, user_id, pool)
+    if scope == "chat" or session is not None:
+        _require_version(chat_version, "Changing this chat's pool")
+        if session is None or getattr(session, "user_id", None) != user_id:
+            msg = "That chat isn't yours"
+            raise PermissionError(msg)
+    if scope == "user":
+        _require_version(version, "Changing your pool")
+    with transaction.atomic():
+        if scope == "user":
+            pref, _ = ModelPoolPreference.objects.select_for_update().get_or_create(
+                key=preference_key(user_id), defaults={"user_id": user_id, "version": 0}
+            )
+            if pref.version != version:
+                msg = f"Pool settings changed elsewhere (version {pref.version}, not {version}); reload"
+                raise VersionConflict(msg)
+            pref.active_pool = pool
+            pref.rolled_from = ""
+            pref.version += 1
+            pref.save()
+        if session is not None:
+            row = ConversationSession.objects.select_for_update().get(pk=session.pk)
+            if chat_revision(row) != chat_version:
+                msg = f"This chat's pool changed elsewhere (version {chat_revision(row)}); reload"
+                raise VersionConflict(msg)
+            meta = dict(row.metadata or {})
+            if scope == "chat" and pool:
+                meta[SESSION_POOL_KEY] = pool
+            else:
+                meta.pop(SESSION_POOL_KEY, None)
+            meta.pop(SESSION_ROLLED_KEY, None)
+            meta.pop(SESSION_REFUSAL_KEY, None)
+            meta.pop("routed_model", None)  # pick again inside the new pool
+            meta[SESSION_VERSION_KEY] = chat_revision(row) + 1
+            row.metadata = meta
+            row.save(update_fields=["metadata", "updated_at"])
+            session.metadata = meta
 
 
 def update_preference(  # noqa: PLR0913
     user_id,
     providers: Providers,
     *,
-    version: int | None,
+    version: int,
     active_pool: str | None = None,
     auto_rollover: bool | None = None,
     order: list[str] | None = None,
     clear_auto_rollover: bool = False,
 ):
-    """Change a user's pool choices atomically; ValueError on a version
-    conflict or an unknown pool. Runs the ORM."""
+    """Change a user's pool choices atomically; ``version`` (the one last
+    read) is required. VersionConflict on a stale version, ValueError for an
+    unknown pool, PermissionError for one they may not use. Runs the ORM."""
     from django.db import transaction
 
     from django_ergo.conversation.models import ModelPoolPreference
 
+    _require_version(version, "Changing your pool settings")
     names = [p.name for p in providers.pools.pools]
-    if active_pool and active_pool not in names:
-        msg = f"No pool named {active_pool!r}"
-        raise ValueError(msg)
+    if active_pool:
+        selectable_pool(providers, user_id, active_pool)
     if order is not None and sorted(order) != sorted(names):
         msg = "order must list every pool exactly once"
+        raise ValueError(msg)
+    if auto_rollover is not None and not isinstance(auto_rollover, bool):
+        msg = "auto_rollover must be true or false"
         raise ValueError(msg)
     with transaction.atomic():
         pref, _ = ModelPoolPreference.objects.select_for_update().get_or_create(
             key=preference_key(user_id), defaults={"user_id": user_id, "version": 0}
         )
-        if version is not None and pref.version != version:
+        if pref.version != version:
             msg = f"Pool settings changed elsewhere (version {pref.version}, not {version}); reload"
             raise VersionConflict(msg)
         if active_pool is not None:
             pref.active_pool = active_pool
+            pref.rolled_from = ""
         if auto_rollover is not None:
             pref.auto_rollover = auto_rollover
         if clear_auto_rollover:
@@ -1707,83 +2219,269 @@ def update_preference(  # noqa: PLR0913
     return pref
 
 
-class VersionConflict(ValueError):  # noqa: N818
-    pass
+def may_manage(
+    providers: Providers, name: str, user_id, *, admin: bool = False
+) -> bool:
+    """Whether a user may change a pool's gates or issue grants on it: its
+    owner, or an admin (a deployment pool: admins only). Runs the ORM."""
+    pool = providers.pools.get(name)
+    if pool is None or pool.legacy:
+        return False
+    if admin:
+        return True
+    if not pool.owner:
+        return False
+    return owner_ids(providers).get(pool.owner) == user_id and user_id is not None
 
 
-def update_pool_state(
-    name: str, providers: Providers, *, version: int | None, **changes
-):
-    """Change one pool's runtime overrides atomically. Runs the ORM."""
+def update_pool_state(name: str, providers: Providers, *, version: int, **changes):
+    """Change one pool's gates (enabled, rollover_out, allow_auto_entry)
+    atomically; ``version`` is required. Spend authority is a grant
+    (:func:`issue_grant`), not a pool setting. Runs the ORM."""
     from django.db import transaction
 
     from django_ergo.conversation.models import ModelPoolState
 
+    _require_version(version, f"Changing pool {name!r}")
     pool = providers.pools.get(name)
     if pool is None or pool.legacy:
         msg = f"No configured pool named {name!r}"
         raise ValueError(msg)
-    allowed = {
-        "enabled",
-        "rollover_out",
-        "allow_auto_entry",
-        "budget_usd",
-        "expires_at",
-        "per_launch_usd",
-    }
+    allowed = {"enabled", "rollover_out", "allow_auto_entry"}
     if unknown := set(changes) - allowed:
-        msg = f"Unknown pool settings: {', '.join(sorted(unknown))}"
+        msg = (
+            f"Unknown pool settings: {', '.join(sorted(unknown))} (budgets and "
+            "expiry are spend grants)"
+        )
         raise ValueError(msg)
+    for key, value in changes.items():
+        if value is not None and not isinstance(value, bool):
+            msg = f"{key} must be true, false or null"
+            raise ValueError(msg)
     with transaction.atomic():
         state, _ = ModelPoolState.objects.select_for_update().get_or_create(
             name=name, defaults={"version": 0}
         )
-        if version is not None and state.version != version:
+        if state.version != version:
             msg = f"Pool {name!r} changed elsewhere (version {state.version}, not {version}); reload"
             raise VersionConflict(msg)
         for key, value in changes.items():
-            if key == "budget_usd":
-                state.budget_override = True
-                state.budget_usd = None if value is None else Decimal(str(value))
-                if state.budget_usd is not None and state.budget_usd < 0:
-                    msg = "budget_usd must be 0 or more"
-                    raise ValueError(msg)
-            elif key == "expires_at":
-                state.expires_override = True
-                state.expires_at = value
-            elif key == "per_launch_usd":
-                state.per_launch_usd = None if value is None else Decimal(str(value))
-            else:
-                if value is not None and not isinstance(value, bool):
-                    msg = f"{key} must be true, false or null"
-                    raise ValueError(msg)
-                setattr(state, key, value)
+            setattr(state, key, value)
         state.version += 1
         state.save()
     return state
 
 
-def set_provider_enabled(
-    name: str, providers: Providers, enabled: bool, *, version: int | None = None
+def usd(value, what: str, *, required: bool = True) -> Decimal | None:
+    """A finite, non-negative amount of US dollars (strings, ints, floats or
+    Decimals), or ValueError."""
+    from decimal import InvalidOperation
+
+    if value is None or value == "":
+        if required:
+            msg = f"{what} is required"
+            raise ValueError(msg)
+        return None
+    if isinstance(value, bool) or not isinstance(value, int | float | str | Decimal):
+        msg = f"{what} must be a number of US dollars"
+        raise ValueError(msg)  # noqa: TRY004
+    try:
+        amount = Decimal(str(value).strip())
+    except InvalidOperation as exc:
+        msg = f"{what} must be a number of US dollars"
+        raise ValueError(msg) from exc
+    if not amount.is_finite() or amount < 0:
+        msg = f"{what} must be a finite amount, 0 or more"
+        raise ValueError(msg)
+    if amount >= Decimal("1e12"):
+        msg = f"{what} is too large"
+        raise ValueError(msg)
+    return amount
+
+
+def issue_grant(  # noqa: PLR0913, C901, PLR0915
+    providers: Providers,
+    pool: str,
+    *,
+    issuer_id,
+    grantee_id,
+    budget_usd,
+    expires_at: dt.datetime,
+    routes: list[str] | None = None,
+    valid_from: dt.datetime | None = None,
+    per_launch_usd=None,
+    max_output_tokens: int | None = None,
+    admin: bool = False,
 ):
+    """Issue a spend grant on ``pool`` (its owner or an admin): ``grantee``
+    may spend up to ``budget_usd`` on ``routes`` (default: all the pool's
+    metered routes) between ``valid_from`` (default now) and ``expires_at``.
+    It replaces (revokes) the grantee's previous grant on the pool; the old
+    ledger stays. Runs the ORM."""
+    from django.db import transaction
+
+    from django_ergo.conversation.models import SpendGrant
+
+    config = providers.pools.get(pool)
+    if config is None or config.legacy:
+        msg = f"No configured pool named {pool!r}"
+        raise ValueError(msg)
+    if not config.owner:
+        msg = f"Pool {pool!r} has no owner, so it can't carry spend grants"
+        raise ValueError(msg)
+    owner_id = owner_ids(providers).get(config.owner)
+    if owner_id is None:
+        msg = f"Pool {pool!r}'s owner {config.owner!r} isn't a user here"
+        raise ValueError(msg)
+    if not may_manage(providers, pool, issuer_id, admin=admin):
+        msg = f"Only {config.owner} (or an admin) can issue grants on {pool!r}"
+        raise PermissionError(msg)
+    if not grantee_id:
+        msg = "A grant needs a grantee"
+        raise ValueError(msg)
+    metered = pool_refs(providers, config, metered=True)
+    allowed = pool_refs(providers, config)
+    routes = list(dict.fromkeys(routes if routes is not None else metered))
+    if not routes or not set(routes) <= set(allowed):
+        msg = f"routes must be exact provider/model routes of {pool!r}: {', '.join(allowed)}"
+        raise ValueError(msg)
+    budget = usd(budget_usd, "budget_usd")
+    per_launch = usd(per_launch_usd, "per_launch_usd", required=False)
+    if per_launch is not None and per_launch > budget:
+        msg = "per_launch_usd can't be more than budget_usd"
+        raise ValueError(msg)
+    ceiling = (
+        config.max_output_tokens if max_output_tokens is None else max_output_tokens
+    )
+    if (
+        isinstance(ceiling, bool)
+        or not isinstance(ceiling, int)
+        or not 0 < ceiling <= config.max_output_tokens
+    ):
+        msg = f"max_output_tokens must be 1 to {config.max_output_tokens}"
+        raise ValueError(msg)
+    now = timezone.now()
+    start = valid_from or now
+    if not isinstance(expires_at, dt.datetime) or not isinstance(start, dt.datetime):
+        msg = "valid_from and expires_at must be date-times"
+        raise ValueError(msg)  # noqa: TRY004
+    try:
+        bad = expires_at <= start or expires_at <= now
+    except TypeError as exc:  # naive vs aware
+        msg = "valid_from and expires_at must be timezone-aware date-times"
+        raise ValueError(msg) from exc
+    if bad:
+        msg = "expires_at must be in the future and after valid_from"
+        raise ValueError(msg)
+    with transaction.atomic():
+        for old in SpendGrant.objects.select_for_update().filter(
+            pool=pool, grantee_id=grantee_id, revoked_at__isnull=True
+        ):
+            old.revoked_at = now
+            old.revoked_reason = "replaced by a new grant"
+            old.save(update_fields=["revoked_at", "revoked_reason"])
+        return SpendGrant.objects.create(
+            pool=pool,
+            owner_id=owner_id,
+            grantee_id=grantee_id,
+            routes=routes,
+            budget_usd=budget,
+            per_launch_usd=per_launch,
+            max_output_tokens=ceiling,
+            valid_from=start,
+            expires_at=expires_at,
+            source="issued",
+            created_by_id=issuer_id,
+        )
+
+
+def revoke_grant(
+    providers: Providers, grant_id, *, by_id, admin: bool = False, reason: str = ""
+):
+    """Revoke a grant (its pool's owner, an admin, or the grantee giving it
+    up). Its ledger stays; reservations already held stay held. Runs the ORM."""
+    from django.db import transaction
+
+    from django_ergo.conversation.models import SpendGrant
+
+    with transaction.atomic():
+        grant = SpendGrant.objects.select_for_update().filter(pk=grant_id).first()
+        if grant is None:
+            msg = "No such grant"
+            raise ValueError(msg)
+        if not (
+            grant.grantee_id == by_id
+            or may_manage(providers, grant.pool, by_id, admin=admin)
+        ):
+            msg = "Only the pool's owner, an admin or the grantee can revoke it"
+            raise PermissionError(msg)
+        if grant.revoked_at is None:
+            grant.revoked_at = timezone.now()
+            grant.revoked_reason = (reason or "revoked")[:200]
+            grant.save(update_fields=["revoked_at", "revoked_reason"])
+    return grant
+
+
+def set_provider_enabled(
+    name: str, providers: Providers, enabled: bool, *, version: int
+):
+    """Switch a provider (account) on or off for everyone; ``version`` (the
+    one last read, 0 for a provider never switched) is required. Runs the ORM."""
     from django.db import transaction
 
     from django_ergo.conversation.models import ProviderToggle
 
+    _require_version(version, f"Switching {name!r}")
     if name not in providers.providers:
         msg = f"No provider named {name!r}"
         raise ValueError(msg)
+    if not isinstance(enabled, bool):
+        msg = "enabled must be true or false"
+        raise ValueError(msg)  # noqa: TRY004
     with transaction.atomic():
         toggle, _ = ProviderToggle.objects.select_for_update().get_or_create(
             name=name, defaults={"version": 0}
         )
-        if version is not None and toggle.version != version:
-            msg = f"Provider {name!r} changed elsewhere; reload"
+        if toggle.version != version:
+            msg = f"Provider {name!r} changed elsewhere (version {toggle.version}); reload"
             raise VersionConflict(msg)
-        toggle.enabled = bool(enabled)
+        toggle.enabled = enabled
         toggle.version += 1
         toggle.save()
     return toggle
+
+
+# -- queued work ------------------------------------------------------------------
+
+
+def capture_policy(bot: Bot, session=None, user_id=None) -> dict:
+    """The execution policy to store with queued work (a background task or a
+    durable worker): the pool new work would use now, the user's grant on it
+    and the revision it was read at. Running it later under
+    :func:`policy_scope` can only narrow this (a revoked grant or switched
+    off pool refuses), never pick up a later, wider choice. {} without pools.
+    Runs the ORM."""
+    providers = getattr(bot, "providers", None)
+    if providers is None or providers.pools.legacy or bot.private_pool:
+        return {}
+    if (existing := current_policy()) is not None:
+        return dict(existing)  # queued from queued work: the same policy
+    user_id = user_id if user_id is not None else getattr(session, "user_id", None)
+    privacy = privacy_for(bot, session)
+    snap = snapshot(providers, user_id, session)
+    try:
+        index, mode = _start(snap, privacy, BACKGROUND)
+    except PoolRefusal:
+        return {"pool": "", "grant": "", "user": user_id, "revision": snap.revision()}
+    view = snap.pools[index]
+    return {
+        "pool": view.name,
+        "mode": mode,
+        "grant": str(view.grant.pk) if view.grant is not None else "",
+        "user": user_id,
+        "rolled_from": snap.rolled_from,
+        "revision": snap.revision(view),
+    }
 
 
 def restricted_view(providers: Providers, refs) -> Providers:

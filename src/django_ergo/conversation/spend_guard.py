@@ -5,8 +5,8 @@ outbound request.
 :class:`MeteredGuard` to the engine it builds, and the engine sends every HTTP
 request through :meth:`MeteredGuard.call`:
 
-- before sending it re-reads the pool's runtime budget and expiry and the
-  provider's on/off switch, clamps the request's output to the pool's
+- before sending it re-reads the grant (revoked, validity window, grantee,
+  routes, budget), the pool's and the provider's on/off switches, clamps the request's output to the pool's
   ceiling, asks the engine's :class:`SpendAdapter` for a proven bound on the
   request (or refuses a request class it can't bound: remote images, audio,
   files, server-side tools, several choices), reserves the worst-case cost of
@@ -19,8 +19,10 @@ request through :meth:`MeteredGuard.call`:
 One guarded call is one HTTP attempt: engines turn their SDK's own retries
 off under a guard, so a retry is another call with its own reservation.
 
-Attempts are ``InferenceRequest`` rows with ``pool`` ``pool:<name>`` and
-``billing_mode`` ``metered``. A configured API key is never authority: a
+Spend authority is one :class:`~django_ergo.conversation.models.SpendGrant`
+(``bots.pools``): its id keys the ledger and the lock. Attempts are
+``InferenceRequest`` rows with ``pool`` ``grant:<id>`` and ``billing_mode``
+``metered``. A configured API key is never authority: a
 guard with ``deny_reason`` refuses every send (used for a metered route that
 was not selected through a pool).
 
@@ -50,7 +52,6 @@ around each single HTTP attempt, with its client's automatic retries off.
 
 from __future__ import annotations
 
-import datetime as dt  # noqa: TC003
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import TYPE_CHECKING
@@ -69,7 +70,7 @@ if TYPE_CHECKING:
 
     from django_ergo.pricing import ExactPrice
 
-LEDGER_PREFIX = "pool:"
+LEDGER_PREFIX = "grant:"
 # Per message, on top of the request's byte count (role and turn markers).
 MESSAGE_OVERHEAD_TOKENS = 16
 
@@ -79,18 +80,19 @@ class SpendDenied(SpendCapError):  # noqa: N818
     disabled provider or no authority). Never retried, never a fallback."""
 
 
-def ledger_pool(name: str) -> str:
-    return f"{LEDGER_PREFIX}{name}"[:64]
+def ledger_key(grant_id) -> str:
+    """The ledger (``InferenceRequest.pool``) and lock key of one grant."""
+    return f"{LEDGER_PREFIX}{grant_id}"[:64]
 
 
-def spent_and_reserved(name: str) -> tuple[Decimal, Decimal]:
-    """(priced spend, outstanding reservations) of a pool, all time. Runs the ORM."""
+def spent_and_reserved(grant_id) -> tuple[Decimal, Decimal]:
+    """(priced spend, outstanding reservations) of one grant, all time. Runs the ORM."""
     from django_ergo.conversation.models import InferenceOutcome
     from django_ergo.conversation.models import InferenceRequest
 
     spent = Decimal(0)
     reserved = Decimal(0)
-    rows = InferenceRequest.objects.filter(pool=ledger_pool(name))
+    rows = InferenceRequest.objects.filter(pool=ledger_key(grant_id))
     for outcome, status, cost, held in rows.values_list(
         "outcome", "cost_status", "cost_usd", "reserved_usd"
     ):
@@ -103,28 +105,18 @@ def spent_and_reserved(name: str) -> tuple[Decimal, Decimal]:
     return spent, reserved
 
 
-def _lock(name: str) -> None:
+def _lock(grant_id) -> None:
     if connection.vendor == "postgresql":
         with connection.cursor() as cursor:
             cursor.execute(
-                "SELECT pg_advisory_xact_lock(hashtext(%s))", [ledger_pool(name)]
+                "SELECT pg_advisory_xact_lock(hashtext(%s))", [ledger_key(grant_id)]
             )
 
 
-def current_limits(
-    name: str, budget: Decimal | None, expires_at: dt.datetime | None
-) -> tuple[Decimal | None, dt.datetime | None, bool]:
-    """(budget, expiry, enabled) with the pool's runtime overrides applied."""
+def pool_switched_off(name: str) -> bool:
     from django_ergo.conversation.models import ModelPoolState
 
-    state = ModelPoolState.objects.filter(name=name).first()
-    if state is None:
-        return budget, expires_at, True
-    if state.budget_override:
-        budget = state.budget_usd
-    if state.expires_override:
-        expires_at = state.expires_at
-    return budget, expires_at, state.enabled is not False
+    return ModelPoolState.objects.filter(name=name, enabled=False).exists()
 
 
 def provider_switched_off(provider: str) -> bool:
@@ -413,53 +405,63 @@ ADAPTERS = {
 }
 
 
-def reserve(  # noqa: PLR0913
+def reserve(  # noqa: PLR0913, C901
     *,
-    pool: str,
+    grant_id,
     provider: str,
     model: str,
     amount: Decimal | None,
-    budget: Decimal | None,
-    expires_at: dt.datetime | None,
+    user_id,
     fields: dict,
 ) -> object:
-    """Reserve ``amount`` against ``pool``'s budget and record the attempt;
-    SpendDenied (nothing recorded) when it can't. Returns the row's pk."""
+    """Reserve ``amount`` against one grant and record the attempt;
+    SpendDenied (nothing recorded) when it can't. Under the grant's lock it
+    re-reads the grant (revoked, window, grantee, routes, ceiling), the
+    pool's and the provider's switches. Returns the row's pk."""
     from django_ergo.conversation.models import InferenceRequest
+    from django_ergo.conversation.models import SpendGrant
 
+    ref = f"{provider}/{model}"
     if amount is None:
         msg = (
-            f"{provider}/{model} has no exact price or the request has no output "
-            f"limit, so pool {pool!r} can't bound its cost; refusing to send"
+            f"{ref} has no exact price, so its cost can't be bounded; refusing to send"
         )
         raise SpendDenied(msg)
+    if grant_id is None:
+        msg = f"{ref} bills per token and no spend grant covers it; refusing to send"
+        raise SpendDenied(msg)
     with transaction.atomic():
-        _lock(pool)
-        budget, expires_at, enabled = current_limits(pool, budget, expires_at)
-        if not enabled:
-            msg = f"Pool {pool!r} is switched off; refusing to send"
+        _lock(grant_id)
+        grant = SpendGrant.objects.filter(pk=grant_id).first()
+        now = timezone.now()
+        problem = ""
+        if grant is None or grant.revoked_at is not None:
+            problem = "the spend grant was revoked"
+        elif not user_id or grant.grantee_id != user_id:
+            problem = "the spend grant belongs to another user"
+        elif ref not in (grant.routes or []):
+            problem = f"the spend grant doesn't cover {ref}"
+        elif now < grant.valid_from:
+            problem = f"the spend grant starts {grant.valid_from:%Y-%m-%d %H:%M} UTC"
+        elif now >= grant.expires_at:
+            problem = f"the spend grant expired {grant.expires_at:%Y-%m-%d %H:%M} UTC"
+        elif pool_switched_off(grant.pool):
+            problem = f"pool {grant.pool!r} is switched off"
+        elif provider_switched_off(provider):
+            problem = f"provider {provider!r} is switched off"
+        if problem:
+            msg = f"{ref}: {problem}; refusing to send"
             raise SpendDenied(msg)
-        if provider_switched_off(provider):
-            msg = f"Provider {provider!r} is switched off; refusing to send"
-            raise SpendDenied(msg)
-        if expires_at is not None and timezone.now() >= expires_at:
-            msg = f"Pool {pool!r}'s spend authority expired {expires_at:%Y-%m-%d %H:%M} UTC; refusing to send"
-            raise SpendDenied(msg)
-        if budget is None:
+        spent, held = spent_and_reserved(grant_id)
+        if spent + held + amount > grant.budget_usd:
             msg = (
-                f"Pool {pool!r} has metered routes but no budget_usd; refusing to send"
-            )
-            raise SpendDenied(msg)
-        spent, held = spent_and_reserved(pool)
-        if spent + held + amount > budget:
-            msg = (
-                f"Pool {pool!r} is at its budget: ${spent:.4f} spent and ${held:.4f} "
-                f"reserved, this request could cost up to ${amount:.4f}, budget "
-                f"${budget}; refusing to send"
+                f"Pool {grant.pool!r} grant is at its budget: ${spent:.4f} spent and "
+                f"${held:.4f} reserved, this request could cost up to ${amount:.4f}, "
+                f"budget ${grant.budget_usd}; refusing to send"
             )
             raise SpendDenied(msg)
         row = InferenceRequest.objects.create(
-            pool=ledger_pool(pool),
+            pool=ledger_key(grant_id),
             provider=provider[:32],
             model=model[:200],
             billing_mode="metered",
@@ -502,9 +504,8 @@ class MeteredGuard:
     pool: str
     provider: str
     model: str
+    grant_id: object = None  # the SpendGrant every send reserves against
     price: ExactPrice | None = None
-    budget_usd: Decimal | None = None
-    expires_at: dt.datetime | None = None
     max_output_tokens: int = 16_000
     bot: str = ""
     user_id: object = None
@@ -567,12 +568,11 @@ class MeteredGuard:
             "rates": self.price.snapshot() if self.price else {},
         }
         pk = await sync_to_async(reserve, thread_sensitive=True)(
-            pool=self.pool,
+            grant_id=self.grant_id,
             provider=self.provider,
             model=self.model,
             amount=amount,
-            budget=self.budget_usd,
-            expires_at=self.expires_at,
+            user_id=self.user_id,
             fields=fields,
         )
         try:
@@ -605,28 +605,27 @@ class MeteredGuard:
 
 def reserve_launch(  # noqa: PLR0913
     *,
+    grant_id,
     pool: str,
     provider: str,
     model: str,
     amount: Decimal | None,
-    budget: Decimal | None,
-    expires_at: dt.datetime | None,
     bot: str = "",
     session_id=None,
     user_id=None,
 ) -> object:
-    """Reserve a metered coding-agent launch's per-launch cap (kept until
-    reconciled: the agent's own usage isn't priced here). Runs the ORM."""
+    """Reserve a metered coding-agent launch's per-launch cap against its
+    grant (kept until reconciled: the agent's own usage isn't priced here).
+    Runs the ORM."""
     if amount is None:
         msg = f"Pool {pool!r} has no per_launch_usd, so a metered coding launch can't be bounded; refusing"
         raise SpendDenied(msg)
     return reserve(
-        pool=pool,
+        grant_id=grant_id,
         provider=provider,
         model=model,
         amount=amount,
-        budget=budget,
-        expires_at=expires_at,
+        user_id=user_id,
         fields={
             "bot_name": bot[:100],
             "selector": f"{provider}/{model}"[:200],

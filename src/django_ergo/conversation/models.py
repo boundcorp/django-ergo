@@ -1346,29 +1346,85 @@ class RoutingSwitch(models.Model):
 
 
 class ModelPoolState(models.Model):
-    """Runtime overrides of one providers.yaml pool (``bots.pools``), edited on
-    Ergonaut's Routing page. A null field keeps the providers.yaml value;
-    ``budget_override`` / ``expires_override`` make a null budget or expiry
-    an explicit "none". ``version`` guards concurrent edits."""
+    """Runtime gates of one providers.yaml pool (``bots.pools``), set by its
+    owner (or an admin) on Ergonaut's Pools page. A null field keeps the
+    providers.yaml value. Spend authority is never here: it is a
+    :class:`SpendGrant`. ``version`` guards concurrent edits."""
 
     name = models.CharField(max_length=64, unique=True)
     enabled = models.BooleanField(null=True, blank=True)
     rollover_out = models.BooleanField(null=True, blank=True)
     allow_auto_entry = models.BooleanField(null=True, blank=True)
-    budget_override = models.BooleanField(default=False)
-    budget_usd = models.DecimalField(
-        max_digits=16, decimal_places=4, null=True, blank=True
-    )
-    expires_override = models.BooleanField(default=False)
-    expires_at = models.DateTimeField(null=True, blank=True)
-    per_launch_usd = models.DecimalField(
-        max_digits=16, decimal_places=4, null=True, blank=True
-    )
     version = models.PositiveIntegerField(default=1)
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
         return self.name
+
+
+class SpendGrant(models.Model):
+    """Spend authority on a pool's metered routes, for one user (``grantee``),
+    issued by the pool's owner (``bots.pools``). Immutable: changing the
+    amount, routes or window issues a new grant (a new identity and a new
+    ledger) and revokes the old one, whose ledger stays. Every metered send
+    reserves against exactly one grant's ``budget_usd`` under a lock keyed by
+    its id, and re-checks its grantee, routes, window and revocation.
+
+    ``source`` is ``config`` for the owner's own grant derived from the pool's
+    providers.yaml ``budget_usd``/``expires`` (``config_key`` fingerprints
+    it), or ``issued`` for one made at runtime."""
+
+    IMMUTABLE_AFTER_CREATE = frozenset({"revoked_at", "revoked_reason"})
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    pool = models.CharField(max_length=64, db_index=True)
+    owner = models.ForeignKey(
+        User, on_delete=models.CASCADE, related_name="issued_spend_grants"
+    )
+    grantee = models.ForeignKey(
+        User, on_delete=models.CASCADE, related_name="spend_grants"
+    )
+    routes = models.JSONField(default=list)  # exact provider/model refs
+    budget_usd = models.DecimalField(max_digits=16, decimal_places=4)
+    per_launch_usd = models.DecimalField(
+        max_digits=16, decimal_places=4, null=True, blank=True
+    )
+    max_output_tokens = models.PositiveIntegerField()
+    valid_from = models.DateTimeField()
+    expires_at = models.DateTimeField()
+    source = models.CharField(max_length=16, default="issued")
+    config_key = models.CharField(max_length=64, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    revoked_reason = models.CharField(max_length=200, blank=True, default="")
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["config_key"],
+                condition=~models.Q(config_key=""),
+                name="spend_grant_config_key_unique",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.pool} grant {self.pk} for user {self.grantee_id}"
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding:
+            fields = kwargs.get("update_fields")
+            if fields is None or set(fields) - self.IMMUTABLE_AFTER_CREATE:
+                msg = "A spend grant is immutable; revoke it and issue a new one"
+                raise ValueError(msg)
+        super().save(*args, **kwargs)
 
 
 class ModelPoolPreference(models.Model):
@@ -1387,6 +1443,10 @@ class ModelPoolPreference(models.Model):
     )
     order = models.JSONField(default=list, blank=True)
     active_pool = models.CharField(max_length=64, blank=True, default="")
+    # Set when ``active_pool`` came from an automatic rollover: the pool it
+    # left. Work stays on the rolled-over pool until the person switches
+    # back or picks "use preferred order" (clearing ``active_pool``).
+    rolled_from = models.CharField(max_length=64, blank=True, default="")
     auto_rollover = models.BooleanField(null=True, blank=True)
     version = models.PositiveIntegerField(default=1)
     updated_at = models.DateTimeField(auto_now=True)
@@ -1446,6 +1506,11 @@ class RouteDecision(models.Model):
     reserved_usd = models.DecimalField(
         max_digits=16, decimal_places=10, null=True, blank=True
     )
+    # The spend grant a metered route was selected under, and the versions of
+    # the user's preference, the pool's gates and the chat override (or the
+    # queued job's captured policy) the decision was made from.
+    grant = models.UUIDField(null=True, blank=True)
+    revision = models.JSONField(default=dict, blank=True)
 
     class Meta:
         ordering = ["-created_at"]

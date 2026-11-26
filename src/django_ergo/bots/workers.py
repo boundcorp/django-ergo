@@ -364,6 +364,7 @@ def resolve(bot: Bot, function: str):
 
 
 PRIVACY_ARG = "_privacy_origin"
+POLICY_ARG = "_pool_policy"
 
 
 def start(  # noqa: PLR0913
@@ -410,6 +411,9 @@ def start(  # noqa: PLR0913
     # The privacy origin of the turn that started it travels with the worker,
     # so its steps (in any process) stay restricted (bots.pools).
     privacy_origin = list(pools.current_origin())
+    # So does the pool and grant it was started under (bots.pools): its steps
+    # never pick up a later, wider pool choice.
+    policy = pools.capture_policy(bot, session)
     with transaction.atomic():
         worker = Worker.objects.create(
             session=session,
@@ -419,6 +423,7 @@ def start(  # noqa: PLR0913
             args={
                 **dict(args),
                 **({PRIVACY_ARG: privacy_origin} if privacy_origin else {}),
+                **({POLICY_ARG: policy} if policy else {}),
             },
             notify=notify,
             recurring_origin=recurring_origin or None,
@@ -566,10 +571,14 @@ def _run(worker_id: str, registry=None) -> str:
         args.pop("_agent_instructions", None)
         args.pop("_agent_mail_closed", None)
         carried = args.pop(PRIVACY_ARG, None) or []
+        policy = args.pop(POLICY_ARG, None)
         from django_ergo.bots import pools
 
-        with pools.origin_scope(
-            [str(n) for n in carried if isinstance(n, str)], replace=True
+        with (
+            pools.origin_scope(
+                [str(n) for n in carried if isinstance(n, str)], replace=True
+            ),
+            pools.policy_scope(policy if isinstance(policy, dict) else None),
         ):
             outcome = (
                 function(ctx, **args)
