@@ -346,9 +346,25 @@ EXACT_API_PRICES: dict[tuple[str, str], dict[str, str]] = {
 
 
 @dataclass(frozen=True)
+class LongContextRates:
+    """Rates that apply to the WHOLE request once its prompt (uncached,
+    cached and cache-write input together) is over ``threshold`` tokens."""
+
+    threshold: int
+    input: Decimal
+    cached: Decimal
+    output: Decimal
+    cache_write: Decimal | None = None
+
+
+@dataclass(frozen=True)
 class ExactPrice:
-    """A private model's price: USD per million uncached input, cached input
-    and output tokens (reasoning is part of output)."""
+    """An exact tariff: USD per million uncached input, cached input and
+    output tokens (reasoning is part of output), plus, when the provider bills
+    them, cache writes (``cache_write``) and a long-context tier
+    (``long_context``). This is the price schema metered pool routes use
+    (providers.yaml ``price:``) and the one any engine adapter prices with
+    (``conversation.spend_guard``)."""
 
     provider: str
     model: str
@@ -356,9 +372,11 @@ class ExactPrice:
     cached: Decimal
     output: Decimal
     source: str = EXACT_PRICES_SOURCE
+    cache_write: Decimal | None = None
+    long_context: LongContextRates | None = None
 
     def snapshot(self) -> dict[str, str]:
-        return {
+        out = {
             "provider": self.provider,
             "model": self.model,
             "input": str(self.input),
@@ -367,6 +385,15 @@ class ExactPrice:
             "unit": "USD per 1M tokens",
             "source": self.source,
         }
+        if self.cache_write is not None:
+            out["cache_write"] = str(self.cache_write)
+        if self.long_context is not None:
+            lc = self.long_context
+            out["long_context"] = (
+                f"over {lc.threshold}: input {lc.input}, cached {lc.cached}, "
+                f"output {lc.output}, cache_write {lc.cache_write}"
+            )
+        return out
 
     def cost(
         self, prompt_tokens: int, cached_tokens: int, output_tokens: int
@@ -379,6 +406,57 @@ class ExactPrice:
             + cached * self.cached
             + max(0, int(output_tokens)) * self.output
         ) / Decimal(1_000_000)
+
+    def rates(
+        self, prompt_tokens: int
+    ) -> tuple[Decimal, Decimal, Decimal | None, Decimal]:
+        """(input, cached, cache_write, output) rates for a request whose
+        whole prompt is ``prompt_tokens``."""
+        lc = self.long_context
+        if lc is not None and prompt_tokens > lc.threshold:
+            return lc.input, lc.cached, lc.cache_write, lc.output
+        return self.input, self.cached, self.cache_write, self.output
+
+    def exact_cost(
+        self, uncached: int, cached: int, cache_write: int, output: int
+    ) -> Decimal | None:
+        """USD for one request's complete usage, or None when it can't be
+        priced exactly (cache writes billed without a ``cache_write`` rate)."""
+        prompt = uncached + cached + cache_write
+        rate_in, rate_cached, rate_write, rate_out = self.rates(prompt)
+        if cache_write and rate_write is None:
+            return None
+        return (
+            uncached * rate_in
+            + cached * rate_cached
+            + cache_write * (rate_write or Decimal(0))
+            + output * rate_out
+        ) / Decimal(1_000_000)
+
+    def worst_case(
+        self, input_tokens: int, output_tokens: int, *, cache_write: bool
+    ) -> Decimal | None:
+        """The most a request can cost with at most ``input_tokens`` of prompt
+        and ``output_tokens`` of output: every prompt token at the dearest
+        input rate that can apply (the long-context tier once the bound passes
+        its threshold, a cache write when the request can write cache). None
+        when a cache write is possible but has no rate."""
+        tiers = [(self.input, self.cache_write, self.output)]
+        lc = self.long_context
+        if lc is not None and input_tokens > lc.threshold:
+            tiers.append((lc.input, lc.cache_write, lc.output))
+        worst_in = Decimal(0)
+        worst_out = Decimal(0)
+        for rate_in, rate_write, rate_out in tiers:
+            if cache_write:
+                if rate_write is None:
+                    return None
+                rate_in = max(rate_in, rate_write)  # noqa: PLW2901
+            worst_in = max(worst_in, rate_in)
+            worst_out = max(worst_out, rate_out)
+        return (input_tokens * worst_in + output_tokens * worst_out) / Decimal(
+            1_000_000
+        )
 
 
 def exact_price(provider: str, model: str) -> ExactPrice | None:

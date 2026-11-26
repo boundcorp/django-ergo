@@ -90,6 +90,7 @@ PRICE_UNKNOWN = "price_unknown"
 PRIVACY_DENIED = "privacy_denied"
 NO_CODING_ROUTE = "no_coding_route"
 UNCONFINABLE = "unconfinable"
+UNGUARDED = "unguarded"  # metered route on an engine that can't enforce spend
 
 SESSION_POOL_KEY = "pool"  # session.metadata: this chat's manual pool
 SESSION_ROUTE_KEY = "pool_route"  # session.metadata: the last decision (display)
@@ -417,6 +418,24 @@ def _engine_registered(provider: Provider) -> bool:
     return (provider.type, provider.transport) in ENGINE_REGISTRY
 
 
+def spend_enforced(provider: Provider) -> bool:
+    """Whether the engine for ``provider`` implements the spend-guard adapter
+    contract (``conversation.spend_guard.SpendAdapter``), so a metered route
+    on it can be bounded and priced per attempt."""
+    from django.utils.module_loading import import_string
+
+    from django_ergo.conversation.engines import ENGINE_REGISTRY
+
+    path = ENGINE_REGISTRY.get((provider.type, provider.transport))
+    if path is None:
+        return False
+    try:
+        engine = import_string(path) if isinstance(path, str) else path
+    except ImportError:
+        return False
+    return getattr(engine, "spend_adapter", None) is not None
+
+
 def unavailable_reason(provider: Provider) -> str:
     if provider.worker_only:
         return "omp CLI isn't installed (worker-only subscription)"
@@ -428,7 +447,7 @@ def unavailable_reason(provider: Provider) -> str:
     return f"{provider.name} isn't available"
 
 
-def route_problem(  # noqa: C901, PLR0911
+def route_problem(  # noqa: C901, PLR0911, PLR0912
     snap: Snapshot,
     privacy: Privacy,
     consumer: str,
@@ -461,9 +480,15 @@ def route_problem(  # noqa: C901, PLR0911
             return NO_ROUTE, "browser tasks run on CLI subscriptions"
     if not provider.available:
         return UNAVAILABLE, unavailable_reason(provider)
-    if provider.metered and not snap.legacy:
+    if provider.metered and not snap.legacy and consumer != CODING:
+        if not spend_enforced(provider):
+            return (
+                UNGUARDED,
+                f"{ref} bills per token but its {provider.type} {provider.transport} "
+                "engine can't enforce a spend bound per request",
+            )
         found = provider.models.get(model)
-        if consumer != CODING and (found is None or found.price is None):
+        if found is None or found.price is None:
             return PRICE_UNKNOWN, f"{ref} has no exact price in providers.yaml"
     return None
 

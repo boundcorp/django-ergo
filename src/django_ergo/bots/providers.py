@@ -112,6 +112,7 @@ from django_ergo.conversation.inference_policy import is_private_host
 from django_ergo.conversation.inference_policy import names_private_model
 from django_ergo.conversation.inference_policy import url_host
 from django_ergo.pricing import ExactPrice
+from django_ergo.pricing import LongContextRates
 from django_ergo.protected_env import is_protected_env
 
 PROVIDERS_FILE = "providers.yaml"
@@ -124,7 +125,7 @@ TRANSPORTS = {
     "google": ("api",),
     "omp": ("cli",),
 }
-PRICE_KEYS = ("input", "cached", "output")
+PRICE_KEYS = ("input", "cached", "output", "cache_write", "long_context")
 PRIVATE_POOLS_KEY = "private_pools"
 POOL_KEYS = frozenset(
     {"enabled", "provider", "allowed_bots", "default", "models", "daily_usd_cap"}
@@ -518,9 +519,39 @@ class Providers:
         return self.find(ref) is not None
 
 
+def _amount(value, where: str) -> Decimal:
+    if isinstance(value, bool) or not isinstance(value, int | float | str | Decimal):
+        msg = f"{where} must be a number of US dollars, 0 or more"
+        raise ProvidersError(msg)
+    try:
+        amount = Decimal(str(value))
+    except InvalidOperation as exc:
+        msg = f"{where} must be a number"
+        raise ProvidersError(msg) from exc
+    if not amount.is_finite() or amount < 0:
+        msg = f"{where} must be a number of US dollars, 0 or more"
+        raise ProvidersError(msg)
+    return amount
+
+
 def _price(provider: Provider, model: str, raw) -> ExactPrice | None:
-    """A model's exact price (USD per million input, cached input and output
-    tokens), or None when providers.yaml gives none."""
+    """A model's exact tariff (``pricing.ExactPrice``), or None when
+    providers.yaml gives none. USD per million tokens::
+
+        price:
+          input: 1.25              # required: uncached input
+          output: 10               # required: output (reasoning included)
+          cached: 0.125            # cached input; default: input
+          cache_write: 1.5625      # optional: cache-write input. Without it a
+                                   # request that can write cache isn't sent
+                                   # and billed cache writes stay unpriced.
+          long_context:            # optional: the whole request's rates once
+            threshold: 200000      # its prompt passes this many tokens
+            input: 2.5
+            cached: 0.25
+            output: 15
+            cache_write: 3.125     # optional, as above
+    """
     if raw is None:
         return None
     where = f"Provider {provider.name!r}: {model} price"
@@ -530,20 +561,49 @@ def _price(provider: Provider, model: str, raw) -> ExactPrice | None:
         or "input" not in raw
         or "output" not in raw
     ):
-        msg = f"{where} needs input and output (and optionally cached), USD per million tokens"
+        msg = (
+            f"{where} needs input and output (optionally cached, cache_write and "
+            "long_context), USD per million tokens"
+        )
         raise ProvidersError(msg)
-    values = {}
-    for key in PRICE_KEYS:
-        value = raw.get(key, raw["input"] if key == "cached" else None)
-        try:
-            amount = Decimal(str(value))
-        except InvalidOperation as exc:
-            msg = f"{where}.{key} must be a number"
-            raise ProvidersError(msg) from exc
-        if isinstance(value, bool) or not amount.is_finite() or amount < 0:
-            msg = f"{where}.{key} must be a number of US dollars, 0 or more"
+    values = {
+        key: _amount(
+            raw.get(key, raw["input"] if key == "cached" else None), f"{where}.{key}"
+        )
+        for key in ("input", "cached", "output")
+    }
+    if raw.get("cache_write") is not None:
+        values["cache_write"] = _amount(raw["cache_write"], f"{where}.cache_write")
+    long_context = raw.get("long_context")
+    if long_context is not None:
+        lc_where = f"{where}.long_context"
+        if (
+            not isinstance(long_context, dict)
+            or set(long_context)
+            - {"threshold", "input", "cached", "output", "cache_write"}
+            or not {"threshold", "input", "output"} <= set(long_context)
+        ):
+            msg = f"{lc_where} needs threshold, input and output (optionally cached and cache_write)"
             raise ProvidersError(msg)
-        values[key] = amount
+        threshold = long_context["threshold"]
+        if (
+            isinstance(threshold, bool)
+            or not isinstance(threshold, int)
+            or threshold <= 0
+        ):
+            msg = f"{lc_where}.threshold must be a positive number of prompt tokens"
+            raise ProvidersError(msg)
+        values["long_context"] = LongContextRates(
+            threshold=threshold,
+            input=_amount(long_context["input"], f"{lc_where}.input"),
+            cached=_amount(
+                long_context.get("cached", long_context["input"]), f"{lc_where}.cached"
+            ),
+            output=_amount(long_context["output"], f"{lc_where}.output"),
+            cache_write=_amount(long_context["cache_write"], f"{lc_where}.cache_write")
+            if long_context.get("cache_write") is not None
+            else None,
+        )
     return ExactPrice(
         provider=provider.name,
         model=model,

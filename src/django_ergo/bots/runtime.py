@@ -1186,14 +1186,26 @@ class Bot:
             raise PolicyError(msg)
 
     def _attach_spend_guard(self, engine, spec, session, decision, purpose) -> None:
-        """Metered public API routes send only with a pool decision's guard."""
-        if self.providers.pools.legacy or spec.transport_type != "api":
-            return
-        if spec.engine_type in PRIVATE_ENGINE_TYPES:
+        """Metered public routes send only with a pool decision's guard, on an
+        engine that enforces it (``spend_adapter``); anything else refuses."""
+        if self.providers.pools.legacy or spec.engine_type in PRIVATE_ENGINE_TYPES:
             return
         provider_name = str(spec.config.get("provider") or "")
         model = str(spec.config.get("model") or "")
         provider = self.providers.providers.get(provider_name)
+        if (
+            provider is not None
+            and provider.metered
+            and (getattr(engine, "spend_adapter", None) is None)
+        ):
+            msg = (
+                f"{provider_name}/{model} bills per token but its "
+                f"{spec.engine_type} {spec.transport_type} engine can't enforce a "
+                "spend bound; refusing to send"
+            )
+            raise PolicyError(msg)
+        if spec.transport_type != "api":
+            return
         if provider is None:
             engine.spend_guard = pools.deny_guard(
                 provider_name,

@@ -100,6 +100,9 @@ class Engine(ABC):
     # A metered pool route's spend authority (conversation.spend_guard), set by
     # bots.pools; API engines reserve each request's worst-case cost with it.
     spend_guard = None
+    # How this engine bounds a request and parses its usage for that guard
+    # (a ``spend_guard.SpendAdapter``). None: it can't carry a metered route.
+    spend_adapter = None
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)

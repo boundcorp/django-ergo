@@ -31,6 +31,7 @@ from django_ergo.conversation.messages import add_message
 from django_ergo.conversation.messages import model_rows
 from django_ergo.conversation.messages import tool_use_block
 from django_ergo.conversation.request_context import prepare_turn_context
+from django_ergo.conversation.spend_guard import OpenAIChatAdapter
 from django_ergo.conversation.telemetry import record_usage
 from django_ergo.conversation.telemetry import trace_engine_call
 from django_ergo.openai_options import DEFAULT_OPENAI_MODEL
@@ -216,6 +217,7 @@ class OpenAIAPIEngine(StoredMessagesMixin, Engine):
 
     engine_type = "openai"
     supports_request_limits = True
+    spend_adapter = OpenAIChatAdapter()
 
     def __init__(self, config: dict):
         self.config = config
@@ -284,9 +286,7 @@ class OpenAIAPIEngine(StoredMessagesMixin, Engine):
         guard = getattr(self, "spend_guard", None)
         if guard is not None:
             return await guard.call(
-                kwargs,
-                "max_completion_tokens",
-                lambda: self._send_completion(kwargs),
+                kwargs, self.spend_adapter, lambda: self._send_completion(kwargs)
             )
         return await self._send_completion(kwargs)
 
@@ -300,10 +300,12 @@ class OpenAIAPIEngine(StoredMessagesMixin, Engine):
             options = enforce_request_limits(limits, kwargs, "max_completion_tokens")
             client = client.with_options(**options)
             return await with_deadline(limits, client.chat.completions.create(**kwargs))
-        if (
+        if getattr(self, "spend_guard", None) is not None or (
             not automatic_request_retries.get()
             and getattr(self, "transport_type", "api") == "api"
         ):
+            # Under a spend guard one call is one HTTP attempt: a retry is a
+            # new guarded call with its own reservation.
             client = client.with_options(max_retries=0)
         return await client.chat.completions.create(**kwargs)
 

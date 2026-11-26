@@ -126,6 +126,9 @@ class FireworksAPIEngine(OpenAIAPIEngine):
 
     engine_type = "fireworks"
     transport_type = "api"
+    # The private pool's own ledger applies (conversation.inference_ledger),
+    # not a public pool's spend guard.
+    spend_adapter = None
 
     def __init__(self, config: dict):
         config = dict(config or {})

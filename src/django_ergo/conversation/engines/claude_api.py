@@ -30,6 +30,7 @@ from django_ergo.conversation.messages import add_message
 from django_ergo.conversation.messages import model_rows
 from django_ergo.conversation.messages import tool_use_block
 from django_ergo.conversation.request_context import prepare_turn_context
+from django_ergo.conversation.spend_guard import AnthropicMessagesAdapter
 from django_ergo.conversation.telemetry import record_usage
 from django_ergo.conversation.telemetry import trace_engine_call
 
@@ -133,6 +134,7 @@ class ClaudeAPIEngine(StoredMessagesMixin, Engine):
     engine_type = "claude"
     transport_type = "api"
     supports_request_limits = True
+    spend_adapter = AnthropicMessagesAdapter()
 
     def __init__(self, config: dict):
         self.context_window = int(
@@ -180,7 +182,7 @@ class ClaudeAPIEngine(StoredMessagesMixin, Engine):
         guard = getattr(self, "spend_guard", None)
         if guard is not None:
             return await guard.call(
-                kwargs, "max_tokens", lambda: self._send_message(**kwargs)
+                kwargs, self.spend_adapter, lambda: self._send_message(**kwargs)
             )
         return await self._send_message(**kwargs)
 
@@ -194,7 +196,11 @@ class ClaudeAPIEngine(StoredMessagesMixin, Engine):
             options = enforce_request_limits(limits, kwargs, "max_tokens")
             client = client.with_options(**options)
             return await with_deadline(limits, client.messages.create(**kwargs))
-        if not automatic_request_retries.get() and self.transport_type == "api":
+        if getattr(self, "spend_guard", None) is not None or (
+            not automatic_request_retries.get() and self.transport_type == "api"
+        ):
+            # Under a spend guard one call is one HTTP attempt: a retry is a
+            # new guarded call with its own reservation.
             client = client.with_options(max_retries=0)
         return await client.messages.create(**kwargs)
 

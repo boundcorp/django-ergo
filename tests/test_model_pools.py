@@ -197,10 +197,26 @@ def test_google_provider_type_routes_once_an_engine_is_registered(monkeypatch):
     assert problem[0] == pools.UNAVAILABLE  # no ("google", "api") engine here yet
     from django_ergo.conversation import engines
 
-    monkeypatch.setitem(engines.ENGINE_REGISTRY, ("google", "api"), "x.Engine")
+    # Registered without the spend adapter contract: still refused (metered).
+    monkeypatch.setitem(
+        engines.ENGINE_REGISTRY, ("google", "api"), "tests.test_model_pools.NoAdapter"
+    )
+    problem = pools.route_problem(snap, privacy, pools.CHAT, "gemini", "gemini-3-pro")
+    assert problem[0] == pools.UNGUARDED
+    monkeypatch.setitem(
+        engines.ENGINE_REGISTRY, ("google", "api"), "tests.test_model_pools.WithAdapter"
+    )
     assert (
         pools.route_problem(snap, privacy, pools.CHAT, "gemini", "gemini-3-pro") is None
     )
+
+
+class NoAdapter:
+    spend_adapter = None
+
+
+class WithAdapter:
+    spend_adapter = spend_guard.OpenAIChatAdapter()
 
 
 # -- legacy behavior is unchanged ------------------------------------------------------
