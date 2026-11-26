@@ -325,11 +325,40 @@ def guarded(lee, grant, price=PRICE, model=MODEL, **config):
         user_id=lee.pk,
         price=price,
         max_output_tokens=1000,
+        current=lambda grant: spend_guard.Terms.of(grant),
     )
     return engine
 
 
 MESSAGES = [{"role": "user", "content": "hi"}]
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_revocation_stops_an_already_built_google_engine(wire, lee):
+    from asgiref.sync import sync_to_async
+
+    grant = await _agrant(lee)
+    engine = guarded(lee, grant)
+    engine.spend_guard.current = pools.SendAuthority(parse_providers(POOLS))
+    w = wire(reply())
+    await engine.complete(MESSAGES)
+    await sync_to_async(pools.revoke_grant)(
+        parse_providers(POOLS), grant.pk, by_id=lee.pk
+    )
+    with pytest.raises(spend_guard.SpendDenied, match="revoked"):
+        await engine.complete(MESSAGES)
+    assert len(w.requests) == 1
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_long_context_uses_current_price_for_an_already_built_engine(wire, lee):
+    grant = await _agrant(lee)
+    engine = guarded(lee, grant)  # built with PRICE, which has long-context rates
+    engine.spend_guard.current = pools.SendAuthority(parse_providers(POOLS))
+    w = wire(reply())  # current config has no long-context rates
+    with pytest.raises(spend_guard.SpendDenied, match="long_context"):
+        await engine.complete([{"role": "user", "content": "x" * 210_000}])
+    assert not w.requests
 
 
 @pytest.mark.django_db(transaction=True)

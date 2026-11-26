@@ -76,6 +76,10 @@ class GoogleAdapter:
         # prices the reservation itself.
         self.price = price
 
+    def with_price(self, price):
+        """Bind the adapter to the exact tariff refreshed for this send."""
+        return type(self)(price)
+
     def _check_parts(self, parts, where: str) -> None:
         for part in parts if isinstance(parts, list) else ():
             if not isinstance(part, dict):

@@ -811,7 +811,7 @@ class MeteredGuard:
             msg = "Engine transport/account differs from the selected authority; rebuild the engine"
             raise SpendDenied(msg)
 
-    async def call(  # noqa: C901
+    async def call(  # noqa: C901, PLR0915
         self,
         kwargs: dict,
         adapter: SpendAdapter | str,
@@ -859,6 +859,9 @@ class MeteredGuard:
                     "providers.yaml; refusing to send"
                 )
                 raise SpendDenied(msg)
+        bind_price = getattr(adapter, "with_price", None)
+        if callable(bind_price):
+            adapter = bind_price(price)
         try:
             bound = adapter.bound(kwargs, ceiling)
         except UnsupportedRequest as exc:
