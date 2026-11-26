@@ -1090,7 +1090,7 @@ def test_r13_one_migration_leaf_after_the_launch_journal():
     loader = MigrationLoader(None, ignore_no_migrations=True)
     assert loader.detect_conflicts() == {}
     leaves = [n for n in loader.graph.leaf_nodes() if n[0] == "django_ergo"]
-    assert leaves == [("django_ergo", "0060_spend_envelopes")]
+    assert len(leaves) == 1  # later migrations chain after these, linearly
     envelopes = loader.disk_migrations[("django_ergo", "0060_spend_envelopes")]
     assert ("django_ergo", "0059_model_pools") in envelopes.dependencies
     migration = loader.disk_migrations[("django_ergo", "0059_model_pools")]
