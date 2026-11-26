@@ -1372,9 +1372,16 @@ class SpendEnvelope(models.Model):
     ``key`` is ``config:<pool>:<owner id>`` for the owner's own authority
     derived from providers.yaml: editing, removing and restoring the config
     revise and revoke revisions of the same envelope, so its money is never
-    replenished by a config change. A runtime-issued grant is its own
-    envelope (``issued:<grant id>``): a new funded grant needs that explicit,
-    authenticated issue."""
+    replenished by a config change. Its identity survives a rename: a new
+    pool whose metered accounts (``accounts``) overlap an envelope's
+    continues that envelope (re-keyed to the new name) or waits for an
+    admin's explicit link (``linked_by``); config sync never funds one.
+
+    A runtime-issued grant is its own envelope (``issued:<grant id>``) whose
+    ``parent`` is the owner's config envelope it was issued from: every send
+    on it is intersected with the parent's current authority, and the
+    cumulative spend of the parent and all its children stays within the
+    parent's current budget."""
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     key = models.CharField(max_length=160, unique=True)
@@ -1383,6 +1390,26 @@ class SpendEnvelope(models.Model):
     owner = models.ForeignKey(User, on_delete=models.CASCADE, related_name="+")
     grantee = models.ForeignKey(User, on_delete=models.CASCADE, related_name="+")
     created_at = models.DateTimeField(auto_now_add=True)
+    # Issued: the owner's config envelope this authority is drawn from (set
+    # once, at creation). Null on a config envelope, or on an issued one
+    # whose owner had no config authority (it then authorizes nothing).
+    parent = models.ForeignKey(
+        "self",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="children",
+    )
+    # Config: every metered account it has ever funded (provider names, key
+    # env names, account names; only grows), to recognize a renamed pool.
+    accounts = models.JSONField(default=list, blank=True)
+    # An admin's explicit continuation or funding of this envelope for a
+    # config pool that overlapped another envelope (``bots.pools``).
+    linked_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True, related_name="+"
+    )
+    linked_at = models.DateTimeField(null=True, blank=True)
+    link_note = models.CharField(max_length=200, blank=True, default="")
 
     def __str__(self):
         return self.key
@@ -1460,7 +1487,8 @@ class SpendGrant(models.Model):
             if self.source == "config":
                 msg = "A config grant is a revision of its pool owner's envelope"
                 raise ValueError(msg)
-            # A grant issued on its own is a new authorization: its own envelope.
+            # A grant issued on its own is a new authorization: its own
+            # envelope, drawn from the owner's config envelope on the pool.
             with transaction.atomic():
                 self.envelope = SpendEnvelope.objects.create(
                     key=f"issued:{self.pk}",
@@ -1468,6 +1496,9 @@ class SpendGrant(models.Model):
                     source=self.source,
                     owner_id=self.owner_id,
                     grantee_id=self.grantee_id,
+                    parent=SpendEnvelope.objects.filter(
+                        key=f"config:{self.pool}:{self.owner_id}", source="config"
+                    ).first(),
                 )
                 super().save(*args, **kwargs)
             return

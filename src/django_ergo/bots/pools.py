@@ -366,17 +366,67 @@ def current_policy() -> dict | None:
 # editing the config adds a revision (the previous one is superseded),
 # removing the budget or the pool, or moving the pool to another owner,
 # revokes every revision, and restoring it adds a revision to the SAME
-# envelope, so no config change ever replenishes money. Only issue_grant (an
-# authenticated, explicit act) funds a new envelope.
+# envelope, so no config change ever replenishes money.
+#
+# The envelope's identity is not its pool's name. A pool that has no
+# envelope yet, but whose metered accounts (provider, key env, account
+# names) overlap an existing config envelope's, continues that envelope
+# (re-keyed to the new name) when that is unambiguous: one overlapping
+# envelope, the same owner, and no current pool still using it. Anything
+# else waits for an admin's explicit :func:`link_config_envelope`. Config
+# sync funds a new envelope only for accounts no envelope has ever funded.
+#
+# A grant issued at runtime is its own envelope, drawn from the owner's
+# config envelope (``parent``): every send on it is intersected with the
+# owner's current authority (budget, expiry, routes, ceiling, per-launch,
+# ownership, switches), and the owner's current budget caps the cumulative
+# spend of the owner and every grant they issued on the pool.
 
 CONFIG_SOURCE = "config"
 # revoked_reason prefix of revocations made by following providers.yaml (any
 # other revocation was a person's, and config sync never undoes it).
 SYNC_REVOKED = "config sync: "
+# Format of the config_key fingerprint (see _config_terms); older keys are
+# treated as having the same money terms as any new one (conservative).
+CONFIG_KEY_VERSION = "2"
+# One advisory lock for creating, continuing and linking config envelopes.
+CONFIG_ENVELOPES_LOCK = "config-envelopes"
+
+
+class ConfigUnavailable(ValueError):  # noqa: N818
+    """providers.yaml can't be read or validated now: metered authority
+    fails closed (subscription routes don't depend on it)."""
+
+
+def fresh_providers(providers: Providers) -> Providers:
+    """``providers`` as providers.yaml is now (``providers.current_providers``),
+    or ConfigUnavailable. Every spend decision goes through this, so a
+    process holding an older load acts on the current file."""
+    from django_ergo.bots.providers import ProvidersUnreadable
+    from django_ergo.bots.providers import current_providers
+
+    try:
+        return current_providers(providers)
+    except ProvidersUnreadable as exc:
+        raise ConfigUnavailable(str(exc)) from exc
 
 
 def config_envelope_key(pool: str, owner_id) -> str:
     return f"config:{pool}:{owner_id}"
+
+
+def pool_accounts(providers: Providers, pool: Pool) -> list[str]:
+    """The metered accounts a pool's routes spend on: provider names, their
+    key env names and account names (any one shared means the same money)."""
+    out = set()
+    for ref in pool_refs(providers, pool, metered=True):
+        provider = providers.providers[ref.partition("/")[0]]
+        out.add(f"provider:{provider.name}")
+        if provider.api_key_env:
+            out.add(f"env:{provider.api_key_env}")
+        if provider.account:
+            out.add(f"account:{provider.account}")
+    return sorted(out)
 
 
 def _config_terms(pool: Pool, providers: Providers, owner_id) -> dict | None:
@@ -394,18 +444,22 @@ def _config_terms(pool: Pool, providers: Providers, owner_id) -> dict | None:
     ):
         return None
     routes = pool_refs(providers, pool, metered=True)
+    # The money terms leave out the pool's name: the envelope is the
+    # identity, so a rename continuing it keeps a person's revocation (see
+    # _same_money). The whole terms include it: a rename is a new revision
+    # carrying the new name.
     money = [
-        pool.name,
-        owner_id,
         str(pool.budget_usd),
         str(pool.per_launch_usd),
         pool.expires_at.isoformat(),
     ]
-    whole = json.dumps([*money, routes, pool.max_output_tokens])
-    # "<money terms>:<all terms>": a person's revocation sticks until the money
-    # terms (budget, per-launch, expiry) change, not on a route or ceiling edit.
+    whole = json.dumps([*money, pool.name, routes, pool.max_output_tokens])
+    # "2:<money terms>:<all terms>": a person's revocation sticks until the
+    # money terms (budget, per-launch, expiry) change, not on a route,
+    # ceiling or name edit.
     key = (
-        hashlib.sha256(json.dumps(money).encode()).hexdigest()[:31]
+        f"{CONFIG_KEY_VERSION}:"
+        + hashlib.sha256(json.dumps(money).encode()).hexdigest()[:29]
         + ":"
         + hashlib.sha256(whole.encode()).hexdigest()[:32]
     )
@@ -441,10 +495,10 @@ def _revoke_envelope(envelope_id, reason: str, now) -> None:
 
 def _same_money(stored_key: str, key: str) -> bool:
     """Whether a stored config revision had the same money terms as ``key``
-    (a key from before the split format counts as the same: conservative)."""
-    if ":" not in stored_key:
+    (a key from an earlier format counts as the same: conservative)."""
+    if not stored_key.startswith(f"{CONFIG_KEY_VERSION}:"):
         return True
-    return stored_key.partition(":")[0] == key.partition(":")[0]
+    return stored_key.split(":")[1] == key.split(":")[1]
 
 
 def _envelope_problem(envelope, providers: Providers, owners: dict) -> str:
@@ -487,6 +541,13 @@ def _settle(envelope, providers: Providers, owners: dict, now):
         return current, "" if current is not None else "the spend grant was revoked"
     pool = providers.pools.get(envelope.pool)
     terms = _config_terms(pool, providers, envelope.owner_id)
+    accounts = sorted(
+        set(envelope.accounts or ()) | set(pool_accounts(providers, pool))
+    )
+    if accounts != list(envelope.accounts or ()):
+        # Only grows: a later pool on any account it funded is recognized.
+        envelope.accounts = accounts
+        envelope.save(update_fields=["accounts"])
     if current is not None and current.config_key == terms["config_key"]:
         return current, ""
     if current is None:
@@ -519,12 +580,124 @@ def _settle(envelope, providers: Providers, owners: dict, now):
     return revision, ""
 
 
+def _overlapping(accounts) -> list:
+    """Config envelopes (any state) that funded any of ``accounts``."""
+    from django_ergo.conversation.models import SpendEnvelope
+
+    wanted = set(accounts)
+    return [
+        e
+        for e in SpendEnvelope.objects.filter(source=CONFIG_SOURCE).order_by(
+            "created_at", "pk"
+        )
+        if wanted & set(e.accounts or ())
+    ]
+
+
+def _claimed_keys(providers: Providers, owners: dict) -> set[str]:
+    """The config envelope keys the current pools stand for."""
+    return {
+        config_envelope_key(p.name, owners.get(p.owner))
+        for p in providers.pools.pools
+        if p.owner and owners.get(p.owner) is not None
+    }
+
+
+def config_link_problem(pool: Pool, providers: Providers, owners: dict) -> str:
+    """Why the owner's config authority on ``pool`` waits for an admin's
+    link (its metered accounts already have spend authority elsewhere), or
+    "" (it has an envelope, may be funded, or continues one). Runs the ORM."""
+    from django_ergo.conversation.models import SpendEnvelope
+
+    owner_id = owners.get(pool.owner) if pool.owner else None
+    if _config_terms(pool, providers, owner_id) is None:
+        return ""
+    key = config_envelope_key(pool.name, owner_id)
+    if SpendEnvelope.objects.filter(key=key).exists():
+        return ""
+    _, problem = _continuable(pool, providers, owners)
+    return problem
+
+
+def _continuable(pool: Pool, providers: Providers, owners: dict):
+    """(the envelope a new config pool continues, "") or (None, why it must
+    be linked) or (None, "") when no envelope ever funded its accounts."""
+    owner_id = owners.get(pool.owner) if pool.owner else None
+    overlap = _overlapping(pool_accounts(providers, pool))
+    if not overlap:
+        return None, ""
+    claimed = _claimed_keys(providers, owners) - {
+        config_envelope_key(pool.name, owner_id)
+    }
+    free = [e for e in overlap if e.key not in claimed]
+    if len(overlap) == 1 and free and free[0].owner_id == owner_id:
+        return free[0], ""
+    names = ", ".join(sorted({repr(e.pool) for e in overlap}))
+    return None, (
+        f"pool {pool.name!r} spends on accounts that already have spend "
+        f"authority (pool {names}); an admin must link it to that authority or "
+        "fund it separately before it can spend"
+    )
+
+
+def _config_envelope(pool: Pool, providers: Providers, owners: dict, now):
+    """The owner's config envelope for ``pool``: its own, a continued one
+    (renamed or re-added pool), a new one for accounts never funded, or
+    None when it waits for an admin's link. Runs the ORM."""
+    from django.db import transaction
+
+    from django_ergo.conversation.models import SpendEnvelope
+    from django_ergo.conversation.spend_guard import envelope_lock_key
+    from django_ergo.conversation.spend_guard import lock
+
+    owner_id = owners.get(pool.owner) if pool.owner else None
+    key = config_envelope_key(pool.name, owner_id)
+    found = SpendEnvelope.objects.filter(key=key).first()
+    if found is not None:
+        return found
+    with transaction.atomic():
+        lock(CONFIG_ENVELOPES_LOCK)
+        found = SpendEnvelope.objects.filter(key=key).first()
+        if found is not None:
+            return found
+        continued, problem = _continuable(pool, providers, owners)
+        if problem:
+            return None
+        if continued is not None:
+            # Under its own lock too: a send on it never sees half a rename.
+            lock(envelope_lock_key(continued.pk))
+            continued = SpendEnvelope.objects.get(pk=continued.pk)
+            logger.info(
+                "Pool %r continues the spend envelope of pool %r",
+                pool.name,
+                continued.pool,
+            )
+            continued.key = key
+            continued.link_note = (
+                f"continued from pool {continued.pool!r} by config sync"
+            )[:200]
+            continued.pool = pool.name
+            continued.save(update_fields=["key", "pool", "link_note"])
+            return continued
+        return SpendEnvelope.objects.create(
+            key=key,
+            pool=pool.name,
+            source=CONFIG_SOURCE,
+            owner_id=owner_id,
+            grantee_id=owner_id,
+            accounts=pool_accounts(providers, pool),
+        )
+
+
 def sync_authority(providers: Providers, owners: dict | None = None) -> None:
-    """Make stored spend authority match current providers.yaml: revoke
-    revisions whose pool is gone, has another owner, or (config) no longer
-    sets a budget; add the owner's config revision when it changed. Each
-    envelope is settled in its own transaction under its own lock (one at a
-    time). Cheap when nothing changed. Runs the ORM."""
+    """Make stored spend authority match current providers.yaml (re-read
+    from its file when ``providers`` is an older load): revoke revisions
+    whose pool is gone, has another owner, or (config) no longer sets a
+    budget; add the owner's config revision when it changed, continuing a
+    renamed pool's envelope. Each envelope is settled in its own transaction
+    under its own lock (one at a time). Cheap when nothing changed. Writes
+    nothing when providers.yaml can't be read (sends then fail closed).
+    Runs the ORM."""
     from django.db import transaction
 
     from django_ergo.conversation.models import SpendEnvelope
@@ -532,18 +705,21 @@ def sync_authority(providers: Providers, owners: dict | None = None) -> None:
     from django_ergo.conversation.spend_guard import envelope_lock_key
     from django_ergo.conversation.spend_guard import lock
 
+    try:
+        fresh = fresh_providers(providers)
+    except ConfigUnavailable:
+        logger.warning("Not syncing spend authority: providers.yaml doesn't load")
+        return
+    if fresh is not providers:
+        providers, owners = fresh, None
     if providers.pools.legacy:
         return
     owners = owner_ids(providers) if owners is None else owners
     live = list(
         SpendGrant.objects.filter(revoked_at__isnull=True).select_related("envelope")
     )
-    unsettled = {
-        g.envelope_id: g.envelope
-        for g in live
-        if g.envelope.source == CONFIG_SOURCE
-        and _envelope_problem(g.envelope, providers, owners)
-    }
+    now = timezone.now()
+    unsettled = set()
     for pool in providers.pools.pools:
         owner_id = owners.get(pool.owner) if pool.owner else None
         terms = _config_terms(pool, providers, owner_id)
@@ -557,21 +733,108 @@ def sync_authority(providers: Providers, owners: dict | None = None) -> None:
             for g in live
         ):
             continue
-        envelope, _ = SpendEnvelope.objects.get_or_create(
-            key=key,
-            defaults={
-                "pool": pool.name,
-                "source": CONFIG_SOURCE,
-                "owner_id": owner_id,
-                "grantee_id": owner_id,
-            },
-        )
-        unsettled[envelope.pk] = envelope
-    now = timezone.now()
+        envelope = _config_envelope(pool, providers, owners, now)
+        if envelope is not None:
+            unsettled.add(envelope.pk)
+    unsettled |= {
+        g.envelope_id
+        for g in live
+        if g.envelope.source == CONFIG_SOURCE
+        and _envelope_problem(g.envelope, providers, owners)
+    }
     for envelope_id in sorted(unsettled, key=str):
         with transaction.atomic():
             lock(envelope_lock_key(envelope_id))
-            _settle(unsettled[envelope_id], providers, owners, now)
+            # Re-read under the lock: a continuation may have re-keyed it.
+            envelope = SpendEnvelope.objects.get(pk=envelope_id)
+            _settle(envelope, providers, owners, now)
+
+
+def link_config_envelope(  # noqa: PLR0913, C901
+    providers: Providers,
+    pool: str,
+    *,
+    by_id,
+    admin: bool,
+    envelope_id=None,
+    fund: bool = False,
+    note: str = "",
+):
+    """An admin's explicit decision for a config pool whose metered accounts
+    already have spend authority (:func:`config_link_problem`): continue
+    ``envelope_id`` (its cumulative ledger and any revocation carry over), or
+    ``fund`` a new envelope (new money, so only by an admin). Returns the
+    envelope. Runs the ORM."""
+    from django.db import transaction
+
+    from django_ergo.conversation.models import SpendEnvelope
+    from django_ergo.conversation.spend_guard import envelope_lock_key
+    from django_ergo.conversation.spend_guard import lock
+
+    if not admin or not by_id:
+        msg = "Only an admin can link a pool's spend authority"
+        raise PermissionError(msg)
+    if bool(envelope_id) == bool(fund):
+        msg = "Give either the envelope to continue or fund=true"
+        raise ValueError(msg)
+    providers = fresh_providers(providers)
+    config = providers.pools.get(pool)
+    if config is None or config.legacy:
+        msg = f"No configured pool named {pool!r}"
+        raise ValueError(msg)
+    owners = owner_ids(providers)
+    owner_id = owners.get(config.owner) if config.owner else None
+    if _config_terms(config, providers, owner_id) is None:
+        msg = f"Pool {pool!r} sets no owner budget and expiry in providers.yaml"
+        raise ValueError(msg)
+    key = config_envelope_key(pool, owner_id)
+    now = timezone.now()
+    with transaction.atomic():
+        lock(CONFIG_ENVELOPES_LOCK)
+        if SpendEnvelope.objects.filter(key=key).exists():
+            msg = f"Pool {pool!r} already has its spend authority"
+            raise ValueError(msg)
+        if fund:
+            envelope = SpendEnvelope.objects.create(
+                key=key,
+                pool=pool,
+                source=CONFIG_SOURCE,
+                owner_id=owner_id,
+                grantee_id=owner_id,
+                accounts=pool_accounts(providers, config),
+                linked_by_id=by_id,
+                linked_at=now,
+                link_note=(note or "funded separately by an admin")[:200],
+            )
+        else:
+            if SpendEnvelope.objects.filter(pk=envelope_id).exists():
+                lock(envelope_lock_key(envelope_id))
+            envelope = (
+                SpendEnvelope.objects.select_for_update()
+                .filter(pk=envelope_id, source=CONFIG_SOURCE)
+                .first()
+            )
+            if envelope is None:
+                msg = "No such config envelope"
+                raise ValueError(msg)
+            if envelope.owner_id != owner_id:
+                msg = "That envelope belongs to another owner"
+                raise ValueError(msg)
+            if envelope.key in _claimed_keys(providers, owners):
+                msg = f"Pool {envelope.pool!r} still uses that envelope"
+                raise ValueError(msg)
+            envelope.key = key
+            envelope.link_note = (
+                note or f"continued from pool {envelope.pool!r} by an admin"
+            )[:200]
+            envelope.pool = pool
+            envelope.linked_by_id = by_id
+            envelope.linked_at = now
+            envelope.save(
+                update_fields=["key", "pool", "link_note", "linked_by", "linked_at"]
+            )
+    sync_authority(providers, owners)
+    return envelope
 
 
 def live_providers(source) -> Providers:
@@ -589,9 +852,12 @@ def live_providers(source) -> Providers:
 class SendAuthority:
     """``spend_guard.CurrentAuthority`` for a guard or launch built from a
     bot (or a ``Providers``): at each send, under the envelope's lock, it
-    re-reads providers.yaml as it is now, settles the envelope (revoking it
-    if the config no longer backs it) and returns the current revision's
-    terms, narrowed to the routes and output ceiling the pool has now."""
+    re-reads providers.yaml as it is now (the file itself, when this
+    process's copy is older; refusing when it doesn't load), settles the
+    envelope (revoking it if the config no longer backs it) and returns the
+    current revision's terms, narrowed to the routes and output ceiling the
+    pool has now. A grant issued by the pool's owner is also narrowed to
+    the owner's current authority, whose budget caps the family's spend."""
 
     def __init__(self, source):
         self.source = source
@@ -603,21 +869,50 @@ class SendAuthority:
 
         webhooks.refresh_registry()
 
-    def __call__(self, grant):
+    def __call__(self, grant):  # noqa: PLR0911
         from django_ergo.conversation.spend_guard import Terms
 
-        providers = live_providers(self.source)
+        try:
+            providers = fresh_providers(live_providers(self.source))
+        except ConfigUnavailable as exc:
+            return f"{exc}; metered sends are refused until it loads"
         if providers.pools.legacy:
             return "providers.yaml no longer configures pools"
-        current, problem = _settle(
-            grant.envelope, providers, owner_ids(providers), timezone.now()
-        )
+        owners = owner_ids(providers)
+        now = timezone.now()
+        envelope = grant.envelope
+        current, problem = _settle(envelope, providers, owners, now)
         if current is None:
             return problem
-        pool = providers.pools.get(grant.pool)
+        # The envelope's pool now (a renamed pool's envelope follows it).
+        name = envelope.pool
+        pool = providers.pools.get(name)
+        if pool is None:
+            return f"pool {name!r} was removed from providers.yaml"
         if not pool_enabled_now(pool):
-            return f"pool {grant.pool!r} is switched off"
+            return f"pool {name!r} is switched off"
         terms = Terms.of(current)
+        if envelope.source == CONFIG_SOURCE:
+            root = envelope
+        else:
+            root = envelope.parent
+            if (
+                root is None
+                or root.source != CONFIG_SOURCE
+                or root.owner_id != envelope.owner_id
+                or root.pool != name
+            ):
+                return (
+                    f"the owner of {name!r} has no spend authority of "
+                    "their own there to share"
+                )
+            owners_current, problem = _settle(root, providers, owners, now)
+            if owners_current is None:
+                return f"the owner's spend authority on {name!r}: {problem}"
+            terms = terms.narrowed(Terms.of(owners_current))
+            root_budget = owners_current.budget_usd
+        if envelope.source == CONFIG_SOURCE:
+            root_budget = current.budget_usd
         on = {
             ref
             for ref in pool_refs(providers, pool, metered=True)
@@ -627,6 +922,8 @@ class SendAuthority:
             terms,
             routes=terms.routes & on,
             max_output_tokens=min(terms.max_output_tokens, pool.max_output_tokens),
+            cap_envelope=root.pk,
+            cap_usd=root_budget,
         )
 
 
@@ -688,6 +985,12 @@ class PoolView:
     spent_usd: Decimal = Decimal(0)
     reserved_usd: Decimal = Decimal(0)
     version: int = 0
+    # Why the owner's authority behind this user's grant (or the owner's
+    # own config authority) can't be used, as (code, reason), or None.
+    owner_problem: tuple[str, str] | None = None
+    # The owner's budget and the owner's plus every grantee's spend under it.
+    cap_usd: Decimal | None = None
+    family_used_usd: Decimal = Decimal(0)
 
     @property
     def name(self) -> str:
@@ -725,6 +1028,8 @@ class PoolView:
         if self.pool.legacy or not self.pool.metered:
             return None
         grant = self.grant
+        if grant is None and self.owner_problem is not None:
+            return self.owner_problem
         if grant is None:
             return (
                 BUDGET_REQUIRED,
@@ -751,6 +1056,14 @@ class PoolView:
                 BUDGET_EXHAUSTED,
                 f"Your ${grant.budget_usd} grant for {self.title!r} is used "
                 f"(${self.spent_usd:.2f} spent, ${self.reserved_usd:.2f} reserved)",
+            )
+        if self.owner_problem is not None:
+            return self.owner_problem
+        if self.cap_usd is not None and self.family_used_usd >= self.cap_usd:
+            return (
+                BUDGET_EXHAUSTED,
+                f"The owner's ${self.cap_usd} budget for {self.title!r} is used "
+                f"(${self.family_used_usd:.2f} by the owner and their grants)",
             )
         return None
 
@@ -864,8 +1177,42 @@ def _views(providers: Providers, user_id=None) -> list[PoolView]:
                     setattr(view, name, getattr(state, name))
         if grant is not None:
             view.spent_usd, view.reserved_usd = spent_and_reserved(grant.pk)
+            _owner_authority(view, grant)
+        elif view.is_owner and pool.metered:
+            if problem := config_link_problem(pool, providers, owners):
+                view.owner_problem = (BUDGET_REQUIRED, problem)
         views.append(view)
     return views
+
+
+def _owner_authority(view: PoolView, grant) -> None:
+    """Fill ``view`` with the owner's authority behind ``grant``: its
+    budget, the family's use of it, or why it can't be used. Runs the ORM."""
+    from django_ergo.conversation.spend_guard import family_spent_and_reserved
+
+    envelope = grant.envelope
+    if envelope.source == CONFIG_SOURCE:
+        root, owners = envelope, grant
+    else:
+        root = envelope.parent
+        owners = _current_revision(root.pk) if root is not None else None
+        if owners is None or root.owner_id != envelope.owner_id:
+            view.owner_problem = (
+                BUDGET_REQUIRED,
+                f"The owner of {view.title!r} has no spend authority of their "
+                "own there now, so your grant can't be used",
+            )
+            return
+        if timezone.now() >= owners.expires_at:
+            view.owner_problem = (
+                BUDGET_EXPIRED,
+                f"The owner's spend authority on {view.title!r} expired "
+                f"{owners.expires_at:%Y-%m-%d %H:%M} UTC",
+            )
+            return
+    spent, held = family_spent_and_reserved(root.pk)
+    view.cap_usd = owners.budget_usd
+    view.family_used_usd = spent + held
 
 
 def preference(user_id):
@@ -2663,7 +3010,7 @@ def usd(value, what: str, *, required: bool = True) -> Decimal | None:
     return amount
 
 
-def issue_grant(  # noqa: PLR0913, C901, PLR0915
+def issue_grant(  # noqa: PLR0912, PLR0913, C901, PLR0915
     providers: Providers,
     pool: str,
     *,
@@ -2680,12 +3027,21 @@ def issue_grant(  # noqa: PLR0913, C901, PLR0915
     """Issue a spend grant on ``pool`` (its owner or an admin): ``grantee``
     may spend up to ``budget_usd`` on ``routes`` (default: all the pool's
     metered routes) between ``valid_from`` (default now) and ``expires_at``.
-    It replaces (revokes) the grantee's previous grant on the pool; the old
-    ledger stays. Runs the ORM."""
+    It is drawn from the owner's own config authority on the pool (which
+    must exist): every send is also held to the owner's current terms, and
+    the owner's budget caps the owner's and all their grantees' spend
+    together. It replaces (revokes) the grantee's previous grant on the
+    pool; the old ledger stays. Runs the ORM."""
     from django.db import transaction
 
+    from django_ergo.conversation.models import SpendEnvelope
     from django_ergo.conversation.models import SpendGrant
 
+    try:
+        providers = fresh_providers(providers)
+    except ConfigUnavailable as exc:
+        msg = f"Can't issue a grant now: {exc}"
+        raise ValueError(msg) from exc
     config = providers.pools.get(pool)
     if config is None or config.legacy:
         msg = f"No configured pool named {pool!r}"
@@ -2737,14 +3093,28 @@ def issue_grant(  # noqa: PLR0913, C901, PLR0915
     if bad:
         msg = "expires_at must be in the future and after valid_from"
         raise ValueError(msg)
+    sync_authority(providers)
+    parent = SpendEnvelope.objects.filter(
+        key=config_envelope_key(pool, owner_id), source=CONFIG_SOURCE
+    ).first()
+    if parent is None or _current_revision(parent.pk) is None:
+        msg = (
+            f"{config.owner} has no spend authority of their own on {pool!r} "
+            "(budget_usd and expires in providers.yaml) to share"
+        )
+        raise ValueError(msg)
     with transaction.atomic():
-        for old in SpendGrant.objects.select_for_update().filter(
-            pool=pool, grantee_id=grantee_id, revoked_at__isnull=True
+        # Replaces the grantee's earlier issued grant, never the owner's own
+        # config authority (every issued grant is drawn from it).
+        for old in (
+            SpendGrant.objects.select_for_update()
+            .filter(pool=pool, grantee_id=grantee_id, revoked_at__isnull=True)
+            .exclude(source=CONFIG_SOURCE)
         ):
             old.revoked_at = now
             old.revoked_reason = "replaced by a new grant"
             old.save(update_fields=["revoked_at", "revoked_reason"])
-        return SpendGrant.objects.create(
+        issued = SpendGrant(
             pool=pool,
             owner_id=owner_id,
             grantee_id=grantee_id,
@@ -2757,6 +3127,16 @@ def issue_grant(  # noqa: PLR0913, C901, PLR0915
             source="issued",
             created_by_id=issuer_id,
         )
+        issued.envelope = SpendEnvelope.objects.create(
+            key=f"issued:{issued.pk}",
+            pool=pool,
+            source="issued",
+            owner_id=owner_id,
+            grantee_id=grantee_id,
+            parent=parent,
+        )
+        issued.save(force_insert=True)
+        return issued
 
 
 def revoke_grant(

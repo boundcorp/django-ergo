@@ -80,6 +80,7 @@ model can carry its exact price, which pool budgets need before they send::
 
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 from dataclasses import dataclass
@@ -227,6 +228,9 @@ class Providers:
     hidden_usage_windows: dict[str, list[str]] = field(default_factory=dict)
     # Ordered pools, the rollover gate and privacy policies (bots.pool_config).
     pools: PoolsConfig = field(default_factory=PoolsConfig)
+    # The file this was loaded from (``load_providers``), so spend checks can
+    # tell when it changed since (``current_providers``). None: in memory.
+    source: ProvidersSource | None = field(default=None, compare=False, repr=False)
 
     def __bool__(self) -> bool:
         return bool(self.providers)
@@ -758,14 +762,90 @@ def parse_providers(text: str) -> Providers:
     return Providers.from_dict(yaml.safe_load(text) or {})
 
 
-def load_providers(paths: list[Path]) -> Providers:
-    """The first ``providers.yaml`` found at the top of the given paths."""
+def _first_providers_file(paths) -> tuple[str, bytes]:
+    """(path, bytes) of the first ``providers.yaml`` at the top of ``paths``,
+    or ("", b"") when there is none. OSError when one can't be read."""
     for path in paths:
         file = Path(path) / PROVIDERS_FILE
         if file.is_file():
-            providers = parse_providers(file.read_text())
-            text = Path(path) / ROUTING_FILE
-            if text.is_file():
-                providers.routing.text = text.read_text().strip()
-            return providers
-    return Providers()
+            return str(file), file.read_bytes()
+    return "", b""
+
+
+def load_providers(paths: list[Path]) -> Providers:
+    """The first ``providers.yaml`` found at the top of the given paths."""
+    file, data = _first_providers_file(paths)
+    if file:
+        providers = parse_providers(data.decode())
+        text = Path(file).parent / ROUTING_FILE
+        if text.is_file():
+            providers.routing.text = text.read_text().strip()
+    else:
+        providers = Providers()
+    providers.source = ProvidersSource(
+        paths=tuple(str(p) for p in paths),
+        file=file,
+        sha=hashlib.sha256(data).hexdigest() if file else "",
+    )
+    return providers
+
+
+@dataclass(frozen=True)
+class ProvidersSource:
+    """Where a ``Providers`` was loaded from: the bot paths searched, the
+    file found ("" for none) and the sha256 of its bytes."""
+
+    paths: tuple[str, ...]
+    file: str
+    sha: str
+
+
+class ProvidersUnreadable(ProvidersError):  # noqa: N818
+    """The providers.yaml in effect can't be read or doesn't validate now."""
+
+
+# Parsed providers.yaml contents by (file, sha256), shared by every stale
+# ``Providers`` in this process (bounded: a few recent versions).
+_CURRENT: dict[tuple[str, str], Providers] = {}
+_CURRENT_LIMIT = 8
+
+
+def current_providers(providers: Providers) -> Providers:
+    """``providers`` as its file is NOW: the same object when the file is
+    unchanged (one read and one sha256 of a small file: cheap enough for
+    every metered send), else that file parsed again. Every process role
+    (web, bots, Celery, beat, voice bridge) reads the same file, so a
+    process still holding an older load sees a narrowing or revocation at
+    its next check, without a reload or restart. In-memory ``Providers``
+    (no ``source``) are their own current config.
+
+    ProvidersUnreadable when the file can't be read or no longer validates:
+    callers that authorize spend fail closed on it (subscription routes
+    don't call this)."""
+    source = providers.source
+    if source is None:
+        return providers
+    try:
+        file, data = _first_providers_file(source.paths)
+    except OSError as exc:
+        msg = f"{PROVIDERS_FILE} can't be read: {type(exc).__name__}"
+        raise ProvidersUnreadable(msg) from exc
+    sha = hashlib.sha256(data).hexdigest() if file else ""
+    if (file, sha) == (source.file, source.sha):
+        return providers
+    found = _CURRENT.get((file, sha))
+    if found is not None:
+        return found
+    if file:
+        try:
+            fresh = parse_providers(data.decode())
+        except Exception as exc:
+            msg = f"{PROVIDERS_FILE} doesn't load: {exc}"[:500]
+            raise ProvidersUnreadable(msg) from exc
+    else:
+        fresh = Providers()  # removed: no pools, so nothing metered is guarded
+    fresh.source = ProvidersSource(paths=source.paths, file=file, sha=sha)
+    while len(_CURRENT) >= _CURRENT_LIMIT:
+        _CURRENT.pop(next(iter(_CURRENT)))
+    _CURRENT[(file, sha)] = fresh
+    return fresh

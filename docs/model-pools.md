@@ -145,19 +145,44 @@ cumulative ledger and the lock, and every revision of it shares both.
   counts, so a config change never replenishes money. If a person revokes
   the owner's config revision, config sync doesn't issue it again, even
   after a route edit; only a change to its money terms (`budget_usd`,
-  `per_launch_usd`, `expires`) does. Renaming a pool is a new pool, with its
-  own envelope: whoever edits providers.yaml already sets the owner's budget.
+  `per_launch_usd`, `expires`) does.
+- **The envelope outlives the pool's name.** Each config envelope records
+  the metered accounts it has funded (provider names, `api_key_env` names,
+  `account` names; the list only grows). A pool with no envelope yet whose
+  accounts overlap an existing config envelope's gets no new money from
+  config sync:
+  - when exactly one envelope overlaps, it is the same owner's and no
+    current pool still uses it (a rename, or a pool removed and re-added
+    under another name), the pool **continues** that envelope: it is
+    re-keyed to the new name, and its spend, holds and any person's
+    revocation carry over;
+  - anything else (another owner's envelope, as after an ownership move;
+    an envelope a current pool still uses; several overlapping envelopes,
+    as when two funded pools are merged) waits, refused with
+    `budget_required` and a reason saying an admin must link it, until an
+    admin calls `pools.link_config_envelope` (Ergonaut:
+    `POST /api/pools/{name}/envelope`, superusers only) to continue one
+    envelope or to fund it separately (explicit new money, recorded with
+    who did it and when).
+
+  Only accounts no envelope has ever funded get a new envelope from config
+  sync, from the pool's `budget_usd`.
 - **Issued grants**: the owner (or an admin) issues grants to other users
-  with `pools.issue_grant` (Ergonaut: the Pools page). Each is a new, funded
-  envelope: that explicit, authenticated act is the only way to start a
-  fresh ledger. A new grant for the same grantee and pool revokes the old
-  one, whose ledger stays. An issued grant works only while its issuer owns
-  the pool and the pool exists: after a move to another owner it stops at
-  once (guards already built refuse) and works again only if the pool comes
-  back to its issuer. Config sync never revokes it, so a process still on
-  an older providers.yaml can't destroy the current owner's grants. Removing
-  the owner's own `budget_usd` doesn't touch grants they issued; revoke
-  those on the Pools page.
+  with `pools.issue_grant` (Ergonaut: the Pools page). Each is a new
+  envelope **drawn from the owner's config envelope** (its `parent`):
+  issuing needs the owner's own `budget_usd`/`expires`, and every send on
+  the grant is intersected with the owner's current authority (budget,
+  expiry, routes, output ceiling, per-launch amount, ownership, switches).
+  The owner's current budget caps the cumulative spend of the owner and
+  every grant they issued on the pool together, so lowering, removing,
+  expiring or revoking the owner's authority narrows or stops every grant
+  at once, guards already built included. A new grant for the same
+  grantee and pool revokes their earlier issued one (never the owner's own
+  config authority), whose ledger stays. An issued grant also works only
+  while its issuer owns the pool and the pool exists under its name: after
+  a move to another owner or a rename it stops at once and works again only
+  if that is undone. Config sync never revokes it, so a process still on an
+  older providers.yaml can't destroy the current owner's grants.
 
 The current config is applied whenever pools are read (`pools.snapshot`)
 and again at every send (below). A grantee sees the pool,
@@ -243,13 +268,23 @@ configured:
   is built, for every consumer;
 - the engine carries a spend guard (`conversation.spend_guard`) for the
   decision's grant revision. For each attempt, under its envelope's
-  PostgreSQL advisory lock, it re-reads the revision (revoked? this user?),
-  re-reads providers.yaml as it is now (the process's most recently reloaded
-  registry: pool, owner, budget, expiry, routes, ceiling, and the pool's and
-  provider's `enabled`; revoking the envelope if the config no longer backs
-  it), and uses the **intersection**
-  of the revision it holds with the current one (narrowing only: the lower
-  budget and ceiling, the earlier expiry, the common routes). It checks the
+  PostgreSQL advisory lock (an issued grant's takes its owner's envelope
+  lock first, so the owner and all their grantees serialize on one lock),
+  it re-reads the revision (revoked? this user?), re-reads providers.yaml
+  as it is now (pool, owner, budget, expiry, routes, ceiling, and the pool's
+  and provider's `enabled`; revoking the envelope if the config no longer
+  backs it), and uses the **intersection** of the revision it holds with
+  the current one, and for an issued grant also with the owner's current
+  authority (narrowing only: the lower budget and ceiling, the earlier
+  expiry, the common routes). "As it is now" means the file: every guarded
+  send (and every pools read) hashes providers.yaml (one small read) and
+  parses it again when it differs from what this process loaded, so a
+  process that hasn't reloaded (the `ergonaut bots` process, a Celery
+  worker, the voice bridge) still acts on the current file. All Ergonaut
+  roles mount the same bot folders, so this is one source of truth. If the
+  file can't be read or doesn't validate, metered sends are refused and
+  config sync writes nothing until it loads again; subscription routes
+  don't depend on it and keep working. It checks the
   pool and provider switches, clamps the output limit to that ceiling, asks
   the adapter for a bound on the request,
   reserves the worst case at the exact tariff (the dearest input rate that
@@ -270,8 +305,9 @@ Attempts are `InferenceRequest` rows with `pool` `grant:<revision id>`
 and `billing_mode` `metered`, so the existing cost ledger and Costs page
 see them. Spend and holds count toward the envelope for all time, summed
 over all its revisions (revoked ones too): an uncertain hold stays counted
-after revocation, and a request already sent keeps its hold. Only a newly
-issued grant starts a new ledger.
+after revocation, and a request already sent keeps its hold. A newly
+issued grant starts its own ledger, but still within its owner's budget,
+which counts the owner's and every grantee's spend.
 
 ### The spend adapter contract (for new engines)
 
@@ -432,9 +468,11 @@ The model picker lists only what the chat may use: the active pool's models
 
 ## Rollout and rollback
 
-1. Deploy: the migration (`0059_model_pools`, after main's
-   `0058_agent_launch_intent`) adds five tables; with no `pools:` section and
-   no rows, behavior is unchanged.
+1. Deploy: the migrations (`0059_model_pools`, after main's
+   `0058_agent_launch_intent`, then `0060_spend_envelopes` and
+   `0061_spend_envelope_families`) add the tables; with no `pools:` section
+   and no rows, behavior is unchanged. `0061` links each issued grant to its
+   owner's config envelope (a grant whose owner has none stops working).
 2. Add `pools:` (owners, prices, budgets with an end date) to providers.yaml;
    check the Routing page's Pools section; issue grants there.
 3. Rollback: remove the `pools:` section (behavior returns to legacy at the

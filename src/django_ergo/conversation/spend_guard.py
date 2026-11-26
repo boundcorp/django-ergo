@@ -30,7 +30,11 @@ every send also asks the caller's :class:`CurrentAuthority` for the
 authority as it is now (current providers.yaml owner, budget, window,
 routes and ceiling) and uses the intersection with the revision it was
 built or queued with: narrowing only. A config removal or ownership change
-therefore refuses guards that were already built. A configured API key is
+therefore refuses guards that were already built. An envelope issued from
+an owner's config envelope (``parent``) is also held to the owner's current
+authority: its reservations take the parent's lock first, and the current
+terms carry a family cap (``Terms.cap_envelope``/``cap_usd``), so the owner
+and every grantee together stay within the owner's budget. A configured API key is
 never authority: a guard with ``deny_reason`` refuses every send (used for a
 metered route that was not selected through a pool).
 
@@ -110,12 +114,27 @@ def _envelope_of(grant_id):
     )
 
 
+def _locks_of(envelope_id) -> list[str]:
+    """The advisory locks a reservation on ``envelope_id`` takes, in order:
+    its family root's (the owner's config envelope an issued one is drawn
+    from: every reservation in the family serializes on it), then its own.
+    ``parent`` is set once, at creation, so it can be read before locking."""
+    from django_ergo.conversation.models import SpendEnvelope
+
+    parent = (
+        SpendEnvelope.objects.filter(pk=envelope_id)
+        .values_list("parent_id", flat=True)
+        .first()
+    )
+    if parent is None:
+        return [envelope_lock_key(envelope_id)]
+    return [envelope_lock_key(parent), envelope_lock_key(envelope_id)]
+
+
 def spent_and_reserved(grant_id) -> tuple[Decimal, Decimal]:
     """(priced spend, outstanding reservations) of the envelope ``grant_id``
     is a revision of: every revision's attempts, all time, revoked revisions
     included (their uncertain holds stay counted). Runs the ORM."""
-    from django_ergo.conversation.models import InferenceOutcome
-    from django_ergo.conversation.models import InferenceRequest
     from django_ergo.conversation.models import SpendGrant
 
     envelope = _envelope_of(grant_id)
@@ -124,6 +143,27 @@ def spent_and_reserved(grant_id) -> tuple[Decimal, Decimal]:
         if envelope is not None
         else [grant_id]
     )
+    return _totals(revisions)
+
+
+def family_spent_and_reserved(envelope_id) -> tuple[Decimal, Decimal]:
+    """(priced spend, outstanding reservations) of the owner's config
+    envelope ``envelope_id`` and every envelope issued from it: what the
+    owner's budget caps. Runs the ORM."""
+    from django.db.models import Q
+
+    from django_ergo.conversation.models import SpendGrant
+
+    revisions = SpendGrant.objects.filter(
+        Q(envelope_id=envelope_id) | Q(envelope__parent_id=envelope_id)
+    ).values_list("pk", flat=True)
+    return _totals(revisions)
+
+
+def _totals(revisions) -> tuple[Decimal, Decimal]:
+    from django_ergo.conversation.models import InferenceOutcome
+    from django_ergo.conversation.models import InferenceRequest
+
     spent = Decimal(0)
     reserved = Decimal(0)
     rows = InferenceRequest.objects.filter(
@@ -159,6 +199,12 @@ class Terms:
     max_output_tokens: int
     valid_from: dt.datetime
     expires_at: dt.datetime
+    # The family cap: the owner's config envelope (``cap_envelope``) whose
+    # current budget (``cap_usd``) bounds the cumulative spend of it and
+    # every envelope issued from it. None: no family cap (a root without
+    # children is bounded by ``budget_usd`` alone).
+    cap_envelope: object = None
+    cap_usd: Decimal | None = None
 
     @classmethod
     def of(cls, grant) -> Terms:
@@ -178,6 +224,11 @@ class Terms:
             if self.per_launch_usd is None or other.per_launch_usd is None
             else min(self.per_launch_usd, other.per_launch_usd)
         )
+        caps = [t.cap_usd for t in (self, other) if t.cap_usd is not None]
+        envelopes = {t.cap_envelope for t in (self, other)} - {None}
+        if len(envelopes) > 1:
+            msg = "spend terms of two families can't be intersected"
+            raise ValueError(msg)
         return Terms(
             routes=self.routes & other.routes,
             budget_usd=min(self.budget_usd, other.budget_usd),
@@ -185,6 +236,8 @@ class Terms:
             max_output_tokens=min(self.max_output_tokens, other.max_output_tokens),
             valid_from=max(self.valid_from, other.valid_from),
             expires_at=min(self.expires_at, other.expires_at),
+            cap_envelope=next(iter(envelopes), None),
+            cap_usd=min(caps) if caps else None,
         )
 
 
@@ -237,7 +290,8 @@ def authorize(*, grant_id, user_id, current: CurrentAuthority | None) -> Terms:
         msg = "the spend grant was revoked; refusing to send"
         raise SpendDenied(msg)
     with transaction.atomic():
-        lock(envelope_lock_key(envelope))
+        for key in _locks_of(envelope):
+            lock(key)
         grant = (
             SpendGrant.objects.select_related("envelope").filter(pk=grant_id).first()
         )
@@ -604,8 +658,10 @@ def reserve(  # noqa: PLR0913, PLR0912, C901
         msg = f"{ref}: the spend grant was revoked; refusing to send"
         raise SpendDenied(msg)
     msg = ""
+    locks = _locks_of(envelope)
     with transaction.atomic():
-        lock(envelope_lock_key(envelope))
+        for key in locks:
+            lock(key)
         grant = (
             SpendGrant.objects.select_related("envelope").filter(pk=grant_id).first()
         )
@@ -621,16 +677,35 @@ def reserve(  # noqa: PLR0913, PLR0912, C901
                 problem = "the launch amount is over the grant's per-launch limit"
             elif provider_switched_off(provider):
                 problem = f"provider {provider!r} is switched off"
+            elif terms.cap_envelope is not None and (
+                envelope_lock_key(terms.cap_envelope) not in locks
+                or terms.cap_usd is None
+            ):
+                problem = "the owner's spend authority can't be checked"
         if problem:
             # Leave the block normally: revocations made while re-reading stay.
             msg = f"{ref}: {problem}; refusing to send"
         else:
             spent, held = spent_and_reserved(grant_id)
+            if terms.cap_envelope is not None:
+                family_spent, family_held = family_spent_and_reserved(
+                    terms.cap_envelope
+                )
             if spent + held + amount > terms.budget_usd:
                 msg = (
                     f"Pool {grant.pool!r} grant is at its budget: ${spent:.4f} spent "
                     f"and ${held:.4f} reserved, this request could cost up to "
                     f"${amount:.4f}, budget ${terms.budget_usd}; refusing to send"
+                )
+            elif (
+                terms.cap_envelope is not None
+                and family_spent + family_held + amount > terms.cap_usd
+            ):
+                msg = (
+                    f"Pool {grant.pool!r} owner's budget is used: ${family_spent:.4f} "
+                    f"spent and ${family_held:.4f} reserved by the owner and every "
+                    f"grant they issued, this request could cost up to "
+                    f"${amount:.4f}, owner's budget ${terms.cap_usd}; refusing to send"
                 )
             else:
                 row = InferenceRequest.objects.create(

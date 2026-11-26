@@ -172,7 +172,9 @@ def test_rr_ownership_move_revokes_the_previous_owners_authority():
     """owner: lee -> bob. lee no longer sees or spends on the pool (a guard
     built before the move refuses, and lee's config revisions are revoked);
     the grants lee issued stop working at once (suspended: they work only
-    while lee owns the pool); bob's authority is his own envelope. Moving
+    while lee owns the pool). Bob gets no money from the move itself: the
+    pool's accounts are already funded (lee's envelope), so bob's authority
+    waits for an admin to fund it separately, as his own envelope. Moving
     the pool back to lee continues lee's envelope."""
     registry, bot = _config(POOLS)
     lee = User.objects.create(username="lee")
@@ -197,6 +199,13 @@ def test_rr_ownership_move_revokes_the_previous_owners_authority():
         pools.update_preference(lee.pk, bot.providers, version=1, active_pool="paid")
     old.refresh_from_db()
     assert old.revoked_at is not None
+    waiting = _own(bot.providers, bob)
+    assert waiting.grant is None
+    assert "an admin must link" in waiting.grant_problem()[1]
+    admin = User.objects.create(username="admin", is_superuser=True)
+    pools.link_config_envelope(
+        bot.providers, "paid", by_id=admin.pk, admin=True, fund=True
+    )
     bobs = _own(bot.providers, bob).grant
     assert bobs.envelope_id != old.envelope_id
     assert spend_guard.spent_and_reserved(bobs.pk) == (Decimal(0), Decimal(0))
@@ -220,6 +229,9 @@ def test_rr_a_stale_config_never_destroys_the_current_owners_grants():
     stale = parse_providers(POOLS)
     _own(stale, lee)
     fresh = parse_providers(POOLS.replace("    owner: lee\n", "    owner: bob\n"))
+    assert _own(fresh, bob).grant is None  # the accounts are lee's envelope's
+    admin = User.objects.create(username="admin", is_superuser=True)
+    pools.link_config_envelope(fresh, "paid", by_id=admin.pk, admin=True, fund=True)
     assert _own(fresh, bob).grant is not None
     bobs_grant = pools.issue_grant(
         fresh,
@@ -595,7 +607,7 @@ POOL_TABLES = {
     "django_ergo_modelpoolpreference",
     "django_ergo_routedecision",
 }
-LEAF = ("django_ergo", "0060_spend_envelopes")
+LEAF = ("django_ergo", "0061_spend_envelope_families")
 
 
 @pytest.mark.django_db(transaction=True)
@@ -612,7 +624,11 @@ def test_rr_migrations_upgrade_from_main_0058_and_reverse():
         assert AgentLaunch._meta.db_table in connection.introspection.table_names()
         executor = _executor()
         plan = [m.name for m, _ in executor.migration_plan([LEAF])]
-        assert plan == ["0059_model_pools", "0060_spend_envelopes"]
+        assert plan == [
+            "0059_model_pools",
+            "0060_spend_envelopes",
+            "0061_spend_envelope_families",
+        ]
         executor.migrate([LEAF])
         assert present() == POOL_TABLES
     finally:
@@ -679,6 +695,9 @@ def test_rr_0060_backfills_envelopes_conservatively_and_reverses():
         assert rows[old.pk].envelope_id == rows[new.pk].envelope_id
         assert rows[old.pk].envelope.key == f"config:paid:{lee.pk}"
         assert rows[issued.pk].envelope.key == f"issued:{issued.pk}"
+        # 0061: the issued envelope is drawn from lee's config envelope.
+        assert rows[issued.pk].envelope.parent_id == rows[old.pk].envelope_id
+        assert rows[old.pk].envelope.accounts == ["provider:openai"]
         assert rows[old.pk].revoked_at is not None  # nothing un-revoked
         assert spend_guard.spent_and_reserved(new.pk) == (Decimal(0), Decimal(5))
         assert spend_guard.spent_and_reserved(issued.pk) == (Decimal(0), Decimal(2))
