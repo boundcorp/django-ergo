@@ -1,6 +1,6 @@
 """The model pools API (ergonaut/api/pools.py): settings, version-checked writes,
-admin-only deployment settings, the chat pool picker and listing parity with
-what the runtime selects (django_ergo.bots.pools)."""
+owner/admin pool management and grants, the chat pool picker and listing
+parity with what the runtime selects (django_ergo.bots.pools)."""
 
 import json
 import textwrap
@@ -41,8 +41,10 @@ pools:
     routes: [claude]
   - name: paid
     label: Paid API
+    owner: lee
     routes: [openai]
     budget_usd: 5
+    expires: 2099-12-31
     tiers: {medium: [openai/gpt-6.1-sol]}
 """
 
@@ -77,37 +79,45 @@ def send(client, method, url, data):
     return getattr(client, method)(url, json.dumps(data), content_type="application/json")
 
 
-def test_settings_list_pools_and_admins_change_them(client, kitchen):
+def test_settings_list_pools_and_owners_change_them(client, kitchen):
     login(client, "lee", admin=True)
     data = client.get("/api/pools").json()
     assert [p["name"] for p in data["pools"]] == ["subs", "paid"]
     assert data["active"] == "subs" and data["auto_rollover"] is False and data["editable"]
     paid = data["pools"][1]
     assert (paid["status"], paid["rollover_out"], paid["allow_auto_entry"]) == ("eligible", False, False)
-    changed = send(client, "patch", "/api/pools/paid", {"version": paid["version"], "budget_usd": "7.5"}).json()
-    assert changed["pools"][1]["budget_usd"] == "7.5000"
-    # A stale version is a conflict, not a silent overwrite.
+    assert paid["is_owner"] and paid["manageable"] and paid["grant"]["budget_usd"] == "5.0000"
+    changed = send(client, "patch", "/api/pools/paid", {"version": paid["version"], "allow_auto_entry": True}).json()
+    assert changed["pools"][1]["allow_auto_entry"] is True
+    # A stale version is a conflict, not a silent overwrite; a missing one is refused.
     stale = send(client, "patch", "/api/pools/paid", {"version": paid["version"], "enabled": False})
     assert stale.status_code == 409
-    off = send(client, "patch", "/api/providers/openai", {"enabled": False}).json()
+    assert send(client, "patch", "/api/pools/paid", {"enabled": False}).status_code == 422
+    # Budgets are grants now, not pool settings.
+    assert send(client, "patch", "/api/pools/paid", {"version": 1, "budget_usd": "7.5"}).status_code == 422
+    provider = next(p for p in data["providers"] if p["name"] == "openai")
+    assert send(client, "patch", "/api/providers/openai", {"enabled": False}).status_code == 422
+    off = send(client, "patch", "/api/providers/openai", {"enabled": False, "version": provider["version"]}).json()
     assert next(p for p in off["providers"] if p["name"] == "openai")["enabled"] is False
 
 
-def test_people_change_their_own_choices_but_not_deployment_settings(client, kitchen):
+def test_people_change_their_own_choices_but_not_others_pools(client, kitchen):
     login(client, "cook")
     data = client.get("/api/pools").json()
     assert data["editable"] is False
-    assert send(client, "patch", "/api/pools/paid", {"enabled": False}).status_code == 403
-    assert send(client, "patch", "/api/providers/openai", {"enabled": False}).status_code == 403
-    mine = send(client, "patch", "/api/pools/preferences", {"version": 0, "order": ["paid", "subs"]}).json()
-    assert [p["name"] for p in mine["pools"]] == ["paid", "subs"]
-    assert mine["active"] == "paid"
-    bad = send(client, "patch", "/api/pools/preferences", {"order": ["paid"]})
+    # lee's paid pool isn't visible to cook at all.
+    assert [p["name"] for p in data["pools"]] == ["subs"]
+    assert send(client, "patch", "/api/pools/paid", {"version": 0, "enabled": False}).status_code == 403
+    assert send(client, "patch", "/api/providers/openai", {"enabled": False, "version": 0}).status_code == 403
+    assert send(client, "patch", "/api/pools/preferences", {"version": 0, "active_pool": "paid"}).status_code == 403
+    mine = send(client, "patch", "/api/pools/preferences", {"version": 0, "auto_rollover": True}).json()
+    assert mine["auto_rollover"] is True
+    bad = send(client, "patch", "/api/pools/preferences", {"version": mine["user_version"], "order": ["paid"]})
     assert bad.status_code == 400
 
 
 def test_chat_pool_picker_switch_listing_and_refusal(client, kitchen, monkeypatch):
-    login(client, "cook")
+    login(client, "lee")
     root = send(client, "post", "/api/bots/kitchen/root", {}).json()
     view = client.get(f"/api/sessions/{root['id']}/pool").json()
     assert (view["active"], view["chat_pool"], view["refusal"]) == ("subs", "", None)
@@ -116,13 +126,19 @@ def test_chat_pool_picker_switch_listing_and_refusal(client, kitchen, monkeypatc
     assert "auto/medium" in [m["id"] for m in models["models"]]
     # Out-of-pool pins are refused.
     assert send(client, "post", f"/api/sessions/{root['id']}/model", {"model": "openai/gpt-6.1-sol"}).status_code == 409
-    switched = send(client, "post", f"/api/sessions/{root['id']}/pool", {"pool": "paid", "scope": "chat"}).json()
+    switched = send(
+        client, "post", f"/api/sessions/{root['id']}/pool", {"pool": "paid", "scope": "chat", "chat_version": 0}
+    ).json()
     assert switched["session"]["pool"] == "paid" and switched["warning"] == ""
+    assert switched["session"]["pool_version"] == 1
     models = client.get(f"/api/bots/kitchen/models?session={root['id']}").json()
     assert [m["id"] for m in models["models"] if m["provider"] != "auto"] == ["openai/gpt-6.1-sol"]
     assert models["models"][0]["billing"] == "metered"
+    # A stale chat version is a conflict.
+    stale = send(client, "post", f"/api/sessions/{root['id']}/pool", {"pool": "", "scope": "chat", "chat_version": 0})
+    assert stale.status_code == 409
     # The same eligibility the runtime selects with: a chat stopped on exhaustion shows next choices.
-    send(client, "post", f"/api/sessions/{root['id']}/pool", {"pool": "", "scope": "chat"})
+    send(client, "post", f"/api/sessions/{root['id']}/pool", {"pool": "", "scope": "chat", "chat_version": 1})
     monkeypatch.setattr(routing, "current_usage", lambda now=None: {"claude": {"weekly": 100}})
     from django_ergo.conversation.models import ConversationSession
 
@@ -134,15 +150,26 @@ def test_chat_pool_picker_switch_listing_and_refusal(client, kitchen, monkeypatc
     assert [c["name"] for c in stopped["next_choices"]] == ["paid"]
     detail = client.get(f"/api/sessions/{root['id']}").json()
     assert detail["session"]["pool_refusal"]["code"] == "pool_exhausted"
+    # The picker shows the exhausted model as configured but not selectable now.
+    models = client.get(f"/api/bots/kitchen/models?session={root['id']}").json()
+    claude = next(m for m in models["models"] if m["id"] == "claude/claude-opus-5-5")
+    assert claude["configured"] and not claude["available"] and claude["status"] == "no_capacity"
+    tier = next(m for m in models["models"] if m["id"] == "auto/medium")
+    assert not tier["available"]
     # Switching clears it.
-    send(client, "post", f"/api/sessions/{root['id']}/pool", {"pool": "paid", "scope": "chat"})
+    send(client, "post", f"/api/sessions/{root['id']}/pool", {"pool": "paid", "scope": "chat", "chat_version": 2})
     assert client.get(f"/api/sessions/{root['id']}/pool").json()["refusal"] is None
 
 
 def test_user_default_from_a_chat(client, kitchen):
-    user = login(client, "cook")
+    user = login(client, "lee")
     root = send(client, "post", "/api/bots/kitchen/root", {}).json()
-    out = send(client, "post", f"/api/sessions/{root['id']}/pool", {"pool": "paid", "scope": "user"}).json()
+    out = send(
+        client,
+        "post",
+        f"/api/sessions/{root['id']}/pool",
+        {"pool": "paid", "scope": "user", "version": 0, "chat_version": 0},
+    ).json()
     assert out["session"]["pool"] == ""
     assert pools.preference(user.pk).active_pool == "paid"
     assert client.get("/api/pools").json()["selected"] == "paid"

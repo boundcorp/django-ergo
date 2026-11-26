@@ -47,6 +47,8 @@ export type Session = {
   workers_total?: number
   prs?: PrLink[] // pull requests it reported, newest first
   pool?: string // this chat's own pool ('' = the user's default / preferred order)
+  pool_version?: number // the override's version, sent back when switching
+  pool_rolled_from?: string // set when a rollover moved this chat's pool
   pool_route?: { pool?: string; pool_label?: string; route?: string; billing?: string; mode?: string }
   pool_refusal?: PoolRefusal | null // what the chat is stopped on, with the next choices
 }
@@ -166,7 +168,9 @@ export type ModelChoice = {
   label: string
   provider: string
   engine_type: string
-  available: boolean // usable now under the same rules the backend enforces
+  available: boolean // selectable now, under the same full rules the backend selects with
+  configured?: boolean // listed in the active pool (even when not selectable now)
+  status?: string // selectable, no_capacity, pool_disabled, budget_*, not_authorized, ...
   billing?: string // subscription, metered or api
   why?: string // why it isn't available, when it isn't
 }
@@ -180,23 +184,64 @@ export type PoolRefusal = {
   next_choices: { name: string; label: string; status: string; metered: boolean }[]
 }
 
-export type PoolModel = { id: string; label: string; billing: string; available: boolean; why: string }
+export type PoolModel = {
+  id: string
+  label: string
+  billing: string
+  available: boolean // selectable now
+  configured?: boolean
+  status?: string
+  why: string
+}
+
+// A spend grant (django_ergo.conversation.models.SpendGrant): the only spend authority.
+export type PoolGrant = {
+  id: string
+  grantee: number
+  routes: string[]
+  budget_usd: string
+  per_launch_usd: string | null
+  max_output_tokens: number
+  valid_from: string
+  expires_at: string
+  source: string // config (providers.yaml) or issued
+  revoked: boolean
+  spent_usd: string
+  reserved_usd: string
+}
+
+export type GrantIssue = {
+  grantee: string // username
+  budget_usd: string
+  expires_at: string // ISO with a timezone
+  valid_from?: string
+  per_launch_usd?: string
+  routes?: string[]
+}
 
 export type PoolRow = {
   name: string
   label: string
   position?: number
   enabled?: boolean
-  status: string // eligible, pool_disabled, budget_required, budget_exhausted, budget_expired
+  status: string // eligible, pool_disabled, not_authorized, budget_required, budget_exhausted, budget_expired
   why?: string
+  owner?: string // username; '' = a deployment pool
+  is_owner?: boolean
+  manageable?: boolean // this user may change its gates and grants
+  selectable_now?: boolean
+  grant?: PoolGrant | null // this user's own grant
+  grants?: PoolGrant[] // for its owner: the grants issued to others
+  tier_available?: Record<string, boolean>
+  max_output_tokens?: number
   metered?: boolean
   legacy?: boolean
   locked?: boolean // a privacy-restricted bot's private pool
   rollover_out?: boolean
   allow_auto_entry?: boolean
-  budget_usd?: string | null
-  spent_usd?: string
-  reserved_usd?: string
+  budget_usd?: string | null // from this user's grant
+  spent_usd?: string | null
+  reserved_usd?: string | null
   expires_at?: string | null
   per_launch_usd?: string | null
   version?: number
@@ -213,6 +258,7 @@ export type PoolProvider = {
   enabled: boolean
   configured_enabled: boolean
   available: boolean
+  version?: number // send it back when switching
 }
 
 export type PoolSettings = {
@@ -222,30 +268,29 @@ export type PoolSettings = {
   mode: string // auto, manual or private
   scope?: string // chat, user or ''
   selected?: string // the manual pick ('' = preferred order)
+  rolled_from?: string // set when an automatic rollover made the pick
   auto_rollover?: boolean
   user_version?: number
+  chat_version?: number
   providers?: PoolProvider[]
   reset_times?: Record<string, Record<string, number>>
   editable?: boolean
+  admin?: boolean // may switch providers
   privacy?: { restricted: boolean; policies: string[]; label: string }
 }
 
 export type ChatPools = PoolSettings & {
   chat_pool: string
+  chat_version: number
   route: { pool?: string; pool_label?: string; route?: string; billing?: string; mode?: string; rollover?: string[] }
   refusal: PoolRefusal | null
 }
 
 export type PoolStatePatch = {
-  version?: number
+  version: number
   enabled?: boolean
   rollover_out?: boolean
   allow_auto_entry?: boolean
-  budget_usd?: string
-  clear_budget?: boolean
-  expires_at?: string
-  clear_expiry?: boolean
-  per_launch_usd?: string
 }
 
 export type BotModels = {
@@ -1136,7 +1181,7 @@ export const api = {
     request<BotModels>('GET', `/bots/${bot}/models${session ? `?session=${encodeURIComponent(session)}` : ''}`),
   pools: () => request<PoolSettings>('GET', '/pools'),
   updatePoolPreferences: (body: {
-    version?: number
+    version: number
     active_pool?: string
     auto_rollover?: boolean
     clear_auto_rollover?: boolean
@@ -1144,11 +1189,20 @@ export const api = {
   }) => request<PoolSettings>('PATCH', '/pools/preferences', body),
   updatePool: (name: string, body: PoolStatePatch) =>
     request<PoolSettings>('PATCH', `/pools/${encodeURIComponent(name)}`, body),
-  updateProvider: (name: string, enabled: boolean) =>
-    request<PoolSettings>('PATCH', `/providers/${encodeURIComponent(name)}`, { enabled }),
+  updateProvider: (name: string, enabled: boolean, version: number) =>
+    request<PoolSettings>('PATCH', `/providers/${encodeURIComponent(name)}`, { enabled, version }),
+  issueGrant: (pool: string, body: GrantIssue) =>
+    request<PoolSettings>('POST', `/pools/${encodeURIComponent(pool)}/grants`, body),
+  revokeGrant: (id: string) => request<PoolSettings>('DELETE', `/pools/grants/${encodeURIComponent(id)}`),
   chatPools: (id: string) => request<ChatPools>('GET', `/sessions/${id}/pool`),
-  setChatPool: (id: string, pool: string, scope: 'chat' | 'user' = 'chat', version?: number) =>
-    request<{ session: Session; warning: string }>('POST', `/sessions/${id}/pool`, { pool, scope, version }),
+  // chatVersion: this chat's pool_version; version: the user preference version (scope 'user').
+  setChatPool: (id: string, pool: string, scope: 'chat' | 'user', chatVersion: number, version?: number) =>
+    request<{ session: Session; warning: string }>('POST', `/sessions/${id}/pool`, {
+      pool,
+      scope,
+      version,
+      chat_version: chatVersion,
+    }),
   setModel: (id: string, model: string) => request<Session>('POST', `/sessions/${id}/model`, { model }),
   setEffort: (id: string, effort: string) => request<Session>('POST', `/sessions/${id}/effort`, { effort }),
   renameSession: (id: string, title: string) => request<{ title: string }>('POST', `/sessions/${id}/title`, { title }),

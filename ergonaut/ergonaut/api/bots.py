@@ -158,6 +158,8 @@ class SessionOut(Schema):
     # default or preferred order), its last routed pool/route, and the refusal
     # it is stopped on (pool exhausted, budget, ...), with the next choices.
     pool: str = ""
+    pool_version: int = 0  # the override's version, sent back when switching
+    pool_rolled_from: str = ""  # set when a rollover moved this chat's pool
     pool_route: dict = {}
     pool_refusal: dict | None = None
 
@@ -677,6 +679,8 @@ def session_out(session: ConversationSession) -> dict:
         "model": session.model,
         "effort": meta.get("effort") or "",
         "pool": meta.get("pool") or "",
+        "pool_version": meta.get("pool_version") or 0,
+        "pool_rolled_from": meta.get("pool_rolled_from") or "",
         "pool_route": meta.get("pool_route") or {},
         "pool_refusal": meta.get("pool_refusal"),
         **resolution(session),
@@ -1733,10 +1737,15 @@ def pool_models_out(bot: Bot, user, private: list[dict], session=None) -> dict:
                     "provider": provider.name,
                     "engine_type": provider.type,
                     "billing": m["billing"],
+                    # Selectable now: the same full eligibility the server
+                    # selects with (pool, grant, price, adapter, capacity).
                     "available": m["available"],
+                    "configured": m.get("configured", True),
+                    "status": m.get("status", ""),
                     "why": m["why"],
                 }
             )
+        tier_available = active.get("tier_available") or {}
         models += [
             {
                 "id": f"auto/{tier}",
@@ -1744,7 +1753,10 @@ def pool_models_out(bot: Bot, user, private: list[dict], session=None) -> dict:
                 "label": tier,
                 "provider": "auto",
                 "engine_type": "auto",
-                "available": True,
+                "available": bool(tier_available.get(tier, True)),
+                "configured": True,
+                "status": "selectable" if tier_available.get(tier, True) else "not_selectable",
+                "why": "" if tier_available.get(tier, True) else "no model of this tier is selectable now",
             }
             for tier in active["tiers"]
         ]
