@@ -165,7 +165,7 @@ def with_effort(config: dict, engine_type: str, transport: str, picked: str) -> 
             or config.get("reasoning_effort")
             or DEFAULT_EFFORT
         )
-    elif engine_type == "openai" and picked:
+    elif engine_type in ("openai", "google") and picked:
         config["reasoning_effort"] = picked
 
 
@@ -872,7 +872,7 @@ class Bot:
                 picked = tier[0] if tier else ""
         return self.providers.check_public(picked, where=ref) if picked else ""
 
-    def engine_spec(  # noqa: C901, PLR0912
+    def engine_spec(  # noqa: C901
         self, session: ConversationSession | None = None, model: str = ""
     ) -> EngineSpec:
         """The engine for a chat: the model picked for it (or ``model``), else the bot's."""
@@ -929,12 +929,7 @@ class Bot:
             raise PolicyError(msg)
         with_effort(config, engine_type, transport, self.session_effort(session))
         if key_env:
-            key = os.environ.get(key_env)
-            if not key:
-                msg = f"Bot {self.name!r} needs the {key_env} environment variable"
-                raise RuntimeError(msg)
-            config["api_key"] = key
-            config["api_key_env"] = key_env
+            self._add_key(config, engine_type, key_env)
         if ref and self.providers.find(ref) and self.providers.find(ref)[0].account:
             config["_pool_account"] = self.providers.find(ref)[0].account
         return EngineSpec(
@@ -942,6 +937,25 @@ class Bot:
             transport_type=transport,
             config=config,
         )
+
+    def _add_key(self, config: dict, engine_type: str, key_env: str) -> None:
+        """Put the API key (or, for Gemini, the name of its env var) in ``config``."""
+        if engine_type == "google":
+            # Gemini reads only this named variable at send time; the key itself
+            # never enters the config.
+            from django_ergo.conversation.engines.google_wire import configured
+
+            if not configured(key_env):
+                msg = f"Bot {self.name!r} needs the {key_env} environment variable"
+                raise RuntimeError(msg)
+            config["api_key_env"] = key_env
+            return
+        key = os.environ.get(key_env)
+        if not key:
+            msg = f"Bot {self.name!r} needs the {key_env} environment variable"
+            raise RuntimeError(msg)
+        config["api_key"] = key
+        config["api_key_env"] = key_env
 
     def _private_spec(self, ref: str) -> EngineSpec:
         """The engine for an allowlisted bot's private selector. Its endpoint,

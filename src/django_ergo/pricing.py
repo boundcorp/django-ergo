@@ -149,6 +149,41 @@ DEFAULT_PRICES: dict[str, dict[str, float]] = {
         "cache_write": 0.125,
         "cache_read": 0.01,
     },
+    # Google Gemini API, Standard paid tier, USD per 1M tokens. Every row below
+    # was read verbatim from https://aistudio.google.com/docs/pricing (the page
+    # ai.google.dev/gemini-api/docs/pricing redirects to) on 2026-11-25; the page
+    # carries no "last updated" date. Model status is from
+    # https://aistudio.google.com/docs/models and /docs/deprecations, same day.
+    # Output includes thinking tokens; cache_read is the cached-input rate
+    # (text/image/video; audio is priced higher and isn't modeled here).
+    # long_context multiplies a request's rates once its prompt passes
+    # threshold: the page lists a ">200k tokens" tier for 2.5 Pro and 3.1 Pro.
+    # Not listed because the page gives a price that changes on a date, which
+    # this table can't express: gemini-4-carbon / gemini-4-argon (doubles
+    # 2026-12-01), gemini-3.8-flash / gemini-3.6-flash (doubles 2027-01-01).
+    # gemini-3-pro-preview is not here: Google lists it as shut down
+    # (2026-03-09, replaced by gemini-3.1-pro-preview).
+    # gemini-2.5-pro and gemini-2.5-flash are deprecated: from 2026-12-01 their
+    # requests route to (and bill as) gemini-3.8-flash and gemini-3.5-flash-lite.
+    "gemini-2.5-pro": {
+        "long_context": {"threshold": 200_000, "input": 2, "output": 1.5},
+        "input": 1.25,
+        "output": 10.00,
+        "cache_read": 0.125,
+    },
+    "gemini-2.5-flash-lite": {"input": 0.10, "output": 0.40, "cache_read": 0.01},
+    "gemini-2.5-flash": {"input": 0.30, "output": 2.50, "cache_read": 0.03},
+    "gemini-3.1-pro-preview": {
+        "long_context": {"threshold": 200_000, "input": 2, "output": 1.5},
+        "input": 2.00,
+        "output": 12.00,
+        "cache_read": 0.20,
+    },
+    "gemini-3.1-flash-lite": {"input": 0.25, "output": 1.50, "cache_read": 0.025},
+    "gemini-3.5-flash-lite": {"input": 0.30, "output": 2.50, "cache_read": 0.03},
+    "gemini-3-flash-preview": {"input": 0.50, "output": 3.00, "cache_read": 0.05},
+    "gemini-4-neon": {"input": 3.00, "output": 15.00, "cache_read": 0.15},
+    "gemini-4-hydrogen": {"input": 1.50, "output": 7.50, "cache_read": 0.075},
     "gpt-6-sol": {
         "long_context": {"threshold": 272_000, "input": 2, "output": 1.5},
         "input": 2.00,

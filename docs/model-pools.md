@@ -143,7 +143,9 @@ cumulative ledger and the lock, and every revision of it shares both.
   fills in a person's authorization. Each approval stores the actor, terms and
   audit on the same envelope. Its effective grant intersects the approved cap,
   window and accounts with current config. Raising a config ceiling, adding a
-  route, changing accounts, or reloading never increases that approval.
+  route, changing accounts, or reloading never increases that approval. A named
+  Google `api_key_env` is exclusive: if it is empty or missing, dispatch refuses
+  rather than using a default key from another account.
   Lowering and restoring a ceiling may return only to the independently approved
   limit; every earlier spent, pending and unknown amount still counts.
   Funding revisions never reset use. Human revocation survives funding changes,
@@ -458,7 +460,8 @@ What it governs:
   analysis. With pools configured, for public work too: `claude_code` search
   needs a usable Claude subscription in the active pool (a receipt is
   recorded), `anthropic` search (per-search fees no grant bounds) and Gemini
-  video (no guarded adapter yet) are refused before sending.
+  video (video and audio tokens have no exact bound or rate, so even the google
+  spend adapter refuses them) are refused before sending.
 
 These are in-process guards, like the private-pool grants: they stop Ergo's
 own code paths. A shell or Python tool running as the same OS user is not
@@ -485,7 +488,8 @@ The model picker lists only what the chat may use: the active pool's models
 
 1. Deploy: the migrations (`0059_model_pools`, after main's
    `0058_agent_launch_intent`, then `0060_spend_envelopes` and
-   `0061_spend_envelope_families`, and `0062_explicit_funding_and_paid_latch`) add the tables; Google #406 adds `0063_google_engine_signatures` on top; with no `pools:` section
+   `0061_spend_envelope_families`, `0062_explicit_funding_and_paid_latch`,
+   and `0063_google_engine_signatures`) add the tables; with no `pools:` section
    and no rows, behavior is unchanged. `0061` links each issued grant to its
    owner's config envelope (a grant whose owner has none stops working).
    A config revision an owner gave up before the upgrade (under 0060, an
@@ -514,10 +518,8 @@ The model picker lists only what the chat may use: the active pool's models
    blocked for rollback, preserve a database backup with all ledgers, and do not
    resume before installing guard-capable code and reconciling consent/holds.
 5. Paid coding remains unsupported. Native CLI flags, the latch and this pause
-   are not certification of arbitrary subprocess/plugin egress. Google #406 must
-   be rebased with its signature migration renamed to 0063 after the core 0062;
-   its adapter must call the shared `MeteredGuard.check_transport` hook using
-   immutable non-secret identity before each attempt. No activation is authorized
+   are not certification of arbitrary subprocess/plugin egress. The Google
+   adapter checks its transport identity before each attempt. No activation is authorized
    by this implementation or its local test results.
 
 ## Example for boundcorp/ergo-bots

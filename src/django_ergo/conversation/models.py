@@ -17,6 +17,7 @@ class EngineType(models.TextChoices):
     CLAUDE = "claude", "Claude"
     OPENAI = "openai", "OpenAI"
     FIREWORKS = "fireworks", "Fireworks (private pool)"
+    GOOGLE = "google", "Google Gemini"
 
 
 class TransportType(models.TextChoices):
@@ -262,6 +263,10 @@ class MessageBlock(TimeStampedMixin):
     tool_use_id = models.CharField(max_length=255, null=True, blank=True)  # noqa: DJ001
     tool_name = models.CharField(max_length=255, null=True, blank=True)  # noqa: DJ001
     tool_input = models.JSONField(null=True, blank=True)
+    # Engine-specific data to send back unchanged, keyed by engine type, e.g.
+    # {"google": {"thought_signature": "..."}} on a Gemini tool call. Engines
+    # read only their own key.
+    provider_metadata = models.JSONField(null=True, blank=True)
 
     # Tool result fields
     tool_result_for = models.CharField(max_length=255, null=True, blank=True)  # noqa: DJ001

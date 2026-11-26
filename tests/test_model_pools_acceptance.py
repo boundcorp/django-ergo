@@ -1107,8 +1107,12 @@ def test_r13_one_migration_leaf_after_the_launch_journal():
     assert len(leaves) == 1  # later migrations chain after these, linearly
     envelopes = loader.disk_migrations[("django_ergo", "0060_spend_envelopes")]
     assert ("django_ergo", "0059_model_pools") in envelopes.dependencies
+
     migration = loader.disk_migrations[("django_ergo", "0059_model_pools")]
     assert ("django_ergo", "0058_agent_launch_intent") in migration.dependencies
+    after = loader.disk_migrations[("django_ergo", "0063_google_engine_signatures")]
+    assert ("django_ergo", "0062_explicit_funding_and_paid_latch") in after.dependencies
+    assert leaves == [("django_ergo", "0063_google_engine_signatures")]
 
 
 @pytest.mark.django_db(transaction=True)

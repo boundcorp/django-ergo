@@ -2643,6 +2643,107 @@ metered (API-billed) routes, provider on/off switches and inherited
 background work all select through `django_ergo.bots.pools`. Without a
 `pools:` section nothing changes. See [Model pools](model-pools.md).
 
+### Google Gemini models
+
+`type: google` runs Gemini models on the Gemini API
+(`generativelanguage.googleapis.com`, `v1beta` `generateContent`) with chats,
+tool loops (parallel calls included), structured calls, image and PDF input,
+and thinking. It needs no extra package. The key is read from the environment
+when a request is sent (`key_env`, also spelled `api_key_env`; it defaults to
+`GEMINI_API_KEY`, and `GOOGLE_API_KEY` is the fallback). The key is never
+stored in config, metadata or errors; a missing key fails the turn with an
+authentication error and sends nothing.
+
+```yaml
+providers:
+  google:
+    type: google
+    key_env: GEMINI_API_KEY
+    config: {reasoning_effort: medium} # none|minimal|low|medium|high -> thinking config
+    models:
+      - name: gemini-3.1-pro-preview
+        price:
+          input: 2.00
+          cached: 0.20
+          output: 12.00
+          long_context: {threshold: 200000, input: 4.00, cached: 0.40, output: 18.00}
+      - name: gemini-3-flash-preview
+        price: {input: 0.50, cached: 0.05, output: 3.00}
+      - name: gemini-2.5-flash
+        price: {input: 0.30, cached: 0.03, output: 2.50}
+```
+
+- **Prices are configuration, not facts.** `price` is the one exact schema
+  every metered route uses (see [Model pools](model-pools.md)): USD per
+  million tokens as exact decimals, `output` includes thinking tokens, `cached`
+  defaults to `input`, and `long_context` gives the whole request's absolute
+  rates once its prompt passes `threshold`. A metered Gemini route is only
+  listed when its model has a `price`; the built-in telemetry table
+  (`pricing.DEFAULT_PRICES`) only prices finished calls for the cost pages and
+  is never spend authority. Re-verify before relying on a number.
+- **Metered use** (pools configured) goes through the spend guard with the
+  Gemini adapter (`engines/google_spend.py`): every HTTP attempt (a retry
+  included, there are no hidden ones) is bounded and reserved first. The input
+  bound is the JSON size of `contents`, `systemInstruction`, `tools` and the
+  generation options; `generationConfig.maxOutputTokens` is set or clamped to
+  the pool's ceiling (thinking counts against it); the worst case is reserved
+  at the dearest rate that can apply. Usage comes from `usageMetadata`: cached
+  prompt tokens are split out, `thoughtsTokenCount` is output, and a missing,
+  negative, inconsistent or non-text count keeps the reservation (cost
+  `unknown`, never a priced zero). Refused before sending: image, PDF, audio,
+  video and file parts, server-side tools (`googleSearch`, `codeExecution`,
+  `urlContext`, ...), `cachedContent`, several candidates, other response
+  modalities and options it can't bound, and a prompt that could pass 200,000
+  tokens on a model whose price has no `long_context`. Gemini video analysis in
+  the attachments plugin stays refused while pools are configured.
+- **Prices checked 2026-11-25** (Standard paid tier, text/image/video, USD per
+  1M tokens; the page shows no "last updated" date). Source:
+  <https://aistudio.google.com/docs/pricing> (where
+  `ai.google.dev/gemini-api/docs/pricing` redirects). Status:
+  <https://aistudio.google.com/docs/models> and `/docs/deprecations`.
+
+  | Model | Input | Output | Cached input | Notes |
+  | --- | --- | --- | --- | --- |
+  | `gemini-3.1-pro-preview` | 2.00 (4.00 over 200k) | 12.00 (18.00 over 200k) | 0.20 (0.40 over 200k) | long-context tier |
+  | `gemini-3-flash-preview` | 0.50 | 3.00 | 0.05 | preview |
+  | `gemini-3.1-flash-lite` | 0.25 | 1.50 | 0.025 | |
+  | `gemini-3.5-flash-lite` | 0.30 | 2.50 | 0.03 | |
+  | `gemini-2.5-pro` | 1.25 (2.50 over 200k) | 10.00 (15.00 over 200k) | 0.125 (0.25 over 200k) | deprecated: from 2026-12-01 requests route to `gemini-3.8-flash` and bill at its rates |
+  | `gemini-2.5-flash` | 0.30 | 2.50 | 0.03 | deprecated: from 2026-12-01 routes to `gemini-3.5-flash-lite` |
+  | `gemini-2.5-flash-lite` | 0.10 | 0.40 | 0.01 | |
+  | `gemini-4-neon` | 3.00 | 15.00 | 0.15 | |
+  | `gemini-4-hydrogen` | 1.50 | 7.50 | 0.075 | |
+
+  Not in the built-in table: `gemini-4-carbon`/`gemini-4-argon` (input 2.00 and
+  output 10.00 through 2026-11-30, double from 2026-12-01) and
+  `gemini-3.8-flash`/`gemini-3.6-flash` (0.75 / 3.75 through 2026-12-31, double
+  from 2027-01-01): a table row has one price, so put the current one in
+  `price:` yourself and update it on the date. Audio input is priced higher
+  than the text rows above and isn't modeled. `gemini-3-pro-preview` is listed
+  as shut down (2026-03-09, replaced by `gemini-3.1-pro-preview`), so it has no
+  price here; avoid it.
+- **Thought signatures.** Gemini 3 models return a `thoughtSignature` on
+  function-call parts, and the next request must send it back unchanged. It is
+  stored on the tool-use block (`MessageBlock.provider_metadata`, e.g.
+  `{"google": {"thought_signature": "..."}}`) and replayed from there. A call
+  with no stored signature (history from another engine) gets Google's
+  documented dummy value on Gemini 3 models. Other engines never read the field.
+- **Thinking.** Chat effort (or `reasoning_effort`) maps to `thinkingLevel` on
+  Gemini 3 and `thinkingBudget` on 2.5, clamped to what each model accepts
+  (2.5 Pro and Gemini 3 can't turn thinking off). `thinking_level`,
+  `thinking_budget` and `include_thoughts` set them directly. Thinking tokens
+  count as output and toward `max_tokens`.
+- **Other config:** `max_tokens`, `temperature`, `timeout` (seconds), `stream:
+  true` (uses `streamGenerateContent` and merges the chunks).
+- **Errors** are typed so routing can tell them apart: `AuthenticationError`
+  (missing or rejected key), `QuotaExhaustedError` (429 for a daily, billing or
+  spend quota: move to another model), `RateLimitError` (429 per minute, with
+  `retry_after`), `OverloadedError` and `InternalServerError` (retried by
+  structured calls), `BadRequestError`. A safety block ends the turn as a
+  refusal, so the chat can offer it on another model.
+- Google is never a coding-agent provider here; pools and tiers decide where
+  Gemini may be used.
+
 ## Private inference
 
 A **private pool** is a set of API-billed models that only the bots it

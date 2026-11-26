@@ -137,7 +137,7 @@ class SessionOut(Schema):
     busy: bool = False  # a turn is running in it right now
     unread: bool = False  # a reply came after its owner last opened it
     attention: bool = False  # the latest turn waits on the user (approval, question, failure)
-    engine_type: str = ""  # openai or claude: the engine its latest turn ran on
+    engine_type: str = ""  # openai, claude or google: the engine its latest turn ran on
     model: str = ""  # the provider/model picked for this chat ("" = the bot's default)
     effort: str = ""  # reasoning effort picked for this chat ("" = the default, medium)
     # Set when a bot resolved the thread (ergo_thread_resolve): who, and a one-line summary.

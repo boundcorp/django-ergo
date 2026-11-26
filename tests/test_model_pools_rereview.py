@@ -631,7 +631,7 @@ POOL_TABLES = {
     "django_ergo_modelpoolpreference",
     "django_ergo_routedecision",
 }
-LEAF = ("django_ergo", "0062_explicit_funding_and_paid_latch")
+LEAF = ("django_ergo", "0063_google_engine_signatures")
 
 
 @pytest.mark.django_db(transaction=True)
@@ -653,6 +653,7 @@ def test_rr_migrations_upgrade_from_main_0058_and_reverse():
             "0060_spend_envelopes",
             "0061_spend_envelope_families",
             "0062_explicit_funding_and_paid_latch",
+            "0063_google_engine_signatures",
         ]
         executor.migrate([LEAF])
         assert present() == POOL_TABLES

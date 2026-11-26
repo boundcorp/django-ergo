@@ -242,6 +242,10 @@ def test_pool_defaults_follow_billing_and_metered_routes_need_listed_models():
 
 
 def test_google_provider_type_routes_once_an_engine_is_registered(monkeypatch):
+    from django_ergo.conversation import engines
+
+    # (the shipped engine registers itself; take it out to see the gate)
+    monkeypatch.delitem(engines.ENGINE_REGISTRY, ("google", "api"))
     text = POOLS.replace(
         "  xai-oauth:",
         "  gemini:\n    type: google\n    api_key_env: TEST_POOL_OPENAI_KEY\n"
@@ -251,9 +255,7 @@ def test_google_provider_type_routes_once_an_engine_is_registered(monkeypatch):
     snap = pools.Snapshot(providers=providers, pools=[], auto_rollover=False)
     privacy = pools.Privacy()
     problem = pools.route_problem(snap, privacy, pools.CHAT, "gemini", "gemini-3-pro")
-    assert problem[0] == pools.UNAVAILABLE  # no ("google", "api") engine here yet
-    from django_ergo.conversation import engines
-
+    assert problem[0] == pools.UNAVAILABLE  # no ("google", "api") engine here
     # Registered without the spend adapter contract: still refused (metered).
     monkeypatch.setitem(
         engines.ENGINE_REGISTRY, ("google", "api"), "tests.test_model_pools.NoAdapter"

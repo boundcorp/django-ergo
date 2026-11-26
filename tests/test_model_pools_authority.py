@@ -401,6 +401,26 @@ def test_an_issued_grant_without_the_owners_envelope_authorizes_nothing():
         _hold(orphan, friend, "0.01", bot.providers)
 
 
+@pytest.mark.django_db
+def test_orphaned_issued_history_cannot_mint_fresh_config_funds():
+    lee = User.objects.create(username="lee")
+    friend = User.objects.create(username="friend")
+    orphan = SpendGrant.objects.create(
+        pool="old-pool",
+        owner=lee,
+        grantee=friend,
+        routes=["old-provider/model"],
+        budget_usd=Decimal(5),
+        max_output_tokens=100,
+        valid_from=timezone.now(),
+        expires_at=timezone.now() + dt.timedelta(days=1),
+    )
+    assert orphan.envelope.parent_id is None
+    providers = parse_providers(POOLS)
+    assert pools.snapshot(providers, lee.pk).get("paid").grant is None
+    assert not SpendEnvelope.objects.filter(source="config").exists()
+
+
 @pytest.mark.django_db(transaction=True)
 def test_one_cap_for_the_owner_and_every_grantee_under_concurrency():
     """lee $1; two grantees with $1 grants each; six $0.40 attempts at once
