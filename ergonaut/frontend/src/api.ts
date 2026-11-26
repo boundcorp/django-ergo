@@ -219,18 +219,58 @@ export type GrantIssue = {
   routes?: string[]
 }
 
+export type FundingApproval = {
+  budget_usd: string
+  expires_at: string
+  accounts: string[]
+  note: string
+  budget_period?: 'cumulative' | 'calendar_month_utc'
+  version?: number
+}
+
+export type MonthlyProviderBudget = {
+  family: string
+  owner_id: string
+  actor_id: string | null
+  timezone: 'UTC'
+  month: string
+  version: number
+  monthly_usd: string | null
+  enabled: boolean
+  spent_usd: string
+  reserved_usd: string
+  valid_from: string | null
+  expires_at: string | null
+  history_problem: string
+  accounts: { id: number; identity: string; account_label: string; actor_id: string; assertion: string }[]
+}
+
+export type MonthlyConsentWrite = {
+  version: number
+  monthly_usd: string
+  enabled: boolean
+  valid_from: string
+  expires_at: string
+  timezone: 'UTC'
+  note: string
+}
+
 export type PoolFunding = {
+  version?: number
+  timezone?: string
+  budget_period?: string
   envelope_id: string | null
   pool: string
   owner: string
   pending: boolean
   configured_ceiling_usd: string | null
   configured_expires_at: string | null
-  accounts: { identity: string; label: string }[]
+  accounts: { identity: string; label: string; provider_type?: string }[]
   spent_usd: string
   reserved_usd: string
   approval: {
     id: number
+    budget_period?: string
     budget_usd: string
     valid_from: string
     expires_at: string
@@ -1233,8 +1273,19 @@ export const api = {
     request<BotModels>('GET', `/bots/${bot}/models${session ? `?session=${encodeURIComponent(session)}` : ''}`),
   pools: () => request<PoolSettings>('GET', '/pools'),
   poolFunding: (pool: string) => request<PoolFunding>('GET', `/pools/${encodeURIComponent(pool)}/funding`),
-  approveFunding: (pool: string, body: { budget_usd: string; expires_at: string; accounts: string[]; note: string }) =>
+  approveFunding: (pool: string, body: FundingApproval) =>
     request<PoolSettings>('POST', `/pools/${encodeURIComponent(pool)}/funding`, body),
+  monthlyProviderBudget: (family: string) =>
+    request<MonthlyProviderBudget>('GET', `/pools/monthly/${encodeURIComponent(family)}`),
+  setMonthlyProviderConsent: (family: string, body: MonthlyConsentWrite) =>
+    request<MonthlyProviderBudget>('PUT', `/pools/monthly/${encodeURIComponent(family)}`, body),
+  assertMonthlyMapping: (body: {
+    identity: string
+    owner: string
+    account_label: string
+    assertion: string
+    attempt_ids: string[]
+  }) => request<MonthlyProviderBudget>('POST', '/pools/monthly-mapping', body),
   poolEnvelopes: (pool: string) =>
     request<PoolEnvelopeCandidates>('GET', `/pools/${encodeURIComponent(pool)}/envelope`),
   linkPoolEnvelope: (pool: string, body: { envelope?: string; fund?: boolean; restore?: boolean; note: string }) =>

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import type {
   ChatPools,
+  FundingApproval,
   PoolEnvelopeCandidates,
   PoolFunding,
   PoolGrant,
@@ -10,6 +11,7 @@ import type {
 } from '../api'
 import { api } from '../api'
 import { fromLocalInput, toLocalInput } from '../localTime'
+import { MonthlyFunding } from './MonthlyFunding'
 
 // Model pools (django_ergo.bots.pools, docs/model-pools.md): the Routing page's Pools section,
 // the chat's pool picker and the refusal a chat stops on. Every list here comes from the same
@@ -207,9 +209,10 @@ export function FundingForm({
 }: {
   details: PoolFunding
   busy: boolean
-  onApprove: (body: { budget_usd: string; expires_at: string; accounts: string[]; note: string }) => Promise<void>
+  onApprove: (body: FundingApproval) => Promise<void>
 }) {
   const [amount, setAmount] = useState('')
+  const [period, setPeriod] = useState<'cumulative' | 'calendar_month_utc'>('cumulative')
   const [expiry, setExpiry] = useState('')
   const [accounts, setAccounts] = useState<string[]>([])
   const [note, setNote] = useState('')
@@ -221,7 +224,14 @@ export function FundingForm({
         e.preventDefault()
         try {
           setError('')
-          await onApprove({ budget_usd: amount.trim(), expires_at: fromLocalInput(expiry), accounts, note })
+          await onApprove({
+            budget_usd: amount.trim(),
+            expires_at: fromLocalInput(expiry),
+            accounts,
+            note,
+            budget_period: period,
+            version: details.version ?? 0,
+          })
           setAmount('')
           setExpiry('')
           setAccounts([])
@@ -239,17 +249,30 @@ export function FundingForm({
       </p>
       {details.approval && (
         <p className="text-xs">
-          Approved cumulative cap {money(details.approval.budget_usd)} until{' '}
-          {new Date(details.approval.expires_at).toLocaleString()}.
+          Approved {details.approval.budget_period === 'calendar_month_utc' ? 'recurring UTC monthly' : 'cumulative'}{' '}
+          cap {money(details.approval.budget_usd)} until {new Date(details.approval.expires_at).toLocaleString()}.
         </p>
       )}
       <p className="text-xs text-muted">
         Approve only the amount, expiry and accounts you authorize. Changing this approval keeps all prior use and
         holds.
       </p>
+      <label className="text-xs">
+        Funding period
+        <select aria-label="Funding period" value={period} onChange={e => setPeriod(e.target.value as typeof period)}>
+          <option value="cumulative">Cumulative lifetime cap</option>
+          <option value="calendar_month_utc">Recurring calendar month (UTC)</option>
+        </select>
+      </label>
+      {period === 'calendar_month_utc' && (
+        <p className="text-xs">
+          Explicit recurring approval renews each UTC calendar month until expiry. Each provider also requires admin
+          account mapping and independent recurring consent; prior unresolved holds carry forward.
+        </p>
+      )}
       <div className="flex flex-wrap gap-2">
         <label className="flex flex-col text-xs">
-          Approve cumulative USD cap
+          {period === 'cumulative' ? 'Approve cumulative USD cap' : 'Approve recurring USD monthly cap'}
           <input
             aria-label="Approve cumulative USD cap"
             className="rounded-control border border-stroke bg-transparent px-2 py-1"
@@ -361,6 +384,7 @@ function FundingControls({
       {details && (
         <FundingForm details={details} busy={busy} onApprove={body => mutate(() => api.approveFunding(name, body))} />
       )}
+      {details && <MonthlyFunding details={details} admin={admin} />}
       {admin && candidates && (
         <div className="flex flex-col gap-2 text-xs">
           <p className="font-semibold">Admin: reconcile funding history</p>

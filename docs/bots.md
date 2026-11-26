@@ -3013,3 +3013,11 @@ history and status unchanged.
 ## Review briefs
 
 Enable `plugins: [{name: dev}]` for reusable review instructions. See [Review briefs](reviews.md) for kinds, orchestration, overrides and the CLI.
+Recurring metered funding uses an explicit `calendar_month_utc` approval, separate
+from providers.yaml ceilings and independent provider-wide recurring consent.
+Each vendor is capped at $100 per UTC calendar month across aliases and all
+bots/threads/models/keys; outstanding holds carry forward and cumulative issued
+grants retain their lifetime limits. Config alone never funds this mode. See
+[model-pools.md](model-pools.md#recurring-provider-budgets-utc-calendar-months)
+for the secondary API schema and authenticated account/consent workflow. Existing
+personal privacy restrictions and paid coding refusals still apply.

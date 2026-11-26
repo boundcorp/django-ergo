@@ -20,7 +20,7 @@ from django_ergo.bots import pools
 from django_ergo.conversation.inference_policy import PolicyError
 from ninja import Router, Schema
 from ninja.errors import HttpError
-from pydantic import ConfigDict, StrictBool, StrictStr
+from pydantic import ConfigDict, StrictBool, StrictInt, StrictStr
 
 from ergonaut.api.auth import user_auth
 from ergonaut.api.bots import get_bot, get_session, registry, session_out
@@ -66,6 +66,30 @@ class FundingIn(Schema):
     valid_from: datetime | None = None
     accounts: list[str]
     note: str = ""
+    budget_period: str = "cumulative"
+    version: int | None = None
+
+
+class MonthlyMappingIn(Schema):
+    model_config = ConfigDict(extra="forbid")
+
+    identity: str
+    owner: str
+    account_label: str
+    assertion: str
+    attempt_ids: list[str] = []
+
+
+class MonthlyConsentIn(Schema):
+    model_config = ConfigDict(extra="forbid")
+
+    version: StrictInt
+    monthly_usd: str
+    enabled: StrictBool
+    valid_from: datetime
+    expires_at: datetime
+    timezone: str
+    note: str
 
 
 class PaidPauseIn(Schema):
@@ -147,7 +171,7 @@ def pools_settings(request):
     return _settings(request)
 
 
-def _funding_view(name: str):
+def _funding_view(name: str, actor_id=None):
     from django_ergo.conversation.models import SpendEnvelope
     from django_ergo.conversation.spend_guard import family_spent_and_reserved
 
@@ -166,12 +190,16 @@ def _funding_view(name: str):
         choices.append(
             {
                 "identity": pools.transport_identity(provider, model.name),
+                "provider_type": provider.type,
                 "label": f"{ref} · {provider.account or provider.api_key_env or 'SDK default account'}",
             }
         )
     return {
         "pool": name,
         "owner": config.owner,
+        "timezone": "UTC",
+        "version": approval.pk if approval else 0,
+        "budget_period": approval.budget_period if approval else "cumulative",
         "pending": approval is None,
         "envelope_id": str(envelope.pk) if envelope else None,
         "configured_ceiling_usd": str(config.budget_usd) if config.budget_usd is not None else None,
@@ -181,6 +209,7 @@ def _funding_view(name: str):
         "reserved_usd": str(held),
         "approval": {
             "id": approval.pk,
+            "budget_period": approval.budget_period,
             "budget_usd": str(approval.budget_usd),
             "valid_from": approval.valid_from.isoformat(),
             "expires_at": approval.expires_at.isoformat(),
@@ -195,7 +224,7 @@ def _funding_view(name: str):
 @router.get("/pools/{name}/funding")
 def funding_details(request, name: str):
     _manager(request, name)
-    return _apply(_funding_view, name)
+    return _apply(_funding_view, name, request.auth.pk)
 
 
 @router.post("/pools/{name}/funding")
@@ -211,8 +240,75 @@ def approve_funding(request, name: str, data: FundingIn):
         valid_from=data.valid_from,
         accounts=data.accounts,
         note=data.note,
+        budget_period=data.budget_period,
+        version=data.version,
     )
     return _settings(request)
+
+
+@router.post("/pools/monthly-mapping")
+def monthly_mapping(request, data: MonthlyMappingIn):
+    """Explicit admin assertion about configured metadata; no credential reads."""
+    from django_ergo.conversation import monthly_budgets as monthly
+
+    _admin(request)
+    providers = pools.fresh_providers(registry().providers)
+    identities = set()
+    for pool in providers.pools.pools:
+        identities.update(pools.funding_accounts(providers, pool))
+    if data.identity not in identities:
+        raise HttpError(400, "Choose a currently configured metered account identity")
+    owner = get_user_model().objects.filter(username=data.owner, is_active=True).first()
+    if owner is None:
+        raise HttpError(400, "Choose an active account owner")
+    mapping = _apply(
+        monthly.assert_mapping,
+        actor_id=request.auth.pk,
+        owner_id=owner.pk,
+        identity=data.identity,
+        account_label=data.account_label,
+        assertion=data.assertion,
+        attempt_ids=data.attempt_ids,
+    )
+    return monthly.inspect_family(mapping.family_id)
+
+
+def _family_manager(request, family):
+    from django_ergo.conversation.models import ProviderBudgetFamily
+
+    row = ProviderBudgetFamily.objects.filter(pk=family).first()
+    if row is None:
+        raise HttpError(404, "Provider family requires explicit admin mapping")
+    if not request.auth.is_superuser and row.owner_id != request.auth.pk:
+        raise HttpError(403, "Only the provider family owner or admin may inspect recurring terms")
+
+
+@router.get("/pools/monthly/{family}")
+def monthly_details(request, family: str):
+    from django_ergo.conversation import monthly_budgets as monthly
+
+    _family_manager(request, family)
+    return monthly.inspect_family(family)
+
+
+@router.put("/pools/monthly/{family}")
+def monthly_consent(request, family: str, data: MonthlyConsentIn):
+    from django_ergo.conversation import monthly_budgets as monthly
+
+    _family_manager(request, family)
+    _apply(
+        monthly.set_consent,
+        actor_id=request.auth.pk,
+        family_id=family,
+        version=data.version,
+        monthly_usd=data.monthly_usd,
+        enabled=data.enabled,
+        valid_from=data.valid_from,
+        expires_at=data.expires_at,
+        timezone_name=data.timezone,
+        note=data.note,
+    )
+    return monthly.inspect_family(family)
 
 
 @router.post("/pools/paid-pause")
