@@ -6,7 +6,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('django_ergo', '0059_model_pools'),
+        ('django_ergo', '0061_spend_envelope_families'),
     ]
 
     operations = [
