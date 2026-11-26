@@ -44,6 +44,7 @@ from django_ergo.conversation.engines.google_errors import APIConnectionError
 from django_ergo.conversation.engines.google_errors import APITimeoutError
 from django_ergo.conversation.engines.google_errors import AuthenticationError
 from django_ergo.conversation.engines.google_errors import GoogleAPIError
+from django_ergo.conversation.engines.google_spend import GoogleAdapter
 from django_ergo.conversation.engines.openai_api import OpenAIAPIEngine
 from django_ergo.conversation.inference_policy import assert_public_endpoint
 from django_ergo.conversation.messages import add_message
@@ -87,6 +88,9 @@ class GoogleAPIEngine(OpenAIAPIEngine):
     supports_request_limits = True
     # History carries each tool call's stored thoughtSignature back to Gemini.
     replay_signatures = True
+    # A metered pool route sends through ``spend_guard`` with this adapter
+    # (google_spend): request bound from the wire body, strict usageMetadata.
+    spend_adapter = GoogleAdapter()
 
     def __init__(self, config: dict):
         config = dict(config or {})
@@ -173,10 +177,26 @@ class GoogleAPIEngine(OpenAIAPIEngine):
                 "maxOutputTokens"
             ]
             timeout = options["timeout"]
-            data = await with_deadline(limits, self._send(body, timeout))
+            data = await with_deadline(limits, self._attempt(body, timeout))
         else:
-            data = await self._send(body, timeout)
+            data = await self._attempt(body, timeout)
         return wire.parse_response(data)
+
+    async def _attempt(self, body: dict, timeout: float) -> dict:  # noqa: ASYNC109
+        """ONE HTTP attempt, through the spend guard on a metered pool route:
+        the guard bounds the request and reserves its worst-case cost before
+        anything is sent, clamping ``maxOutputTokens`` in ``body``, and prices
+        (or keeps the hold on) the response. A retry is another call here, so
+        it gets its own reservation."""
+        guard = getattr(self, "spend_guard", None)
+        if guard is None:
+            return await self._send(body, timeout)
+        body.setdefault("generationConfig", {})  # shared with the guard's view
+        return await guard.call(
+            {"model": self.model, **body},
+            GoogleAdapter(getattr(guard, "price", None)),
+            lambda: self._send(body, timeout),
+        )
 
     async def _send(self, body: dict, timeout: float) -> dict:  # noqa: ASYNC109
         key = self._key()

@@ -2662,18 +2662,40 @@ providers:
     config: {reasoning_effort: medium} # none|minimal|low|medium|high -> thinking config
     models:
       - name: gemini-3.1-pro-preview
-        price: {input: 2.00, cached: 0.20, output: 12.00, long_context: {threshold: 200000, input: 2, output: 1.5}}
+        price:
+          input: 2.00
+          cached: 0.20
+          output: 12.00
+          long_context: {threshold: 200000, input: 4.00, cached: 0.40, output: 18.00}
       - name: gemini-3-flash-preview
         price: {input: 0.50, cached: 0.05, output: 3.00}
       - name: gemini-2.5-flash
         price: {input: 0.30, cached: 0.03, output: 2.50}
 ```
 
-- **Prices are configuration, not facts.** `price` is USD per million tokens
-  (`output` includes thinking tokens; `cached` defaults to `input`;
-  `long_context` multiplies a request's rates once its prompt passes
-  `threshold`). `Providers.price("google/gemini-2.5-flash")` returns it for a
-  budget that estimates worst-case cost. Re-verify before relying on a number.
+- **Prices are configuration, not facts.** `price` is the one exact schema
+  every metered route uses (see [Model pools](model-pools.md)): USD per
+  million tokens as exact decimals, `output` includes thinking tokens, `cached`
+  defaults to `input`, and `long_context` gives the whole request's absolute
+  rates once its prompt passes `threshold`. A metered Gemini route is only
+  listed when its model has a `price`; the built-in telemetry table
+  (`pricing.DEFAULT_PRICES`) only prices finished calls for the cost pages and
+  is never spend authority. Re-verify before relying on a number.
+- **Metered use** (pools configured) goes through the spend guard with the
+  Gemini adapter (`engines/google_spend.py`): every HTTP attempt (a retry
+  included, there are no hidden ones) is bounded and reserved first. The input
+  bound is the JSON size of `contents`, `systemInstruction`, `tools` and the
+  generation options; `generationConfig.maxOutputTokens` is set or clamped to
+  the pool's ceiling (thinking counts against it); the worst case is reserved
+  at the dearest rate that can apply. Usage comes from `usageMetadata`: cached
+  prompt tokens are split out, `thoughtsTokenCount` is output, and a missing,
+  negative, inconsistent or non-text count keeps the reservation (cost
+  `unknown`, never a priced zero). Refused before sending: image, PDF, audio,
+  video and file parts, server-side tools (`googleSearch`, `codeExecution`,
+  `urlContext`, ...), `cachedContent`, several candidates, other response
+  modalities and options it can't bound, and a prompt that could pass 200,000
+  tokens on a model whose price has no `long_context`. Gemini video analysis in
+  the attachments plugin stays refused while pools are configured.
 - **Prices checked 2026-11-25** (Standard paid tier, text/image/video, USD per
   1M tokens; the page shows no "last updated" date). Source:
   <https://aistudio.google.com/docs/pricing> (where
@@ -2706,13 +2728,6 @@ providers:
   `{"google": {"thought_signature": "..."}}`) and replayed from there. A call
   with no stored signature (history from another engine) gets Google's
   documented dummy value on Gemini 3 models. Other engines never read the field.
-- **Cost of a finished call.** `django_ergo.pricing.priced_usage(usage, model,
-  price=None)` returns the token usage and the USD cost of one request
-  (`cost_usd` is None for an unpriced model). Pass `price=` (for example
-  `Providers.price(ref)`) to price from YAML; otherwise the built-in table
-  (`pricing.DEFAULT_PRICES`, `DJANGO_ERGO["MODEL_PRICES"]`) is used. It is a pure
-  function: nothing records its result yet; the spend ledger on the pools branch
-  is meant to call it.
 - **Thinking.** Chat effort (or `reasoning_effort`) maps to `thinkingLevel` on
   Gemini 3 and `thinkingBudget` on 2.5, clamped to what each model accepts
   (2.5 Pro and Gemini 3 can't turn thinking off). `thinking_level`,

@@ -6,7 +6,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('django_ergo', '0057_merge_0056_admission_drain_0056_live_watch'),
+        ('django_ergo', '0059_model_pools'),
     ]
 
     operations = [

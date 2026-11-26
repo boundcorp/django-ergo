@@ -458,7 +458,8 @@ What it governs:
   analysis. With pools configured, for public work too: `claude_code` search
   needs a usable Claude subscription in the active pool (a receipt is
   recorded), `anthropic` search (per-search fees no grant bounds) and Gemini
-  video (no guarded adapter yet) are refused before sending.
+  video (video and audio tokens have no exact bound or rate, so even the google
+  spend adapter refuses them) are refused before sending.
 
 These are in-process guards, like the private-pool grants: they stop Ergo's
 own code paths. A shell or Python tool running as the same OS user is not

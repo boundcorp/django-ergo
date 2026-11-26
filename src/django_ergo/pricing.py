@@ -302,54 +302,6 @@ def call_cost(call) -> float | None:
     return None if parts is None else sum(parts.values())
 
 
-USAGE_FIELDS = (
-    "input_tokens",
-    "output_tokens",
-    "reasoning_tokens",
-    "cache_creation_input_tokens",
-    "cache_read_input_tokens",
-)
-
-
-def priced_usage(usage, model: str = "", *, price: Price | None = None) -> dict:
-    """Token usage and USD cost of ONE finished model request.
-
-    ``usage`` is a mapping or an object with Ergo's token fields (a Gemini
-    ``Reply.usage``, a Completion, a SessionMessage row). Pass ``price`` (for
-    example ``Providers.price("google/gemini-2.5-flash")``, which honours a
-    YAML ``price:``) to use it; otherwise ``model`` is looked up in the built-in
-    table (``DEFAULT_PRICES`` and ``DJANGO_ERGO["MODEL_PRICES"]``). Returns the
-    token fields (None counts as 0; ``reasoning_tokens`` is part of
-    ``output_tokens`` and is billed as output), ``cost_parts`` (input,
-    cache_write, cache_read, output), ``cost_usd`` and ``price_source``
-    (``"given"`` or ``"table"``). An unpriced model gives ``cost_usd`` None, never 0.
-
-    This only computes; it writes nothing. A spend ledger records its result.
-    """
-
-    def field(name: str) -> int:
-        value = usage.get(name) if isinstance(usage, dict) else getattr(usage, name, 0)
-        return int(value or 0)
-
-    tokens = {name: field(name) for name in USAGE_FIELDS}
-    source = "given" if price is not None else "table"
-    price = price or price_for(model)
-    if price is None:
-        return {**tokens, "cost_parts": None, "cost_usd": None, "price_source": None}
-    parts = price.parts(
-        tokens["input_tokens"],
-        tokens["output_tokens"],
-        tokens["cache_creation_input_tokens"],
-        tokens["cache_read_input_tokens"],
-    )
-    return {
-        **tokens,
-        "cost_parts": {k: round(v, 8) for k, v in parts.items()},
-        "cost_usd": round(sum(parts.values()), 8),
-        "price_source": source,
-    }
-
-
 def add_request_cost(call, model: str, usage) -> None:
     """Price one model request and add it to a StructuredCall (``cost_usd`` and
     ``metadata["cost_parts"]``). ``usage`` has Ergo's token fields (a Completion or a

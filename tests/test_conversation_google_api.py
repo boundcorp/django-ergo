@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+from decimal import Decimal
 
 import httpx
 import pytest
@@ -35,7 +36,6 @@ from django_ergo.conversation.models import EngineType
 from django_ergo.conversation.models import MessageBlock
 from django_ergo.conversation.models import SessionStatus
 from django_ergo.pricing import price_for
-from django_ergo.pricing import priced_usage
 
 User = get_user_model()
 KEY = "test-gemini-key-123"
@@ -745,10 +745,14 @@ def test_google_provider_parses_with_prices(monkeypatch):
         "gemini-2.5-flash",
         "GEMINI_API_KEY",
     )
-    price = providers.price("google/gemini-2.5-flash")
-    assert (price.input, price.output, price.cache_read) == (0.30, 2.50, 0.03)
-    # unlisted price falls back to the built-in table
-    assert providers.price("google/gemini-2.5-pro").input == 1.25
+    price = providers.find("google/gemini-2.5-flash")[1].price
+    assert (price.input, price.cached, price.output) == (
+        Decimal("0.30"),
+        Decimal("0.03"),
+        Decimal("2.50"),
+    )
+    # an unlisted price stays unlisted: the telemetry table is no fallback
+    assert providers.find("google/gemini-2.5-pro")[1].price is None
 
 
 def test_google_provider_defaults_key_env_and_rejects_cli():
@@ -938,57 +942,8 @@ def test_google_is_an_engine_type():
     assert field.clean("google", None) == "google"  # the choices accept it
 
 
-# -- finished-call usage and cost ----------------------------------------------------------
-
-
-def test_priced_usage_for_a_finished_call():
-    usage = {
-        "input_tokens": 60,
-        "output_tokens": 40,
-        "reasoning_tokens": 30,
-        "cache_read_input_tokens": 40,
-        "cache_creation_input_tokens": None,
-    }
-    out = priced_usage(usage, "gemini-2.5-flash")
-    assert out["input_tokens"] == 60
-    assert out["reasoning_tokens"] == 30  # part of output_tokens, billed once
-    assert out["price_source"] == "table"
-    expected = (60 * 0.30 + 40 * 0.03 + 40 * 2.50) / 1e6
-    assert out["cost_usd"] == pytest.approx(expected)
-    assert out["cost_parts"]["output"] == pytest.approx(40 * 2.50 / 1e6)
-
-
-def test_priced_usage_takes_a_yaml_price_and_long_context():
-    providers = parse_providers(PROVIDERS)
-    given = providers.price("google/gemini-2.5-flash")
-    out = priced_usage({"input_tokens": 1_000_000}, "ignored", price=given)
-    assert out["price_source"] == "given"
-    assert out["cost_usd"] == pytest.approx(0.30)
-    long = priced_usage({"input_tokens": 250_000}, "gemini-3.1-pro-preview")
-    assert long["cost_usd"] == pytest.approx(250_000 * 2.00 * 2 / 1e6)
-
-
-def test_priced_usage_of_an_unpriced_model_is_none_not_zero():
-    out = priced_usage({"input_tokens": 5, "output_tokens": 5}, "gemini-3-pro-preview")
-    assert out["cost_usd"] is None
-    assert out["input_tokens"] == 5
-
-
-def test_priced_usage_reads_a_reply_from_the_wire():
-    reply = wire.parse_response(
-        candidate(
-            [{"text": "x"}],
-            usage={
-                "promptTokenCount": 100,
-                "cachedContentTokenCount": 40,
-                "candidatesTokenCount": 10,
-                "thoughtsTokenCount": 30,
-            },
-        )
-    )
-    out = priced_usage(reply.usage, "gemini-2.5-flash")
-    assert (out["input_tokens"], out["output_tokens"]) == (60, 40)
-    assert out["cost_usd"] == pytest.approx((60 * 0.30 + 40 * 0.03 + 40 * 2.5) / 1e6)
+# -- telemetry table ----------------------------------------------------------------------
+# (cost accounting of finished calls only; never spend authority)
 
 
 def test_price_rows_match_the_pricing_page_read_on_2026_11_25():

@@ -419,8 +419,10 @@ class AttachmentsPlugin(BotPlugin):
                 f"{privacy.label()} doesn't allow for this chat."
             )
         if not ctx.bot.providers.pools.legacy:
-            # The Gemini video call is metered and has no spend-guard adapter
-            # yet, so with pools it never sends outside a pool grant.
+            # The Gemini video call is metered, uploads through the Files API and
+            # bills video/audio tokens, which the google spend adapter refuses
+            # (non-text modalities have no exact bound or rate), so with pools
+            # it never sends.
             return (
                 f"Watching {row.filename} would send it to Gemini outside the chat's "
                 "pool and its spend grant, so it isn't available while pools are "
