@@ -228,6 +228,7 @@ class GoogleAPIEngine(OpenAIAPIEngine):
         from django_ergo.conversation.transport_identity import identity
         from django_ergo.conversation.transport_identity import with_endpoint
 
+        guard.check_transport(self._transport_identity)
         # The shared identity names the default endpoint with its API version;
         # an explicitly configured base_url is named as given.
         endpoint = self.base_url

@@ -199,3 +199,23 @@ def test_routed_selected_key_sends(tmp_path, monkeypatch):
     async_to_sync(engine.complete)(MESSAGES)
     assert len(requests) == 1
     assert requests[0].headers["x-goog-api-key"] == "fake-gemini-key"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_original_identity_cannot_be_laundered_by_changing_config(
+    tmp_path, monkeypatch
+):
+    bot, _, session, _, _, requests = _built(tmp_path, monkeypatch)
+    decision = pools.select_route(bot, session, ref="gemini/gemini-2.5-pro")
+    engine = google_api.GoogleAPIEngine(
+        {
+            "model": "gemini-2.5-pro",
+            "api_key_env": "OTHER_GEMINI_KEY",
+            "_pool_account": bot.providers.find("gemini/gemini-2.5-pro")[0].account,
+        }
+    )
+    engine.api_key_env = "TEST_GEMINI_KEY"
+    engine.spend_guard = decision.guard(bot, session)
+    with pytest.raises(spend_guard.SpendDenied, match="transport/account"):
+        async_to_sync(engine.complete)(MESSAGES)
+    assert requests == []
