@@ -58,3 +58,10 @@ describe('document Markdown', () => {
     expect(html).toContain('href="https://example.com" target="_blank" rel="noreferrer"')
   })
 })
+
+test('chat adapter retains highlighted code and raw HTML as text', () => {
+  const html = renderToStaticMarkup(createElement(Markdown, { text: '```js\nconst value = 1\n```\n\n<board>' }))
+  expect(html).toContain('hljs-view')
+  expect(html).toContain('&lt;board&gt;')
+  expect(html).not.toContain('<board>')
+})

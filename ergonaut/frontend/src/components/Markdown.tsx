@@ -1,6 +1,5 @@
 import type { ComponentProps } from 'react'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
+import { MarkdownContent } from '@ergo/chat-ui'
 import { highlight } from './CodeView'
 import { ThreadLink } from './Threads'
 
@@ -127,14 +126,12 @@ export default function Markdown({
   const document = mode === 'document'
   return (
     <div className={`markdown ${className}`}>
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+      <MarkdownContent
+        text={text}
         rehypePlugins={document ? [rehypeRawAsText, documentHeadings] : [rehypeRawAsText]}
         urlTransform={document ? documentUrl : undefined}
         components={document ? { code: Code, a: DocumentLink, img: NoImage } : { code: Code, a: Link }}
-      >
-        {text}
-      </ReactMarkdown>
+      />
     </div>
   )
 }

@@ -48,10 +48,11 @@ services:
   ############################################################
   frontend:
     image: node:22-slim
-    working_dir: /app/frontend
+    working_dir: /app/ergonaut/frontend
     volumes:
-      - ../../frontend:/app/frontend
-    command: ["npx", "vite", "--host", "0.0.0.0", "--port", "3000"]
+      - ../../frontend:/app/ergonaut/frontend
+      - ../../../packages/ergo-chat-ui:/app/packages/ergo-chat-ui
+    command: ["sh", "-c", "npm --prefix ../../packages/ergo-chat-ui ci && npm --prefix ../../packages/ergo-chat-ui run build && npm ci && npx vite --host 0.0.0.0 --port 3000"]
     ports:
       - "2288:3000"
 
