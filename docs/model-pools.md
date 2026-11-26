@@ -8,6 +8,14 @@ preference, not billing classes: a pool may mix subscription (CLI) and
 metered (API key) routes. Billing, price, transport and account are route
 metadata on the provider.
 
+Pools are **user-level groupings**. A pool with an `owner` belongs to that
+user: they (and users they grant spend on it) see and select it; nobody
+else does. A pool without an owner is a deployment pool everyone may use,
+and it can only hold subscription routes. **Spend authority is a grant**
+(`SpendGrant`): an immutable ceiling for one grantee on an exact set of
+routes, with a required validity window. A preference or a pick never
+mints authority.
+
 A **privacy policy** is separate. It says where a restricted origin's data
 may go, intersects with whatever pool is active, and is inherited by
 everything that origin starts. Switching pools never widens it.
@@ -16,14 +24,19 @@ Everything resolves through one module, `django_ergo.bots.pools`:
 
 ```text
 privacy_for(bot, session)        the inherited policy (bot, folder ancestors, chat, turn)
-snapshot(providers, user, chat)  pool config + runtime state (order, toggles, budgets, spend)
+snapshot(providers, user, chat)  the pools this user may see, runtime gates, their grants and spend
 select_route(...) / select_agent(...)
-    -> Decision (pool, route, billing, rejected candidates, receipt id, spend envelope)
+    -> Decision (pool, route, billing, grant, revision, rejected candidates, receipt id)
     -> or PoolRefusal(code, message, next_choices)
-listing(bot, session)            what the pickers show, from the same eligibility rules
+listing(bot, session)            what the pickers show: selectable now vs configured
+issue_grant / revoke_grant       spend authority, by a pool's owner (or an admin)
+switch_pool                      the active pool for a chat or the user, atomically
+capture_policy / policy_scope    the pool and grant queued work runs under
 ```
 
-Each selection leaves a `RouteDecision` receipt (no prompts, no secrets).
+Each selection leaves a `RouteDecision` receipt (no prompts, no secrets)
+with the grant and the revision (user preference, pool gates, chat override
+and, for queued work, its captured policy) it was made from.
 
 ## Without a `pools:` section nothing changes
 
@@ -59,11 +72,12 @@ pools:
     routes: [claude, chatgpt, xai-oauth]
   - name: paid-api
     label: Paid API
+    owner: lee # username; required when the pool has a metered route
     routes: [openai, anthropic/claude-opus-5-5]
-    budget_usd: 50 # required while the pool has a metered route
-    expires: 2026-12-31 # optional; after it the pool is ineligible
+    budget_usd: 50 # the owner's own grant: its ceiling (all time, for this grant)
+    expires: 2026-12-31 # required with budget_usd; the grant ends here
     per_launch_usd: 5 # reserved per metered coding-agent launch
-    max_output_tokens: 16000 # output limit set on metered requests that have none
+    max_output_tokens: 16000 # ceiling every metered request is clamped to
     rollover_out: false # default: true only for subscription-only pools
     allow_auto_entry: false # default: false when any route is metered
     tiers: { medium: [openai/gpt-6.1-sol, anthropic/claude-opus-5-5] }
@@ -71,36 +85,75 @@ pools:
       medium: [{ agent: codex, model: gpt-6.1-sol, provider: openai }]
 ```
 
-| Key                | Meaning                                                                                                                                                        |
-| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `routes`           | Provider names (all their models) or `provider/model`.                                                                                                         |
-| `tiers`            | Optional. Without it a tier is the global tier's candidates that are in the pool, else the built-in catalog (`DEFAULT_TIER_MODELS`) over the pool's models. |
-| `agents`           | Optional coding candidates, like the global `agents` but allowed to name metered providers. Without it: the global agents in the pool, else derived from tiers. |
-| `budget_usd`       | Cumulative US dollars for the pool's metered routes (all time). No budget, no metered sends.                                                                    |
-| `expires`          | Date or ISO date-time (UTC). After it the pool can't be selected and its guards refuse.                                                                         |
-| `per_launch_usd`   | Reserved against the budget for each metered coding launch (and each resumed run).                                                                             |
-| `rollover_out`     | This pool may hand over to the next one when exhausted.                                                                                                        |
-| `allow_auto_entry` | The pool may be entered automatically by rollover.                                                                                                             |
-| `enabled`          | Off = skipped in automatic order; a manual pick of it is refused.                                                                                              |
+| Key                 | Meaning                                                                                                                                                         |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `owner`             | Username of the user the pool belongs to. Required with a metered route; without it the pool is a deployment pool (subscription routes only).                   |
+| `routes`            | Provider names (all their models) or `provider/model`.                                                                                                          |
+| `tiers`             | Optional. Without it a tier is the global tier's candidates that are in the pool, else the built-in catalog (`DEFAULT_TIER_MODELS`) over the pool's models.     |
+| `agents`            | Optional coding candidates, like the global `agents` but allowed to name metered providers. Without it: the global agents in the pool, else derived from tiers. |
+| `budget_usd`        | The owner's own spend grant on the pool's metered routes. Changing it (or `expires`, `per_launch_usd`, the routes) issues a new grant with its own ledger.      |
+| `expires`           | Date or ISO date-time (UTC). Required with `budget_usd`. After it the grant can't be used and its guards refuse.                                                |
+| `per_launch_usd`    | Reserved against the grant for each metered coding launch (and each resumed run). At most `budget_usd`.                                                         |
+| `max_output_tokens` | Output ceiling: every metered request's output limit is clamped to it (and to the grant's) before reserving.                                                    |
+| `rollover_out`      | This pool may hand over to the next one when exhausted.                                                                                                         |
+| `allow_auto_entry`  | The pool may be entered automatically by rollover.                                                                                                              |
+| `enabled`           | Off = a boundary: automatic selection doesn't skip past it into a pool that needs a manual pick, and a manual pick of it is refused.                            |
 
 A provider takes `enabled` and `billing` (`subscription` or `metered`). A
-metered model needs an exact `price` (USD per million input, cached input and
-output tokens); without one it shows as unavailable and can't be pinned.
+metered model needs an exact `price`; without one it shows as unavailable
+and can't be pinned. The price schema is the one every spend adapter prices
+with (`pricing.ExactPrice`), USD per million tokens:
 
-Ergonaut keeps the runtime state in the database (tables
-`ModelPoolState`, `ModelPoolPreference`, `ProviderToggle`, `RouteDecision`):
-order, the active pool, toggles, budget, expiry and per-launch overrides,
-all versioned. providers.yaml stays the source of what exists.
+```yaml
+price:
+  input: 1.25 # required: uncached input
+  output: 10 # required: output, reasoning included
+  cached: 0.125 # cached input (default: input)
+  cache_write: 1.5625 # optional; without it a request that can write cache isn't sent
+  long_context: # optional: the whole request's rates once its prompt passes threshold
+    threshold: 200000
+    input: 2.5
+    cached: 0.25
+    output: 15
+    cache_write: 3.125
+```
+
+Ergonaut keeps the runtime state in the database (tables `ModelPoolState`,
+`ModelPoolPreference`, `ProviderToggle`, `SpendGrant`, `RouteDecision`):
+order, the active pool, the pool gates and provider switches (all
+versioned; every write needs the version last read) and the grants.
+providers.yaml stays the source of what exists.
+
+### Grants
+
+A grant (`SpendGrant`) is the only spend authority. It names the pool, its
+owner, the grantee, the exact `provider/model` routes, `budget_usd`,
+`per_launch_usd`, `max_output_tokens` and `valid_from`/`expires_at` (both
+required). Grants are immutable: a new grant for the same grantee and pool
+revokes the old one, and the old ledger stays. The owner's own grant comes
+from the pool's providers.yaml `budget_usd`/`expires` (materialized on first
+use, `source: config`); the owner (or an admin) issues grants to other users
+with `pools.issue_grant` (Ergonaut: the Pools page). A grantee sees the pool,
+can pick it, and uses only their grant's routes, within their grant's
+budget. Their spend totals are theirs alone: listings show a user only their
+own grant (an owner also sees the grants they issued), never another user's
+spend.
 
 ## Selecting a pool
 
-- **Automatic** (the default, "use preferred order"): the first enabled pool
-  in the user's order that the origin's privacy policy allows.
+- **Automatic** (the default, "use preferred order"): the first pool in the
+  user's order. If it is switched off (or not allowed by privacy), a later
+  pool is entered only when its `allow_auto_entry` permits; otherwise
+  selection stops with `pool_disabled` and names the next choices. Disabling
+  a pool never silently moves work into a paid one.
 - **Manual**: a user-wide default (`ModelPoolPreference.active_pool`) or a
-  per-chat override (`session.metadata["pool"]`). New turns and new
-  descendants of that chat use it; a running turn or an already launched
-  agent is never restarted. Clearing the pick returns to preferred order;
-  coming back to an earlier pool after its quota resets is always explicit.
+  per-chat override (`session.metadata["pool"]`, versioned by
+  `pool_version`). Only pools the user may see can be picked. New turns and
+  new descendants of that chat use it; a running turn or an already launched
+  agent is never restarted. `pools.switch_pool` changes a scope atomically:
+  switching the user default from a chat also clears that chat's override in
+  the same transaction, or neither changes. Clearing the pick returns to
+  preferred order.
 
 Within the active pool the capability tier (`auto/cheap`, `auto/medium`, …,
 with the `small`/`large`/`low`/`high` aliases) and effort stay separate
@@ -122,36 +175,102 @@ pool, and only when all three gates permit:
 3. the next pool's `allow_auto_entry` (and the next pool is itself usable:
    in budget, not expired).
 
-Otherwise the request stops with a `pool_exhausted` refusal that names the
-next pools; the chat shows it with a button to switch.
+A switched-off next pool is a boundary: the rollover stops there instead
+of skipping it. Otherwise the request stops with a `pool_exhausted` refusal
+that names the next pools; the chat shows it with a button to switch.
+
+After a rollover the reached pool is **persisted** as the active pool in the
+scope that was in effect (the chat's override, else the user's default),
+with `rolled_from` recorded. Work stays there when the earlier pool's quota
+resets; the person returns by switching back or picking "Use preferred
+order". There is no invisible return.
 
 These are **never** rollover triggers; each is its own refusal: a switched
 off provider (`provider_disabled`), a missing key or CLI (`unavailable`), a
-model without a price (`price_unknown`), privacy (`privacy_denied`), a
-missing, used or expired budget (`budget_required`, `budget_exhausted`,
-`budget_expired`), a switched-off pool (`pool_disabled`), a pin outside the
-pool (`pin_out_of_pool`), and for coding `no_coding_route` and
-`unconfinable`.
+model without a price (`price_unknown`), a metered route on an engine that
+can't enforce spend (`unguarded`), privacy (`privacy_denied`), a missing,
+used, not-yet-valid or expired grant (`budget_required`,
+`budget_exhausted`, `grant_not_yet_valid`, `budget_expired`), a pool or
+route that isn't the user's (`not_authorized`), a switched-off pool
+(`pool_disabled`), a pin outside the pool (`pin_out_of_pool`), and for
+coding `no_coding_route` and `unconfinable`.
 
 ## Metered spend
 
-A configured API key is never authority by itself. With pools configured,
-every metered API engine a bot builds carries a spend guard
-(`conversation.spend_guard`):
+A configured API key is never authority by itself; a grant is. With pools
+configured:
 
-- built from a pool decision, it reserves each request's worst-case cost
-  (request bytes as uncached input tokens plus the output limit) under a
-  PostgreSQL advisory lock, after re-reading the pool's budget, expiry and
-  on/off state and the provider switch, and refuses (no HTTP) when it can't;
-- after the response it prices the reported usage exactly; a request that
-  may have reached the provider keeps its reservation;
-- an engine for a metered route that wasn't selected through a pool gets a
-  guard that refuses every send.
+- a chat turn's engine is built from the pool decision's exact route and
+  checked against it before anything is sent (pool membership, provider,
+  model, engine type, transport, billing); a chat engine without a decision
+  refuses;
+- a metered route is only selectable on an engine that implements the spend
+  adapter contract (below). A metered CLI route, or any engine without an
+  adapter, is refused (`unguarded`) at selection and again when the engine
+  is built, for every consumer;
+- the engine carries a spend guard (`conversation.spend_guard`) for the
+  decision's grant. For each attempt it re-reads the grant under its
+  PostgreSQL advisory lock (revoked? within its window? this user? this
+  route?) and the pool and provider switches, clamps the output limit to the
+  pool's (and grant's) ceiling, asks the adapter for a bound on the request,
+  reserves the worst case at the exact tariff (the dearest input rate that
+  can apply: cache writes, the long-context tier), and refuses (no HTTP)
+  when it can't;
+- one guarded call is one HTTP attempt: the SDK's own retries are off under
+  a guard, so every permitted retry is a new call with its own reservation;
+- after the response it prices the adapter's parsed usage exactly. Missing,
+  partial, negative or inconsistent usage, usage billed at rates the tariff
+  doesn't have (audio, images, cache writes without a `cache_write` rate)
+  and server-side tool fees keep the reservation (cost `unknown`); so does
+  any send that may have reached the provider and failed;
+- request classes that can't be bounded are refused before sending:
+  non-text input (images, audio, files, remote URLs), server-side tools (web
+  search), several choices, audio output and other billing-changing options.
 
-Attempts are `InferenceRequest` rows with `pool` `pool:<name>` and
+Attempts are `InferenceRequest` rows with `pool` `grant:<id>` and
 `billing_mode` `metered`, so the existing cost ledger and Costs page see
-them. Spend counts toward `budget_usd` for all time; raise the budget (or
-set a new one) to continue.
+them. Spend counts toward the grant's `budget_usd` for all time; a new
+grant starts a new ledger.
+
+### The spend adapter contract (for new engines)
+
+An engine can carry a metered pool route only when its class sets
+`spend_adapter` to an object with:
+
+```python
+class SpendAdapter(Protocol):
+    output_key: str  # the request's output-token limit key (informational)
+
+    def bound(self, kwargs: dict, ceiling: int) -> RequestBound:
+        """Clamp the request's output limit to `ceiling` IN PLACE (set it when
+        absent); return RequestBound(input_tokens, output_tokens, cache_write)
+        upper bounds. Raise UnsupportedRequest for anything it can't bound
+        (modalities, server-side tool fees, several candidates, opaque options)."""
+
+    def usage(self, response) -> Usage | None:
+        """Usage(uncached, cached, cache_write, output) of a response, or None
+        when it is missing, partial, negative or inconsistent, or reports fees
+        the tariff can't price. None keeps the reservation."""
+```
+
+and sends each single HTTP attempt as
+`await self.spend_guard.call(kwargs, self.spend_adapter, send)` with its
+client's automatic retries off. `OpenAIChatAdapter` and
+`AnthropicMessagesAdapter` are the reference implementations; CLI engines
+set `spend_adapter = None`. A Gemini engine implements the same contract over
+`contents`/`systemInstruction`/`generationConfig.maxOutputTokens` and
+`usageMetadata` (cached prompt tokens split out, thoughts counted in output),
+and prices with the same `price:` schema (`cache_write` and `long_context`
+included).
+
+### Queued work
+
+Background tasks (`ctx.tasks`) and durable workers capture, when they are
+queued, the pool new work would use, the user's grant on it and the
+revision (`pools.capture_policy`), and run under it (`pools.policy_scope`)
+in whichever process picks them up. That can only narrow: a revoked grant,
+a switched-off pool or provider refuses; a later, wider user choice or a new
+grant is never picked up, and queued work never rolls over.
 
 ## Coding agents
 
@@ -165,14 +284,14 @@ launch on one needs a manager that declares both:
 
 - `AgentManager.metered_confinement`: the process is held to exactly one
   provider key and model, and
-- `AgentManager.metered_spend_bound`: the launch's *total* spend (every turn,
+- `AgentManager.metered_spend_bound`: the launch's _total_ spend (every turn,
   retry and child process) is enforced, not just reserved.
 
-| Manager       | Confinement                                                                                                                                                         | Total spend bound | Metered coding |
-| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------- | -------------- |
+| Manager       | Confinement                                                                                                                                                                                         | Total spend bound | Metered coding |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------- | -------------- |
 | `local_shell` | yes, as defense in depth: only the selected key (`ANTHROPIC_API_KEY` or `OPENAI_API_KEY`/`CODEX_API_KEY`), other credentials/endpoints/cloud switches removed, job-local `HOME`, explicit `--model` | no                | refused        |
-| `orca`        | no (Orca terminals own their environment)                                                                                                                           | no                | refused        |
-| any other     | no (the `AgentManager` default)                                                                                                                                     | no                | refused        |
+| `orca`        | no (Orca terminals own their environment)                                                                                                                                                           | no                | refused        |
+| any other     | no (the `AgentManager` default)                                                                                                                                                                     | no                | refused        |
 
 Why: an isolated environment and explicit model flags are necessary but are
 not proof. A CLI can read other credential stores or project config, has its
@@ -182,9 +301,11 @@ that. omp is refused on metered routes in any case (its provider fallback
 can't be switched off).
 
 When a manager can demonstrate both, the path is already wired: the launch
-reserves `per_launch_usd` against the pool budget before starting (and again
-for a resumed run), the spec carries `AgentSpec.confinement`, and the
-reservation is never released without billing evidence.
+reserves `per_launch_usd` against the grant before starting (and again for a
+resumed run), the spec carries `AgentSpec.confinement`, and the reservation
+is never released without billing evidence. For Orca the pool receipt is in
+the launch journal (`AgentLaunch.watch_state`) before Orca runs; replaying a
+launch key never selects, reserves or launches again.
 
 No compatible coding route in the active pool is a refusal, never a switch
 to another provider.
@@ -201,6 +322,8 @@ privacy:
     bots: [personal] # default: the private pool's allowed_bots
     allow: [personal] # private pool names, providers, provider/model
     web_search: [brave] # non-LLM search backends it may use
+    memory: [personal-memory] # Hindsight banks it may retain in and recall from
+    memory_reflect: [] # banks whose reflect (LLM synthesis) it may use
 ```
 
 A bot is covered by a policy when it, or a folder ancestor, is in the
@@ -223,13 +346,25 @@ What it governs:
   agents unless a privacy-approved coding route exists.
 - **Delegation**: a restricted chat can't create threads for, or message,
   a bot outside its policy (the one exit is a user-approved private export).
-- **History**: a session under a policy (its bot's or an inherited origin)
-  is readable by history search, links and file sharing only from work
-  under that same policy.
+- **History and summaries**: a session under a policy (its bot's or an
+  inherited origin) is readable by history search, links and file sharing,
+  and appears in the orchestration overview, `ergo_thread_list` and
+  `ergo_portfolio_status` (threads, workers, files), only for work under
+  that same policy.
+- **Memory**: Hindsight retain, recall, reflect and prefetch for restricted
+  work only use banks the policy lists (`memory`; reflect, which is LLM
+  synthesis, also needs `memory_reflect`). A bank a policy lists belongs to
+  it: other work neither writes nor reads it. A queued retain carries its
+  policy, and the worker posts it only to the approved bank.
+- **Async and queued work**: worker steps (async ones included) and
+  background tasks run inside the origin they were started under.
 - **Plugins that call models directly**: `web_search` refuses its
   `claude_code` and `anthropic` backends for restricted work and uses
   `brave` only if the policy lists it; `attachments` refuses Gemini video
-  analysis.
+  analysis. With pools configured, for public work too: `claude_code` search
+  needs a usable Claude subscription in the active pool (a receipt is
+  recorded), `anthropic` search (per-search fees no grant bounds) and Gemini
+  video (no guarded adapter yet) are refused before sending.
 
 These are in-process guards, like the private-pool grants: they stop Ergo's
 own code paths. A shell or Python tool running as the same OS user is not
@@ -237,11 +372,13 @@ sandboxed by them (see [Private inference](bots.md#private-inference)).
 
 ## Ergonaut
 
-- **Routing page → Pools**: ordered pools with up/down reorder, per-pool
-  enable, rollover-out and automatic-entry toggles, budget, spend and
-  reservations, expiry and status (eligible, exhausted, switched off, over
-  budget, expired), the global automatic-rollover toggle and provider
-  switches. Changes are version-checked; admins only.
+- **Routing page → Pools**: the pools you may see, ordered, with up/down
+  reorder, status (eligible, exhausted, switched off, over budget, expired,
+  not yours), what is selectable now, your grant (budget, spend,
+  reservations, window) and, for a pool you own, the grants you issued with
+  a form to issue or revoke one. The owner (or an admin) toggles enable,
+  rollover-out and automatic entry; admins switch providers. Every change
+  sends the version it was made from.
 - **Chat header**: a pool picker beside the model picker shows the active
   pool ("Auto: Subscriptions") and switches it for this chat or as the
   default; a restricted bot shows its privacy lock instead.
@@ -252,10 +389,11 @@ The model picker lists only what the chat may use: the active pool's models
 
 ## Rollout and rollback
 
-1. Deploy: the migration adds four tables; with no `pools:` section and no
-   rows, behavior is unchanged.
-2. Add `pools:` (and prices, budgets) to providers.yaml; check the Routing
-   page's Pools section; set budgets there or in YAML.
+1. Deploy: the migration (`0059_model_pools`, after main's
+   `0058_agent_launch_intent`) adds five tables; with no `pools:` section and
+   no rows, behavior is unchanged.
+2. Add `pools:` (owners, prices, budgets with an end date) to providers.yaml;
+   check the Routing page's Pools section; issue grants there.
 3. Rollback: remove the `pools:` section (behavior returns to legacy at the
    next reload), or revert the deploy; the new tables can stay. Provider
    switches set in the UI also apply in legacy mode; clear them on the
@@ -264,7 +402,7 @@ The model picker lists only what the chat may use: the active pool's models
 ## Example for boundcorp/ergo-bots
 
 Fill in prices and budgets yourself before enabling; a metered model without
-a price stays unusable, and a pool without a budget refuses to send.
+a price stays unusable, and a pool without a grant refuses to send.
 
 ```yaml
 providers:
@@ -297,11 +435,12 @@ pools:
     routes: [claude, chatgpt, xai-oauth]
   - name: paid-api
     label: Paid API
+    owner: <username> # the Ergonaut user whose money it is
     routes: [openai, anthropic] # add gemini when it lands
     rollover_out: false
     allow_auto_entry: false
-    # budget_usd: <choose>        # required before anything metered sends
-    # expires: <date>
+    # budget_usd: <choose>        # the owner's grant; required before anything metered sends
+    # expires: <date>             # required with budget_usd
     # per_launch_usd: <choose>    # for metered coding launches (local_shell only)
     tiers:
       cheap: [openai/gpt-6-luna]

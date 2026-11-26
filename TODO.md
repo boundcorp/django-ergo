@@ -182,12 +182,14 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 
 ### Model pools (`pools`, `privacy`)
 
-- [x] Ordered pools in providers.yaml, one resolver for every consumer (`bots.pools`), rollover only on exhaustion through three gates (default off), per-pool budgets with per-request reservations for metered routes (`conversation.spend_guard`), provider on/off switches, `RouteDecision` receipts, inherited privacy through delegation, threads, workers, background tasks, history and web_search/video. Docs: `docs/model-pools.md`.
+- [x] Ordered, user-owned pools in providers.yaml, one resolver for every consumer (`bots.pools`), rollover only on exhaustion through three gates (default off, persisted with an explicit way back), immutable time-bounded spend grants with per-attempt reservations for metered routes (`conversation.spend_guard`, adapter contract for new engines), provider on/off switches, `RouteDecision` receipts with grant and revision, queued work bound to its captured policy, inherited privacy through delegation, threads, workers, background tasks, history, summaries, memory and web_search/video. Docs: `docs/model-pools.md`.
+- [ ] Gemini engine (#406): implement `spend_guard.SpendAdapter` and adopt the `price:` schema (cache_write, long_context) before a Google route is selectable on a metered pool.
+- [ ] Modality-aware bounds (images, audio, documents) and priced server-side tools under a spend guard; until then such requests are refused on metered routes.
 - [x] Ergonaut: Pools section on the Routing page, chat pool picker, pool-exhausted refusal with switch buttons; the model picker lists only what the chat may use.
 - [ ] Metered coding: a manager that can enforce a total per-launch spend bound (and provider confinement) before metered coding routes launch; until then they are refused everywhere.
 - [ ] Ancillary calls outside turns (illustrations, attachment image descriptions, voice) on a metered default refuse instead of selecting through the pool; route them through `select_route` when a metered default is wanted.
 - [ ] Reconcile the per-launch coding reservation from billing evidence, and spend-scan performance for large ledgers.
-- [ ] ergo-bots: add `pools:` with prices and budgets (example in `docs/model-pools.md`); switch personal's web_search to `brave`.
+- [ ] ergo-bots: add `pools:` with owners, prices and budgets with an end date (example in `docs/model-pools.md`); switch personal's web_search to `brave`; list personal's Hindsight bank under `privacy.personal.memory` if it should keep memory.
 
 ### Private inference (`private_pools`)
 

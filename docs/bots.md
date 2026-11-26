@@ -2636,10 +2636,10 @@ keeps 25% verbatim. `max_context_tokens` remains a threshold alias;
 
 ## Model pools
 
-providers.yaml can group routes into ordered **pools** (`pools:`), with an
-`auto_rollover` gate, per-pool budgets for metered (API-billed) routes,
-provider on/off switches and inherited **privacy** policies (`privacy:`;
-every private pool is one). Chats, titles, browser tasks, coding agents and
+providers.yaml can group routes into ordered, user-owned **pools**
+(`pools:`), with an `auto_rollover` gate, time-bounded spend grants for
+metered (API-billed) routes, provider on/off switches and inherited
+**privacy** policies (`privacy:`; every private pool is one). Chats, titles, browser tasks, coding agents and
 background work all select through `django_ergo.bots.pools`. Without a
 `pools:` section nothing changes. See [Model pools](model-pools.md).
 
