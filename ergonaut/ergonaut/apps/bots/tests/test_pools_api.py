@@ -114,6 +114,38 @@ def test_people_change_their_own_choices_but_not_others_pools(client, kitchen):
     assert mine["auto_rollover"] is True
     bad = send(client, "patch", "/api/pools/preferences", {"version": mine["user_version"], "order": ["paid"]})
     assert bad.status_code == 400
+    # Reordering lists only the pools cook can see (what the UI sends).
+    ordered = send(client, "patch", "/api/pools/preferences", {"version": mine["user_version"], "order": ["subs"]})
+    assert ordered.status_code == 200
+    assert pools.preference(get_user_model().objects.get(username="cook").pk).order == ["subs"]
+
+
+def test_config_edits_revise_the_owners_grant_without_resetting_its_spend(client, kitchen):
+    """providers.yaml budget edits are revisions of one spending envelope: the Pools
+    page shows the new budget with the same spend; removing the budget revokes it."""
+    from decimal import Decimal
+
+    from django_ergo.conversation import spend_guard
+
+    lee = login(client, "lee")
+    first = next(p for p in client.get("/api/pools").json()["pools"] if p["name"] == "paid")["grant"]
+    assert first["budget_usd"] == "5.0000"
+    spend_guard.reserve(
+        grant_id=first["id"],
+        provider="openai",
+        model="gpt-6.1-sol",
+        amount=Decimal("1.5"),
+        user_id=lee.pk,
+        fields={},
+        current=pools.SendAuthority(kitchen),
+    )
+    kitchen.providers = parse_providers(PROVIDERS.replace("budget_usd: 5", "budget_usd: 50"))
+    raised = next(p for p in client.get("/api/pools").json()["pools"] if p["name"] == "paid")
+    assert raised["grant"]["budget_usd"] == "50.0000" and raised["grant"]["id"] != first["id"]
+    assert Decimal(raised["grant"]["reserved_usd"]) == Decimal("1.5")
+    kitchen.providers = parse_providers(PROVIDERS.replace("    budget_usd: 5\n", ""))
+    removed = next(p for p in client.get("/api/pools").json()["pools"] if p["name"] == "paid")
+    assert removed["grant"] is None and removed["status"] == "budget_required"
 
 
 def test_chat_pool_picker_switch_listing_and_refusal(client, kitchen, monkeypatch):
