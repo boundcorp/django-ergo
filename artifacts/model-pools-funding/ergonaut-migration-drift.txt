@@ -1,0 +1,7 @@
+/home/dev/orca/workspaces/django-ergo/model-pools-core/ergonaut/.venv/lib/python3.12/site-packages/platformdirs/api.py:441: RuntimeDirWarning: XDG_RUNTIME_DIR is not set, falling back to /tmp/runtime-1000
+  return Path(self.user_runtime_dir)
+/home/dev/orca/workspaces/django-ergo/model-pools-funding-ui/ergonaut/ergonaut/settings/project.py:350: UserWarning: SECRET_KEY is the default; set SECRET_KEY (`ergonaut up` generates one under DATA_DIR)
+  warnings.warn(
+/home/dev/orca/workspaces/django-ergo/model-pools-funding-ui/ergonaut/ergonaut/settings/project.py:350: UserWarning: SECRET_KEY is the default; set SECRET_KEY (`ergonaut up` generates one under DATA_DIR)
+  warnings.warn(
+No changes detected

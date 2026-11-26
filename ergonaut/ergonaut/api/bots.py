@@ -154,6 +154,12 @@ class SessionOut(Schema):
     workers_running: int = 0
     workers_total: int = 0
     prs: list[dict] = []
+    # Model pools (django_ergo.bots.pools): this chat's own pool ("" = the user's
+    # default or preferred order), its last routed pool/route, and the refusal
+    # it is stopped on (pool exhausted, budget, ...), with the next choices.
+    pool: str = ""
+    pool_route: dict = {}
+    pool_refusal: dict | None = None
 
 
 class SessionSearchOut(Schema):
@@ -670,6 +676,9 @@ def session_out(session: ConversationSession) -> dict:
         "engine_type": session.engine_type,
         "model": session.model,
         "effort": meta.get("effort") or "",
+        "pool": meta.get("pool") or "",
+        "pool_route": meta.get("pool_route") or {},
+        "pool_refusal": meta.get("pool_refusal"),
         **resolution(session),
         **threads_by_status(session),
     }
@@ -1684,8 +1693,72 @@ async def revalidate_approval(request, session_id: str, data: RevalidatePendingI
     return await sync_to_async(latest_turn)(session, queued=True)
 
 
-def models_out(bot: Bot) -> dict:
-    """The models a chat with ``bot`` can use (providers.yaml), and the bot's own."""
+def models_out(bot: Bot, user=None, session=None) -> dict:
+    """The models a chat with ``bot`` can use, from the same eligibility the
+    runtime enforces (``django_ergo.bots.pools``): a privacy-restricted bot
+    sees only its private models; with pools configured, the active pool's
+    models and tiers; otherwise every providers.yaml model."""
+    from django_ergo.bots import pools
+
+    privacy = pools.privacy_for(bot, session)
+    private = private_models_out(bot)
+    if bot.private_pool or privacy.restricted:
+        default = bot.model_ref()
+        return {
+            "default": default,
+            "default_engine_type": "fireworks" if bot.private_pool else "",
+            "models": private,
+            "private_models": private,
+            "privacy": {"restricted": True, "label": privacy.label(), "policies": list(privacy.names)},
+        }
+    if not bot.providers.pools.legacy:
+        return pool_models_out(bot, user, private, session)
+    return legacy_models_out(bot, private)
+
+
+def pool_models_out(bot: Bot, user, private: list[dict], session=None) -> dict:
+    from django_ergo.bots import pools
+
+    view = pools.listing(bot, session, user_id=getattr(user, "pk", None))
+    active = next((p for p in view["pools"] if p["name"] == view["active"]), None)
+    models = []
+    if active is not None:
+        for m in active["models"]:
+            provider = bot.providers.providers[m["id"].partition("/")[0]]
+            models.append(
+                {
+                    "id": m["id"],
+                    "name": m["id"].partition("/")[2],
+                    "label": m["label"].removesuffix("[1m]"),
+                    "provider": provider.name,
+                    "engine_type": provider.type,
+                    "billing": m["billing"],
+                    "available": m["available"],
+                    "why": m["why"],
+                }
+            )
+        models += [
+            {
+                "id": f"auto/{tier}",
+                "name": f"auto/{tier}",
+                "label": tier,
+                "provider": "auto",
+                "engine_type": "auto",
+                "available": True,
+            }
+            for tier in active["tiers"]
+        ]
+    return {
+        "default": bot.model_ref(),
+        "default_engine_type": "",
+        "models": models,
+        "private_models": private,
+        "pool": {"active": view["active"], "label": active["label"] if active else "", "mode": view["mode"]},
+        "privacy": {"restricted": False, "label": "", "policies": []},
+    }
+
+
+def legacy_models_out(bot: Bot, private: list[dict]) -> dict:
     try:
         spec = bot.engine_spec()
         # No model in bot.yaml: the engine's own default.
@@ -1722,7 +1795,8 @@ def models_out(bot: Bot) -> dict:
         ],
         # Only for a bot its private pools list in allowed_bots; kept apart
         # from "models" so the ordinary picker never lists them.
-        "private_models": private_models_out(bot),
+        "private_models": private,
+        "privacy": {"restricted": False, "label": "", "policies": []},
     }
 
 
@@ -1739,8 +1813,8 @@ def private_models_out(bot: Bot) -> list[dict]:
             "default": alias == pool.default,
             "available": pool.enabled and bool(os.environ.get(FIREWORKS_KEY_ENV)),
         }
-        for pool in bot.providers.private_pools.values()
-        if bot.name in pool.allowed_bots
+        for pool in [bot.private_pool]
+        if pool is not None
         for alias in pool.models
     ]
 
@@ -1774,8 +1848,15 @@ def check_model(bot: Bot, model: str) -> None:
 
 
 @router.get("/bots/{bot}/models")
-def bot_models(request, bot: str):
-    return models_out(get_bot(bot, request.auth))
+def bot_models(request, bot: str, session: str = ""):
+    """``session``: list what that chat may use (its own pool and privacy)."""
+    found = get_bot(bot, request.auth)
+    chat = None
+    if session:
+        chat = visible_sessions(request.auth).filter(id=uuid_or_404(session), bot_name=found.name).first()
+        if chat is None:
+            raise HttpError(404, "No such chat")
+    return models_out(found, request.auth, chat)
 
 
 class RoutingIn(Schema):
@@ -1861,7 +1942,14 @@ async def set_session_model(request, session_id: str, data: ModelIn):
     model = data.model.strip()
     if model:
         check_model(found, model)
-    await sync_to_async(found.pick_model)(session, model)
+    from django_ergo.bots.pools import PoolRefusal
+
+    try:
+        await sync_to_async(found.pick_model)(session, model)
+    except PoolRefusal as exc:
+        raise HttpError(409, str(exc)) from exc
+    except PolicyError as exc:
+        raise HttpError(403, str(exc)) from exc
     return await sync_to_async(session_out)(session)
 
 

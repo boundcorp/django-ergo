@@ -423,9 +423,17 @@ def choose(  # noqa: PLR0913 - preserve custom-router/current contract, add cand
     return picked
 
 
+def switched_off() -> set[str]:
+    """Providers switched off at runtime (Ergonaut's Routing page). Runs the ORM."""
+    from django_ergo.bots.pools import disabled_providers
+
+    return disabled_providers()
+
+
 def pick_model(providers: Providers, tier: str, current: str = "") -> str:
     """A ``provider/model`` for a bot chat at ``tier`` (runs the ORM)."""
     tier = tier_of(tier)
+    off = switched_off()
     routing = providers.routing
     listed = routing.tiers.get(tier)
     if not listed:
@@ -437,6 +445,7 @@ def pick_model(providers: Providers, tier: str, current: str = "") -> str:
         if not providers.is_private(ref)
         and (found := providers.find(ref)) is not None
         and found[0].available
+        and found[0].name not in off
     ]
     if not candidates:
         msg = f"No provider in the {tier!r} tier is available"
@@ -516,6 +525,7 @@ def pick_agent(
     if not listed:
         msg = f"providers.yaml has no {tier!r} tier under agents"
         raise ValueError(msg)
+    off = switched_off()
     candidates = [
         c
         for c in listed
@@ -525,6 +535,8 @@ def pick_agent(
         and p.transport == "cli"
         and not providers.is_private(c.model)
         and (not p.worker_only or p.available)
+        and p.enabled
+        and p.name not in off
     ]
     if not candidates:
         msg = f"No subscription provider in the {tier!r} agents tier"
@@ -769,6 +781,7 @@ def retry_model(providers: Providers, tier: str, failed: str, error: str) -> str
     usage, rules = current_usage(), active_rules(routing)
     failed_provider = failed.partition("/")[0]
     refused = is_refusal_error(error)
+    off = switched_off()
     if not (
         refused
         or is_limit_error(error)
@@ -789,6 +802,7 @@ def retry_model(providers: Providers, tier: str, failed: str, error: str) -> str
             or (name == failed_provider and not scoped_limit)
             or found is None
             or not found[0].available
+            or found[0].name in off
             or providers.is_private(ref)
             or over_limit(name, usage, rules, ref.partition("/")[2])
         ):

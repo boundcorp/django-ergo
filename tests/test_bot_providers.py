@@ -245,6 +245,7 @@ def test_bots_and_chats_pick_models_from_providers(tmp_path, monkeypatch):
         "max_tokens": 900,
         "provider": "openai",
         "api_key": "sk-test",
+        "api_key_env": "TEST_OPENAI_KEY",
     }
 
     # A chat's pick wins, on any engine.

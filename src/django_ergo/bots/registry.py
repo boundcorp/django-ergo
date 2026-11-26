@@ -51,11 +51,77 @@ def closed_to(bot: Bot, session) -> bool:
     Approved exports are destination-owned snapshots, never source-ID grants.
     """
     registry = bot.registry
-    return bool(
+    if (
         registry is not None
         and session.bot_name != bot.name
         and registry.is_private(session.bot_name)
+    ):
+        return True
+    return not privacy_readable(bot, session)
+
+
+def privacy_readable(bot: Bot, session) -> bool:
+    """Whether ``bot`` (in the current turn) may read ``session``'s history:
+    a session under a privacy policy (its bot's, or an inherited origin,
+    ``bots.pools``) is readable only by work under that same policy."""
+    from django_ergo.bots import pools
+
+    names = set(pools.session_origin(session))
+    registry = getattr(bot, "registry", None)
+    owner = (
+        bot
+        if session.bot_name == bot.name
+        else (registry.bots.get(session.bot_name) if registry is not None else None)
     )
+    if owner is not None:
+        names |= set(pools.bot_policy_names(owner))
+    else:
+        names |= {
+            name
+            for name, policy in bot.providers.pools.privacy.items()
+            if session.bot_name in policy.bots
+        }
+    if not names:
+        return True
+    return names <= set(pools.privacy_for(bot).names)
+
+
+def unreadable(bot: Bot, prefix: str = ""):
+    """A ``Q`` matching sessions (or, with ``prefix`` ``"session__"``, rows of
+    sessions) that :func:`privacy_readable` refuses for ``bot`` in the current
+    turn, for summary and snapshot queries that must leave them out entirely:
+    sessions of a bot under a policy this work isn't under, and sessions whose
+    recorded origin names one. Callers that render rows should still check
+    :func:`privacy_readable` (it also fails closed on unknown policy names)."""
+    from django.db.models import Q
+
+    from django_ergo.bots import pools
+
+    reader = set(pools.privacy_for(bot).names)
+    configured = bot.providers.pools.privacy
+    restricted = {
+        name
+        for policy_name, policy in configured.items()
+        if policy_name not in reader
+        for name in policy.bots
+    }
+    registry = getattr(bot, "registry", None)
+    if registry is not None:
+        restricted |= {
+            each.name
+            for each in registry.bots.values()
+            if set(pools.lineage(each)) & restricted
+        }
+    origin = f"{prefix}metadata__{pools.ORIGIN_KEY}"
+    # has_key first: a missing key is SQL NULL, which NOT(...) would turn
+    # into "exclude every row".
+    has = Q(**{f"{prefix}metadata__has_key": pools.ORIGIN_KEY})
+    match = Q(**{f"{prefix}bot_name__in": sorted(restricted)})
+    if not reader:
+        match |= has & ~Q(**{origin: []})
+    for name in sorted(set(configured) - reader):
+        match |= has & Q(**{f"{origin}__contains": [name]})
+    return match
 
 
 def find_bot_folders(directory: str | Path) -> list[Path]:
@@ -108,6 +174,17 @@ class BotRegistry:
         self.failed: dict[str, str] = {}
         # Engines and models chats may use (providers.yaml).
         self.providers = Providers()
+        # The registry that replaced this one when the bot files were reloaded.
+        self.successor: BotRegistry | None = None
+
+    def latest(self) -> BotRegistry:
+        """This registry, or the newest one that replaced it (a reload): a
+        bot built earlier reads current config through it (spend checks)."""
+        found, seen = self, set()
+        while found.successor is not None and id(found) not in seen:
+            seen.add(id(found))
+            found = found.successor
+        return found
 
     def add(self, bot: Bot) -> Bot:
         if bot.name in self.bots:

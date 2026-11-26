@@ -64,12 +64,26 @@ its login or inference has been verified.
 A bot selects a member as ``personal`` or ``personal/<alias>``. Private
 models never appear in ``models()``, ``find()``, tiers, agents or the default,
 and no public provider, tier, agent or default may name one.
+
+Every provider also takes ``enabled`` (default true; false removes it from
+listings, pins, retries and new workers, and Ergonaut's Routing page can
+toggle it at runtime) and ``billing`` (``subscription`` or ``metered``;
+default: CLI transports are subscriptions, API keys are metered). A metered
+model can carry its exact price, which pool budgets need before they send::
+
+    - {name: gpt-6.1-sol, price: {input: 1.25, cached: 0.125, output: 10}}
+
+``type: google`` declares a Google (Gemini) API provider; it routes once a
+``("google", "api")`` engine is registered. ``pools``, ``auto_rollover`` and
+``privacy`` are parsed by ``bots.pool_config`` and enforced by ``bots.pools``.
 """
 
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
+import threading
 from dataclasses import dataclass
 from dataclasses import field
 from decimal import Decimal
@@ -79,6 +93,13 @@ from types import MappingProxyType
 
 import yaml
 
+from django_ergo.bots.pool_config import BILLING_KINDS
+from django_ergo.bots.pool_config import METERED
+from django_ergo.bots.pool_config import SUBSCRIPTION
+from django_ergo.bots.pool_config import PoolConfigError
+from django_ergo.bots.pool_config import PoolsConfig
+from django_ergo.bots.pool_config import parse_pools
+from django_ergo.bots.pool_config import parse_privacy
 from django_ergo.bots.routing import DEFAULT_EFFORT
 from django_ergo.bots.routing import AgentChoice
 from django_ergo.bots.routing import Routing
@@ -92,17 +113,21 @@ from django_ergo.conversation.inference_policy import PrivatePool
 from django_ergo.conversation.inference_policy import is_private_host
 from django_ergo.conversation.inference_policy import names_private_model
 from django_ergo.conversation.inference_policy import url_host
+from django_ergo.pricing import ExactPrice
+from django_ergo.pricing import LongContextRates
 from django_ergo.protected_env import is_protected_env
 
 PROVIDERS_FILE = "providers.yaml"
 ROUTING_FILE = "routing.md"
-ENGINE_TYPES = ("openai", "claude")
+ENGINE_TYPES = ("openai", "claude", "google")
 PROVIDER_TYPES = (*ENGINE_TYPES, "omp")
 TRANSPORTS = {
     "openai": ("api", "cli"),
     "claude": ("api", "cli"),
+    "google": ("api",),
     "omp": ("cli",),
 }
+PRICE_KEYS = ("input", "cached", "output", "cache_write", "long_context")
 PRIVATE_POOLS_KEY = "private_pools"
 POOL_KEYS = frozenset(
     {"enabled", "provider", "allowed_bots", "default", "models", "daily_usd_cap"}
@@ -147,6 +172,7 @@ class Model:
     name: str
     label: str = ""
     config: dict = field(default_factory=dict)
+    price: ExactPrice | None = None  # exact USD per million tokens, when given
 
     @property
     def id(self) -> str:
@@ -162,14 +188,23 @@ class Provider:
     config: dict = field(default_factory=dict)
     models: dict[str, Model] = field(default_factory=dict)
     account: str = ""
+    enabled: bool = True  # providers.yaml; Ergonaut's runtime toggle is bots.pools
+    billing: str = SUBSCRIPTION  # subscription or metered
 
     @property
     def worker_only(self) -> bool:
         return self.type == "omp"
 
     @property
+    def metered(self) -> bool:
+        return self.billing == METERED
+
+    @property
     def available(self) -> bool:
-        """Its key is set (or it needs none); for the CLI, the CLI is installed."""
+        """Enabled, and its key is set (or it needs none); for the CLI, the CLI
+        is installed."""
+        if not self.enabled:
+            return False
         if self.worker_only:
             return shutil.which("omp") is not None
         if self.transport == "cli" and self.type == "openai":
@@ -192,6 +227,11 @@ class Providers:
     private_pools: dict[str, PrivatePool] = field(default_factory=dict)
     # Account/window presentation overrides; never used by routing.
     hidden_usage_windows: dict[str, list[str]] = field(default_factory=dict)
+    # Ordered pools, the rollover gate and privacy policies (bots.pool_config).
+    pools: PoolsConfig = field(default_factory=PoolsConfig)
+    # The file this was loaded from (``load_providers``), so spend checks can
+    # tell when it changed since (``current_providers``). None: in memory.
+    source: ProvidersSource | None = field(default=None, compare=False, repr=False)
 
     def __bool__(self) -> bool:
         return bool(self.providers)
@@ -204,17 +244,23 @@ class Providers:
         """Selector namespaces that are private, configured or reserved."""
         return frozenset((*RESERVED_POOL_NAMES, *self.private_pools))
 
-    def private_pool_for(self, bot: str) -> PrivatePool | None:
+    def private_pool_for(self, bot: str, lineage=()) -> PrivatePool | None:
         """The private pool that lists ``bot`` in ``allowed_bots`` (enabled or
-        not, so a disabled pool still fails closed), or None."""
-        return next(
-            (
-                pool
-                for _, pool in sorted(self.private_pools.items())
-                if bot and bot in pool.allowed_bots
-            ),
-            None,
-        )
+        not, so a disabled pool still fails closed), or None. ``lineage``
+        (the bot's folder ancestors) lets a nested bot inherit its parent's
+        pool; the nearest listed name wins."""
+        for name in (bot, *lineage):
+            found = next(
+                (
+                    pool
+                    for _, pool in sorted(self.private_pools.items())
+                    if name and name in pool.allowed_bots
+                ),
+                None,
+            )
+            if found is not None:
+                return found
+        return None
 
     def is_private(self, ref) -> bool:
         """``ref`` names a private pool (``personal``, ``personal/heavy``) or a
@@ -271,7 +317,7 @@ class Providers:
         return provider.type, config, provider.api_key_env
 
     @classmethod
-    def from_dict(cls, data: dict) -> Providers:
+    def from_dict(cls, data: dict) -> Providers:  # noqa: C901
         if not isinstance(data, dict):
             msg = f"{PROVIDERS_FILE} must be a mapping"
             raise ProvidersError(msg)
@@ -286,6 +332,16 @@ class Providers:
             if transport not in TRANSPORTS[kind]:
                 msg = f"Provider {name!r}: transport {transport!r} doesn't work with {kind}"
                 raise ProvidersError(msg)
+            enabled = spec.get("enabled", True)
+            if not isinstance(enabled, bool):
+                msg = f"Provider {name!r}: enabled must be true or false"
+                raise ProvidersError(msg)
+            billing = str(
+                spec.get("billing") or (SUBSCRIPTION if transport == "cli" else METERED)
+            )
+            if billing not in BILLING_KINDS:
+                msg = f"Provider {name!r}: billing must be one of {', '.join(BILLING_KINDS)}"
+                raise ProvidersError(msg)
             provider = Provider(
                 name=str(name),
                 type=kind,
@@ -293,6 +349,8 @@ class Providers:
                 api_key_env=str(spec.get("api_key_env") or ""),
                 config=dict(spec.get("config") or {}),
                 account=_worker_account(name, kind, spec),
+                enabled=enabled,
+                billing=billing,
             )
             for listed in spec.get("models") or []:
                 entry = listed if isinstance(listed, dict) else {"name": listed}
@@ -300,6 +358,7 @@ class Providers:
                     provider=provider.name,
                     name=str(entry["name"]),
                     label=str(entry.get("label") or ""),
+                    price=_price(provider, str(entry["name"]), entry.get("price")),
                     config={
                         **dict(entry.get("config") or {}),
                         **(
@@ -330,6 +389,13 @@ class Providers:
         result.hidden_usage_windows = hidden
         result.private_pools = _private_pools(data.get(PRIVATE_POOLS_KEY), providers)
         result.routing = result._routing(data)
+        try:
+            result.pools = parse_pools(data, providers)
+            result.pools.privacy = parse_privacy(
+                data.get("privacy"), result.private_pools
+            )
+        except PoolConfigError as exc:
+            raise ProvidersError(str(exc)) from exc
         if result.default and not result.knows(result.default):
             msg = f"default {result.default!r} isn't one of the listed models"
             raise ProvidersError(msg)
@@ -456,6 +522,99 @@ class Providers:
         if is_auto(ref):
             return bool(self.routing.tiers.get(tier_of(ref)))
         return self.find(ref) is not None
+
+
+def _amount(value, where: str) -> Decimal:
+    if isinstance(value, bool) or not isinstance(value, int | float | str | Decimal):
+        msg = f"{where} must be a number of US dollars, 0 or more"
+        raise ProvidersError(msg)
+    try:
+        amount = Decimal(str(value))
+    except InvalidOperation as exc:
+        msg = f"{where} must be a number"
+        raise ProvidersError(msg) from exc
+    if not amount.is_finite() or amount < 0:
+        msg = f"{where} must be a number of US dollars, 0 or more"
+        raise ProvidersError(msg)
+    return amount
+
+
+def _price(provider: Provider, model: str, raw) -> ExactPrice | None:
+    """A model's exact tariff (``pricing.ExactPrice``), or None when
+    providers.yaml gives none. USD per million tokens::
+
+        price:
+          input: 1.25              # required: uncached input
+          output: 10               # required: output (reasoning included)
+          cached: 0.125            # cached input; default: input
+          cache_write: 1.5625      # optional: cache-write input. Without it a
+                                   # request that can write cache isn't sent
+                                   # and billed cache writes stay unpriced.
+          long_context:            # optional: the whole request's rates once
+            threshold: 200000      # its prompt passes this many tokens
+            input: 2.5
+            cached: 0.25
+            output: 15
+            cache_write: 3.125     # optional, as above
+    """
+    if raw is None:
+        return None
+    where = f"Provider {provider.name!r}: {model} price"
+    if (
+        not isinstance(raw, dict)
+        or set(raw) - set(PRICE_KEYS)
+        or "input" not in raw
+        or "output" not in raw
+    ):
+        msg = (
+            f"{where} needs input and output (optionally cached, cache_write and "
+            "long_context), USD per million tokens"
+        )
+        raise ProvidersError(msg)
+    values = {
+        key: _amount(
+            raw.get(key, raw["input"] if key == "cached" else None), f"{where}.{key}"
+        )
+        for key in ("input", "cached", "output")
+    }
+    if raw.get("cache_write") is not None:
+        values["cache_write"] = _amount(raw["cache_write"], f"{where}.cache_write")
+    long_context = raw.get("long_context")
+    if long_context is not None:
+        lc_where = f"{where}.long_context"
+        if (
+            not isinstance(long_context, dict)
+            or set(long_context)
+            - {"threshold", "input", "cached", "output", "cache_write"}
+            or not {"threshold", "input", "output"} <= set(long_context)
+        ):
+            msg = f"{lc_where} needs threshold, input and output (optionally cached and cache_write)"
+            raise ProvidersError(msg)
+        threshold = long_context["threshold"]
+        if (
+            isinstance(threshold, bool)
+            or not isinstance(threshold, int)
+            or threshold <= 0
+        ):
+            msg = f"{lc_where}.threshold must be a positive number of prompt tokens"
+            raise ProvidersError(msg)
+        values["long_context"] = LongContextRates(
+            threshold=threshold,
+            input=_amount(long_context["input"], f"{lc_where}.input"),
+            cached=_amount(
+                long_context.get("cached", long_context["input"]), f"{lc_where}.cached"
+            ),
+            output=_amount(long_context["output"], f"{lc_where}.output"),
+            cache_write=_amount(long_context["cache_write"], f"{lc_where}.cache_write")
+            if long_context.get("cache_write") is not None
+            else None,
+        )
+    return ExactPrice(
+        provider=provider.name,
+        model=model,
+        source=f"providers.yaml ({provider.name})",
+        **values,
+    )
 
 
 def _worker_account(name: str, kind: str, spec: dict) -> str:
@@ -604,14 +763,92 @@ def parse_providers(text: str) -> Providers:
     return Providers.from_dict(yaml.safe_load(text) or {})
 
 
-def load_providers(paths: list[Path]) -> Providers:
-    """The first ``providers.yaml`` found at the top of the given paths."""
+def _first_providers_file(paths) -> tuple[str, bytes]:
+    """(path, bytes) of the first ``providers.yaml`` at the top of ``paths``,
+    or ("", b"") when there is none. OSError when one can't be read."""
     for path in paths:
         file = Path(path) / PROVIDERS_FILE
         if file.is_file():
-            providers = parse_providers(file.read_text())
-            text = Path(path) / ROUTING_FILE
-            if text.is_file():
-                providers.routing.text = text.read_text().strip()
-            return providers
-    return Providers()
+            return str(file), file.read_bytes()
+    return "", b""
+
+
+def load_providers(paths: list[Path]) -> Providers:
+    """The first ``providers.yaml`` found at the top of the given paths."""
+    file, data = _first_providers_file(paths)
+    if file:
+        providers = parse_providers(data.decode())
+        text = Path(file).parent / ROUTING_FILE
+        if text.is_file():
+            providers.routing.text = text.read_text().strip()
+    else:
+        providers = Providers()
+    providers.source = ProvidersSource(
+        paths=tuple(str(p) for p in paths),
+        file=file,
+        sha=hashlib.sha256(data).hexdigest() if file else "",
+    )
+    return providers
+
+
+@dataclass(frozen=True)
+class ProvidersSource:
+    """Where a ``Providers`` was loaded from: the bot paths searched, the
+    file found ("" for none) and the sha256 of its bytes."""
+
+    paths: tuple[str, ...]
+    file: str
+    sha: str
+
+
+class ProvidersUnreadable(ProvidersError):  # noqa: N818
+    """The providers.yaml in effect can't be read or doesn't validate now."""
+
+
+# Parsed providers.yaml contents by (file, sha256), shared by every stale
+# ``Providers`` in this process (bounded: a few recent versions).
+_CURRENT: dict[tuple[str, str], Providers] = {}
+_CURRENT_LIMIT = 8
+_CURRENT_LOCK = threading.Lock()
+
+
+def current_providers(providers: Providers) -> Providers:
+    """``providers`` as its file is NOW: the same object when the file is
+    unchanged (one read and one sha256 of a small file: cheap enough for
+    every metered send), else that file parsed again. Every process role
+    (web, bots, Celery, beat, voice bridge) reads the same file, so a
+    process still holding an older load sees a narrowing or revocation at
+    its next check, without a reload or restart. In-memory ``Providers``
+    (no ``source``) are their own current config.
+
+    ProvidersUnreadable when the file can't be read or no longer validates:
+    callers that authorize spend fail closed on it (subscription routes
+    don't call this)."""
+    source = providers.source
+    if source is None:
+        return providers
+    try:
+        file, data = _first_providers_file(source.paths)
+    except OSError as exc:
+        msg = f"{PROVIDERS_FILE} can't be read: {type(exc).__name__}"
+        raise ProvidersUnreadable(msg) from exc
+    sha = hashlib.sha256(data).hexdigest() if file else ""
+    if (file, sha) == (source.file, source.sha):
+        return providers
+    found = _CURRENT.get((file, sha))
+    if found is not None:
+        return found
+    if file:
+        try:
+            fresh = parse_providers(data.decode())
+        except Exception as exc:
+            msg = f"{PROVIDERS_FILE} doesn't load: {exc}"[:500]
+            raise ProvidersUnreadable(msg) from exc
+    else:
+        fresh = Providers()  # removed: no pools, so nothing metered is guarded
+    fresh.source = ProvidersSource(paths=source.paths, file=file, sha=sha)
+    with _CURRENT_LOCK:
+        while len(_CURRENT) >= _CURRENT_LIMIT:
+            _CURRENT.pop(next(iter(_CURRENT)), None)
+        _CURRENT[(file, sha)] = fresh
+    return fresh

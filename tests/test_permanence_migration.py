@@ -28,4 +28,7 @@ def test_pre_permanence_model_can_insert_after_upgrade():
             assert row.is_permanent is False
             assert row.permanence_initialized is False
     finally:
-        MigrationExecutor(connection).migrate(new)
+        # Back to the latest schema, not just `new`: later tests in the same
+        # database (any order) need every column.
+        executor = MigrationExecutor(connection)
+        executor.migrate(executor.loader.graph.leaf_nodes())

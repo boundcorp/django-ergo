@@ -107,8 +107,22 @@ def _post(bank: str, path: str, payload: dict, timeout: float) -> dict:
     return _request("POST", bank, path, payload, timeout)
 
 
+PRIVACY_ITEM_KEY = "_ergo_privacy"
+
+
 def retain_item(bank: str, item: dict, timeout: float = 30) -> None:
-    """Worker entry point. Hindsight processes the item after the HTTP response."""
+    """Worker entry point. Hindsight processes the item after the HTTP response.
+
+    An item queued by privacy-restricted work carries its policy under
+    ``_ergo_privacy`` (never sent): it is posted only to a bank that policy
+    approved when it was queued."""
+    item = dict(item)
+    policy = item.pop(PRIVACY_ITEM_KEY, None)
+    if policy is not None and (
+        not isinstance(policy, dict) or bank not in (policy.get("banks") or [])
+    ):
+        logger.warning("Hindsight retain refused: bank %s isn't approved for it", bank)
+        return
     try:
         _post(bank, "memories", {"items": [item], "async": True}, timeout)
     except Exception:  # memory failures cannot break a turn
@@ -344,6 +358,18 @@ class HindsightMemoryPlugin(BotPlugin):
             item["document_id"] = document_id
         return item
 
+    def _privacy(self, session, *, reflect: bool = False) -> tuple[str, list[str]]:
+        """(refusal or "", the restricted origin's policy names) for sending to
+        or reading from this plugin's bank (``bots.pools.memory_refusal``)."""
+        from django_ergo.bots import pools
+
+        bank = self._bank(None)
+        if getattr(self.bot, "providers", None) is None:  # no deployment config
+            origin = list(pools.current_origin())
+            return ("this work is under a privacy policy" if origin else ""), origin
+        refusal = pools.memory_refusal(self.bot, session, bank, reflect=reflect)
+        return refusal, list(pools.privacy_for(self.bot, session).names)
+
     def _retain(
         self,
         session,
@@ -353,14 +379,22 @@ class HindsightMemoryPlugin(BotPlugin):
         source: str = "chat",
     ) -> None:
         if self.enabled and content.strip():
+            refusal, origin = self._privacy(session)
+            if refusal:
+                self._emit("retain", "skipped", reason="privacy")
+                return
+            bank = self._bank(None)
+            item = self._item(session, content, document_id=document_id, source=source)
+            if origin:
+                from django_ergo.bots import pools
+
+                # Labelled, and carried through the queue so the worker posts
+                # only to the bank this policy approved (retain_item).
+                item["tags"] = [*item["tags"], *(f"privacy:{n}" for n in origin)]
+                item["metadata"][pools.ORIGIN_KEY] = ",".join(origin)
+                item[PRIVACY_ITEM_KEY] = {"origin": origin, "banks": [bank]}
             try:
-                _pool.submit(
-                    _enqueue,
-                    self._bank(None),
-                    self._item(
-                        session, content, document_id=document_id, source=source
-                    ),
-                )
+                _pool.submit(_enqueue, bank, item)
                 self._emit("retain", "queued")
             except Exception:
                 logger.exception(
@@ -414,6 +448,8 @@ class HindsightMemoryPlugin(BotPlugin):
 
     def _recall(self, session, query: str, *, timeout: float) -> str:
         """The explicit memory_recall tool: user-wide, no floor, observation-first."""
+        if refusal := self._privacy(session)[0]:
+            return f"Memory recall refused: {refusal}."
         hits = self._recall_hits(query, self._scope(session), None, timeout, "tool")
         return "\n".join(f"- {hit['text']}" for hit in hits[: self.top_k])
 
@@ -575,6 +611,9 @@ class HindsightMemoryPlugin(BotPlugin):
         @bot_tool(name="memory_reflect")
         def reflect(question: str) -> str:
             """Ask Hindsight to synthesize an answer from memory. This can be slow."""
+            refusal = plugin._privacy(ctx.session, reflect=True)[0]  # noqa: SLF001
+            if refusal:
+                return f"Memory reflect refused: {refusal}."
             data = _post(
                 plugin._bank(ctx),  # noqa: SLF001
                 "reflect",
@@ -590,6 +629,8 @@ class HindsightMemoryPlugin(BotPlugin):
         @bot_tool(name="memory_retain")
         def retain(text: str) -> str:
             """Save an explicitly requested fact to long-term memory."""
+            if refusal := plugin._privacy(ctx.session)[0]:  # noqa: SLF001
+                return f"Not saved: {refusal}."
             plugin._retain(ctx.session, text, source="explicit")  # noqa: SLF001
             return "Queued for memory."
 
@@ -600,6 +641,9 @@ class HindsightMemoryPlugin(BotPlugin):
 
     def always_context_sources(self, ctx, message):
         if not self.enabled or not message.strip() or self.prefetch == "off":
+            return []
+        if self._privacy(ctx.session)[0]:
+            self._emit("prefetch", "skipped", reason="privacy")
             return []
         if self.prefetch == "new_session" and ctx.session.messages.exists():
             self._emit("prefetch", "skipped", reason="not_new_session")

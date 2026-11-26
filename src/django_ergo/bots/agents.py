@@ -62,6 +62,9 @@ class AgentSpec:
     authority_message_id: str = ""
     supersedes_worker_id: str = ""
     launch_key: str = ""
+    # Set by bots.pools for a metered route: the one provider key and model the
+    # launched process may use (a manager that can't enforce it refuses).
+    confinement: dict | None = None
 
 
 def authority_reference(ctx, message_id):
@@ -155,6 +158,16 @@ class AgentManager:
     poll_seconds: float = POLL_SECONDS
     # Where agents run, for the model ("Orca worktrees on devbox").
     where: str = ""
+    # Metered (API-billed) pool routes launch only on a manager that declares
+    # BOTH of these, and none does today, so metered coding is refused:
+    # - ``metered_confinement``: ``start`` holds the process to exactly one
+    #   provider key and model (``AgentSpec.confinement``: scrubbed
+    #   environment, explicit model flags, no CLI fallback);
+    # - ``metered_spend_bound``: the total spend of one launch (every turn,
+    #   retry and child process) is enforced, not just reserved. A ledger
+    #   reservation alone doesn't cap a multi-turn CLI run.
+    metered_confinement: bool = False
+    metered_spend_bound: bool = False
 
     def available(self, ctx: ToolContext) -> bool:
         """Whether this chat may use it."""
@@ -262,6 +275,10 @@ def start(ctx: ToolContext, spec: AgentSpec, manager: str = "") -> Worker:
     if ctx.session is None:
         msg = "Agents belong to a chat"
         raise ValueError(msg)
+    from django_ergo.bots.model_choice import AGENT
+    from django_ergo.bots.model_choice import check
+
+    check(ctx.bot, spec.model, AGENT)  # a private model refuses before any side effect
     found = manager_for(ctx.bot, manager, ctx)
     if found.name == "orca":
         from django_ergo.bots.agent_launches import launch
@@ -270,7 +287,7 @@ def start(ctx: ToolContext, spec: AgentSpec, manager: str = "") -> Worker:
     return _start(ctx, spec, found.name)
 
 
-def _start(ctx: ToolContext, spec: AgentSpec, manager: str = "") -> Worker:
+def _start(ctx: ToolContext, spec: AgentSpec, manager: str = "") -> Worker:  # noqa: PLR0915
     """Start an agent and the Worker that watches it.
 
     With ``spec.tier``, the agent, model and effort come from providers.yaml's
@@ -290,15 +307,31 @@ def _start(ctx: ToolContext, spec: AgentSpec, manager: str = "") -> Worker:
     spec.model = check(ctx.bot, spec.model, AGENT)  # before any side effect
     found = manager_for(ctx.bot, manager, ctx)
     providers = found.routing_providers(ctx, spec)
-    choice = None
-    if spec.tier:
-        from django_ergo.bots.routing import pick_agent
+    from django_ergo.bots import pools
 
-        # Only candidates this manager can run, so a Claude window that's used
-        # up falls back to another subscription the manager also runs.
-        choice = pick_agent(providers, spec.tier, found.agents, receipt=routing_receipt)
-        spec.agent, spec.model, spec.effort = choice.agent, choice.model, choice.effort
+    # The active pool (and privacy) decide: a tier picks within the pool, an
+    # explicit model must be one of its routes, a metered route needs a
+    # manager that can confine it and a reserved per-launch budget.
+    decision = pools.select_agent(
+        ctx.bot,
+        ctx.session,
+        tier=spec.tier,
+        model=spec.model,
+        agent=spec.agent,
+        manager_agents=found.agents,
+        confinable=found.metered_confinement,
+        spend_bounded=found.metered_spend_bound,
+        providers=providers,
+        receipt=routing_receipt,
+    )
+    choice = decision.choice if decision is not None else None
+    if choice is not None:
+        spec.agent, spec.model = choice.agent, choice.model
+        spec.effort = choice.effort or spec.effort
         check(ctx.bot, spec.model, AGENT)
+    spec.confinement = (
+        pools.confinement(ctx.bot, decision) if decision is not None else None
+    )
     spec.agent = spec.agent or found.default_agent
     if found.agents and spec.agent not in found.agents:
         msg = f"{found.name} runs {', '.join(found.agents)}, not {spec.agent!r}" + (
@@ -316,7 +349,7 @@ def _start(ctx: ToolContext, spec: AgentSpec, manager: str = "") -> Worker:
             msg = "Omp coding workers require an explicit allowed provider/model"
             raise ValueError(msg)
     spec.title = (spec.title or spec.brief.strip().splitlines()[0])[:120]
-    if choice is not None:
+    if choice is not None and spec.tier:
         from django_ergo.bots.routing import record_agent_pick
 
         record_agent_pick(
@@ -344,14 +377,37 @@ def _start(ctx: ToolContext, spec: AgentSpec, manager: str = "") -> Worker:
             else {"reason": "explicit or manager default"},
             "launch_model": None,
             "launch_model_provenance": "not reported by manager",
-            "billing_mode": "unknown",
-            "billing_mode_provenance": "not independently verified",
+            "billing_mode": decision.billing
+            if decision is not None and not decision.legacy
+            else "unknown",
+            "billing_mode_provenance": "pool route metadata"
+            if decision is not None and not decision.legacy
+            else "not independently verified",
+            **(
+                {
+                    "pool": decision.pool,
+                    "route": decision.route,
+                    "decision": decision.receipt_id,
+                    "confined": bool(spec.confinement),
+                    "reserved_usd": str(decision.reserved_usd)
+                    if decision.reserved_usd is not None
+                    else None,
+                }
+                if decision is not None
+                else {}
+            ),
         },
     }
     from django_ergo.bots.agent_launches import prepare
 
+    # The journal's watch state carries the pool receipt (pool, route,
+    # decision, reservation) before the manager runs, so a crashed launch is
+    # recovered with its original authority and a reservation is never
+    # released here: whether a failed start reached the provider is unknown.
     prepare(state, f"{spec.agent}: {spec.title}")
     handle = found.start(ctx, spec)
+    if spec.confinement:
+        handle["confinement"] = spec.confinement
     # Scoped managers normalize provider/model to the native CLI selector.
     state.update(agent=spec.agent, model=spec.model, effort=spec.effort)
     state["dispatch_receipt"]["selected"] = {

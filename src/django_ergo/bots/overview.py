@@ -209,6 +209,8 @@ def gh_open_prs(repos: list[str]) -> list[str]:
 def collect(bots: list[Bot], current: ConversationSession) -> list[tuple]:
     """(bot index, session, one-line summary, last activity) for each bot's chats
     with the user, most recently active first. ``bots[0]`` is the viewing bot."""
+    from django_ergo.bots.registry import privacy_readable
+
     chats = []
     for index, each in enumerate(bots):
         qs = each.sessions().filter(user_id=current.user_id)
@@ -216,6 +218,10 @@ def collect(bots: list[Bot], current: ConversationSession) -> list[tuple]:
             ~Q(status="completed") | Q(metadata__bot_role__in=list(roles.TOP))
         )
         for session in qs.order_by("-updated_at")[:30]:
+            # A session under a privacy policy the viewing work isn't under
+            # (bots.pools) is left out entirely: not named, not summarized.
+            if not privacy_readable(bots[0], session):
+                continue
             status = thread_status(session)
             resolvable = not status["ready_to_resolve"] or can_resolve(
                 bots[0], current.user_id, session

@@ -113,6 +113,9 @@ class ReloadingRegistry:
                     if self._registry is not None:
                         keep_last_good(self._registry, registry)
                         logger.info("Bot files changed; reloaded %s", ", ".join(b.name for b in registry))
+                        # Bots built from the old registry (a running turn's
+                        # spend guard) read current config through this.
+                        self._registry.successor = registry
                     self._registry = registry
                 self._fingerprint = seen
         return self._registry

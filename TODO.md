@@ -180,6 +180,17 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 
 - [ ] A bot tool waiting on a @bot_task holds a worker slot; watch worker concurrency if many tools wait at once.
 
+### Model pools (`pools`, `privacy`)
+
+- [x] Ordered, user-owned pools in providers.yaml, one resolver for every consumer (`bots.pools`), rollover only on exhaustion through three gates (default off, persisted with an explicit way back), immutable time-bounded spend grants (revisions of a spending envelope: one cumulative ledger and lock, re-checked against the current providers.yaml file at every send, never replenished by a config change or a pool rename; issued grants drawn from and capped by the owner's current authority; an admin links a new pool on already-funded accounts) with per-attempt reservations for metered routes (`conversation.spend_guard`, adapter contract for new engines), provider on/off switches, `RouteDecision` receipts with grant and revision, queued work bound to its captured policy, inherited privacy through delegation, threads, workers, background tasks, history, summaries, memory and web_search/video. Docs: `docs/model-pools.md`.
+- [ ] Gemini engine (#406): implement `spend_guard.SpendAdapter` and adopt the `price:` schema (cache_write, long_context) before a Google route is selectable on a metered pool.
+- [ ] Modality-aware bounds (images, audio, documents) and priced server-side tools under a spend guard; until then such requests are refused on metered routes.
+- [x] Ergonaut: Pools section on the Routing page, chat pool picker, pool-exhausted refusal with switch buttons; the model picker lists only what the chat may use.
+- [ ] Metered coding: a manager that can enforce a total per-launch spend bound (and provider confinement) before metered coding routes launch; until then they are refused everywhere.
+- [ ] Ancillary calls outside turns (illustrations, attachment image descriptions, voice) on a metered default refuse instead of selecting through the pool; route them through `select_route` when a metered default is wanted.
+- [ ] Reconcile the per-launch coding reservation from billing evidence, and spend-scan performance for large ledgers.
+- [ ] ergo-bots: add `pools:` with owners, prices and budgets with an end date (example in `docs/model-pools.md`); switch personal's web_search to `brave`; list personal's Hindsight bank under `privacy.personal.memory` if it should keep memory.
+
 ### Private inference (`private_pools`)
 
 - [x] Phase 1: `private_pools` in providers.yaml (strict schema, `allowed_bots`, reserved `personal` selector), the guarded Fireworks engine with per-turn grants minted in `Bot.make_engine`, public engines refusing `fireworks.ai`, coding agents refusing private models, the `InferenceRequest` ledger with exact prices and the optional `daily_usd_cap`, protected `FIREWORKS_*` env, `private_models` in the models API and the `private` block in the Costs API. Docs: `docs/bots.md` and `docs/ergonaut.md`, "Private inference".
@@ -187,7 +198,7 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 - [x] Private bots (`private: true` in bot.yaml): closed to other bots' messages, thread lists, context block, history links and source files; ordinary cross-bot outbound sends/forwards blocked. Opt-in `private_exports` permits exact user-approved briefs and immutable destination-only file snapshots, without source-history access or onward sharing. Activation requires the framework migration, plugin config and anti-bypass instructions; no runtime activation is included. Browser tasks of a private-pool bot stay in the pool. See [approved private exports](docs/bots.md#approved-private-exports) and [snapshots](docs/attachments.md#private-export-snapshots).
 - [ ] Phase 2: a separate credential-isolated private inference service (own workload and service user, key mounted only there, signed short-lived grants, egress limited to Fireworks), so bot, tool and agent processes never see `FIREWORKS_API_KEY`.
 - [ ] Private coding agents: omp/Orca harnesses would have to carry and enforce a grant (subagents, defaults, model switches). Until then agents refuse private models.
-- [ ] Frontend: a separate, API-billed group for `private_models` in the model picker, and the Costs page's `private` block.
+- [x] Frontend: the model picker lists a private-pool bot's private models only (model pools PR). Still to do: the Costs page's `private` block.
 - [ ] ergo-bots: the `personal` bot and a disabled `private_pools.personal` in providers.yaml; provision `FIREWORKS_API_KEY` as a Secret in infra-octo (`kubernetes/apps/ergonaut/app/deployment.yaml`); then enable.
 - [ ] Lee decides: the `daily_usd_cap` value (and whether a UTC day is the right period), the default member (`deepseek-v4p1-flash-1017` or the original `deepseek-v4p1-flash`), whether titles, compaction and illustrations of the personal bot's chats should spend on the pool (they do now), and whether its voice notes may go to the deployment's public `AUDIO_TRANSCRIBER` (they do now, when one is set).
 

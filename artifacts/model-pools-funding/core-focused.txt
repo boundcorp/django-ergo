@@ -1,0 +1,17 @@
+........................................................................ [ 20%]
+........................................................................ [ 40%]
+....s................................................................... [ 60%]
+........................................................................ [ 80%]
+....................................................................     [100%]
+=============================== warnings summary ===============================
+.venv/lib/python3.12/site-packages/platformdirs/api.py:441
+  /home/dev/orca/workspaces/django-ergo/model-pools-core/.venv/lib/python3.12/site-packages/platformdirs/api.py:441: RuntimeDirWarning: XDG_RUNTIME_DIR is not set, falling back to /tmp/runtime-1000
+    return Path(self.user_runtime_dir)
+
+tests/test_model_pools_acceptance.py::test_r9_guarded_sends_turn_sdk_retries_off[openai]
+tests/test_model_pools_acceptance.py::test_r9_guarded_sends_turn_sdk_retries_off[claude]
+  /home/dev/orca/workspaces/django-ergo/model-pools-core/.venv/lib/python3.12/site-packages/asgiref/sync.py:674: UserWarning: async_to_sync was passed a non-async-marked callable
+    return AsyncToSync(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+355 passed, 1 skipped, 3 warnings in 100.51s (0:01:40)

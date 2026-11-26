@@ -1859,7 +1859,9 @@ def test_private_pool_models_are_only_for_allowlisted_bots(client, cook, use_bot
         }
     )
     models = client.get("/api/bots/kitchen/models").json()
-    assert [m["id"] for m in models["models"]] == ["openai/gpt-6-sol"]
+    # The picker lists exactly what the chat may use: its private models, no public ones.
+    assert [m["id"] for m in models["models"]] == ["personal/flash"]
+    assert models["privacy"]["restricted"] is True
     assert [(m["id"], m["billing"], m["available"]) for m in models["private_models"]] == [
         ("personal/flash", "api", True)
     ]

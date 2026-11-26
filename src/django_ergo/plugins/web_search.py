@@ -190,16 +190,73 @@ class WebSearchPlugin(BotPlugin):
         )
         raise WebSearchError(msg)
 
-    def search(self, query: str, count: int = 0) -> str:
+    def search(self, query: str, count: int = 0, *, session=None) -> str:
         query = query.strip()
         if not query:
             return "Give a search query."
         count = max(1, min(int(count or self.count), 20))
         try:
-            backend = self.resolved_backend()
+            backend = (
+                self.private_backend(session)
+                or self.pooled_backend(session)
+                or self.resolved_backend()
+            )
             return getattr(self, f"_search_{backend}")(query, count)
         except WebSearchError as exc:
             return f"Search failed: {exc}"
+
+    def pooled_backend(self, session=None) -> str:
+        """With pools configured (``bots.pools``), an LLM search runs only on
+        the chat's active pool: ``claude_code`` needs a usable Claude
+        subscription in it, and ``anthropic`` (a metered call with per-search
+        fees no pool grant can bound) is refused. Brave isn't a model and needs
+        no pool. "" without pools."""
+        from django_ergo.bots import pools
+
+        bot = getattr(self, "bot", None)
+        if bot is None or bot.providers.pools.legacy:
+            return ""
+        backend = self.backend
+        if backend == "auto":
+            backend = "brave" if os.environ.get(self.brave_key_env) else "claude_code"
+        if backend == "brave":
+            return "brave"
+        if backend == "anthropic":
+            msg = (
+                "the anthropic backend bills per search outside any pool grant; use "
+                "brave, or claude_code on a subscription in the active pool"
+            )
+            raise WebSearchError(msg)
+        try:
+            pools.authorize_subscription_call(
+                bot, session, provider_type="claude", consumer=pools.WEB_SEARCH
+            )
+        except pools.PoolRefusal as exc:
+            msg = f"claude_code search isn't allowed here: {exc}"
+            raise WebSearchError(msg) from exc
+        return "claude_code"
+
+    def private_backend(self, session=None) -> str:
+        """For a privacy-restricted origin (``bots.pools``): a non-LLM backend
+        its policy allows, or WebSearchError. The claude_code and anthropic
+        backends send the query to a model outside the policy, so they are
+        never used for such work. "" when the origin isn't restricted."""
+        from django_ergo.bots import pools
+
+        bot = getattr(self, "bot", None)
+        if bot is None:
+            return ""
+        privacy = pools.privacy_for(bot, session)
+        if not privacy.restricted:
+            return ""
+        if privacy.permits_search("brave") and os.environ.get(self.brave_key_env):
+            return "brave"
+        msg = (
+            f"privacy policy {privacy.label()} doesn't allow LLM search backends "
+            "(claude_code, anthropic); allow a non-LLM backend with privacy."
+            f"<policy>.web_search: [brave] and set {self.brave_key_env}"
+        )
+        raise WebSearchError(msg)
 
     def _search_brave(self, query: str, count: int) -> str:
         key = os.environ.get(self.brave_key_env)
@@ -274,6 +331,10 @@ class WebSearchPlugin(BotPlugin):
         return str(reply["result"]).strip()
 
     def _search_anthropic(self, query: str, count: int) -> str:
+        from django_ergo.conversation.spend_guard import paid_dispatch_problem
+
+        if problem := paid_dispatch_problem(legacy=True):
+            raise WebSearchError(problem)
         key = os.environ.get(self.anthropic_key_env)
         if not key:
             msg = f"{self.anthropic_key_env} is not set"
@@ -385,9 +446,10 @@ class WebSearchPlugin(BotPlugin):
                 },
             },
             required=["query"],
+            takes_context=True,
         )
-        def web_search(query: str, count: int = 0) -> str:
-            return plugin.search(query, count)
+        def web_search(ctx, query: str, count: int = 0) -> str:
+            return plugin.search(query, count, session=getattr(ctx, "session", None))
 
         @bot_tool(
             name="ergo_web_fetch",

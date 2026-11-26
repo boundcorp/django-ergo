@@ -710,6 +710,9 @@ class ClaudeCodeEngine(ClaudeAPIEngine):
     """
 
     transport_type = "cli"
+    # A CLI run (or the private pool's own ledger) can't send under a public
+    # pool's per-request spend guard (conversation.spend_guard).
+    spend_adapter = None
 
     def __init__(self, config: dict):
         super().__init__(config)

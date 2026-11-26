@@ -50,6 +50,17 @@ def get_registry() -> BotRegistry | None:
     return _registry
 
 
+def refresh_registry() -> None:
+    """Let this process's reloading registry (Ergonaut's) check for changed
+    bot files now. Never loads a registry that isn't loaded yet."""
+    current = getattr(_registry, "current", None)
+    if callable(current) and hasattr(_registry, "bots"):
+        try:
+            current()
+        except Exception:  # noqa: BLE001 - it logs; the loaded bots stay
+            logger.debug("Refreshing the bot registry failed", exc_info=True)
+
+
 def find_handler(bot_name: str, plugin_name: str, hook: str):
     registry = get_registry()
     if registry is None or bot_name not in registry:

@@ -35,6 +35,7 @@ from django.utils.module_loading import import_string
 
 from django_ergo.bots import messaging
 from django_ergo.bots import page_actions
+from django_ergo.bots import pools
 from django_ergo.bots.admission_drain import async_execution
 from django_ergo.bots.definition import MAIN
 from django_ergo.bots.definition import BotDefinition
@@ -553,14 +554,22 @@ class Bot:
 
     @property
     def providers(self) -> Providers:
+        """providers.yaml as it is now: a bot built before a reload reads the
+        registry that replaced its own (``BotRegistry.latest``)."""
         registry = getattr(self, "registry", None)
-        return registry.providers if registry is not None else Providers()
+        if registry is None:
+            return Providers()
+        latest = getattr(registry, "latest", None)
+        return (latest() if callable(latest) else registry).providers
 
     @property
     def private_pool(self) -> PrivatePool | None:
         """The private pool this bot is allowlisted in (providers.yaml), if any:
-        its ancillary calls and compaction then stay in that pool."""
-        return self.providers.private_pool_for(self.name)
+        its ancillary calls and compaction then stay in that pool. A bot nested
+        in an allowlisted bot's folder inherits its pool."""
+        return self.providers.private_pool_for(
+            self.name, tuple(pools.lineage(self)[1:])
+        )
 
     def model_ref(self) -> str:
         """The ``provider/model`` this bot uses by default, when providers.yaml
@@ -581,7 +590,7 @@ class Bot:
         use now; PolicyError when the pool isn't configured, has no such
         member, is disabled, or doesn't list this bot in ``allowed_bots``."""
         pool, alias, model_id = self.providers.private(ref)
-        pool.check_bot(self.name)
+        pool.check_bot(self.name, tuple(pools.lineage(self)[1:]))
         return pool, alias, model_id
 
     def session_model(self, session: ConversationSession | None) -> str:
@@ -604,6 +613,11 @@ class Bot:
         ref = self.session_model_ref(model)
         if self.providers.is_private(ref):
             self.private_target(ref)  # refuse before changing anything
+        elif ref and not self.providers.pools.legacy and not is_auto(ref):
+            # A pin must be a route of the chat's active pool (and privacy).
+            pools.select_route(self, session, ref=ref, record=False)
+        elif ref:
+            self._check_switched_on(ref)
         session.model = ref
         spec = self.engine_spec(session)
         fields = ["model", "updated_at"]
@@ -660,6 +674,13 @@ class Bot:
             from django_ergo.bots.model_choice import check
 
             check(self, ref, MODEL)
+        if (
+            ref
+            and not self.providers.pools.legacy
+            and not self.providers.is_private(ref)
+        ):
+            return self._route_pools(session, ref)
+        self._check_switched_on(ref)
         if not is_auto(ref):
             if "retry_route" in (session.metadata or {}):
                 session.metadata = {**session.metadata}
@@ -694,6 +715,56 @@ class Bot:
         )
         self._set_routed(session, tier_of(ref), picked)
         return picked
+
+    def _check_switched_on(self, ref: str) -> None:
+        """PoolRefusal for a pinned model whose provider is switched off."""
+        if not ref or is_auto(ref) or self.providers.is_private(ref):
+            return
+        found = self.providers.find(ref)
+        if found is None:
+            return
+        provider = found[0]
+        if not pools.provider_enabled(provider):
+            msg = f"{ref}: {provider.name} is switched off; pick another model"
+            raise pools.PoolRefusal(pools.PROVIDER_DISABLED, msg)
+
+    def _route_pools(self, session: ConversationSession, ref: str) -> str:
+        """``route`` with pools configured: the chat's active pool decides the
+        model (or refuses with a ``PoolRefusal``, kept on the chat for the UI)."""
+        meta = dict(session.metadata or {})
+        pending = meta.pop("retry_route", None)
+        before = meta.get("routed_model", "")
+        exclude = ()
+        try:
+            if (
+                isinstance(pending, dict)
+                and pending.get("ref") == ref
+                and pending.get("model") == before
+            ):
+                # A retry the person accepted: that model, if it's still allowed.
+                decision = pools.select_route(self, session, ref=before, current=before)
+                decision.tier = tier_of(ref)
+            else:
+                decision = pools.select_route(
+                    self, session, ref=ref, current=before, exclude=exclude
+                )
+        except pools.PoolRefusal as refusal:
+            meta[pools.SESSION_REFUSAL_KEY] = refusal.as_dict()
+            session.metadata = meta
+            session.save(update_fields=["metadata", "updated_at"])
+            raise
+        meta.pop(pools.SESSION_REFUSAL_KEY, None)
+        meta[pools.SESSION_ROUTE_KEY] = decision.summary()
+        session.metadata = meta
+        session._ergo_decision = decision  # noqa: SLF001 - this turn's spend authority
+        if not is_auto(ref):
+            session.save(update_fields=["metadata", "updated_at"])
+            return ""
+        if decision.route == before:
+            session.save(update_fields=["metadata", "updated_at"])
+            return decision.route
+        self._set_routed(session, tier_of(ref), decision.route, decision.reason)
+        return decision.route
 
     def _set_routed(
         self,
@@ -732,6 +803,19 @@ class Bot:
         if not is_auto(ref):
             return ""
         failed = self.resolve_ref(ref, session)
+        if not self.providers.pools.legacy and not self.providers.is_private(ref):
+            from django_ergo.bots.routing import is_limit_error
+            from django_ergo.bots.routing import is_refusal_error
+
+            if not (is_limit_error(error) or is_refusal_error(error)):
+                return ""
+            try:
+                decision = pools.select_route(
+                    self, session, ref=ref, exclude=(failed,), record=False
+                )
+            except pools.PoolRefusal:
+                return ""  # nothing else allowed (other pools only through the rollover gates)
+            return decision.route
         retry = routing_retry_model(self.providers, tier_of(ref), failed, error)
         return self.providers.check_public(retry, where="A retry") if retry else ""
 
@@ -745,9 +829,15 @@ class Bot:
 
             check(self, ref, MODEL)
             check(self, model, MODEL)
+        if not self.providers.pools.legacy and is_auto(ref):
+            # The retry target must still be a usable route of the active pool.
+            pools.select_route(self, session, ref=model, record=False)
+            tier_models = [model]
+        else:
+            tier_models = self.providers.routing.tiers.get(tier_of(ref), [])
         if (
             not is_auto(ref)
-            or model not in self.providers.routing.tiers.get(tier_of(ref), [])
+            or model not in tier_models
             or self.providers.is_private(model)
         ):
             msg = f"{model!r} isn't a model in this chat's tier"
@@ -759,8 +849,16 @@ class Bot:
         else the tier's first available one. Never a private model. No ORM."""
         if not is_auto(ref):
             return ref
-        tier = self.providers.routing.tiers.get(tier_of(ref), [])
         routed = ((session.metadata or {}) if session else {}).get("routed_model")
+        if self._pooled():
+            # The pool chose the route (bots.pools); it needn't be in a global
+            # tier, and it is never swapped for one.
+            current = getattr(session, "_ergo_decision", None)
+            if current is not None and not current.legacy:
+                return self.providers.check_public(current.route, where=ref)
+            if routed:
+                return self.providers.check_public(routed, where=ref)
+        tier = self.providers.routing.tiers.get(tier_of(ref), [])
         picked = ""
         if routed in tier:
             picked = routed
@@ -774,12 +872,19 @@ class Bot:
                 picked = tier[0] if tier else ""
         return self.providers.check_public(picked, where=ref) if picked else ""
 
-    def engine_spec(  # noqa: C901
+    def engine_spec(  # noqa: C901, PLR0912
         self, session: ConversationSession | None = None, model: str = ""
     ) -> EngineSpec:
         """The engine for a chat: the model picked for it (or ``model``), else the bot's."""
         default = get_default_engine_spec()
         ref = model or self.session_model(session) or self.model_ref()
+        privacy = pools.privacy_for(self, session)
+        if privacy.restricted and not privacy.permits(ref):
+            msg = (
+                f"Bot {self.name!r}: privacy policy {privacy.label()} doesn't allow "
+                f"{ref or 'its default engine'} for this work"
+            )
+            raise PolicyError(msg)
         configured = str(self.definition.engine_config.get("model") or "")
         if not self.private_pool and self.providers.is_private(configured):
             self.private_target(configured)
@@ -829,6 +934,9 @@ class Bot:
                 msg = f"Bot {self.name!r} needs the {key_env} environment variable"
                 raise RuntimeError(msg)
             config["api_key"] = key
+            config["api_key_env"] = key_env
+        if ref and self.providers.find(ref) and self.providers.find(ref)[0].account:
+            config["_pool_account"] = self.providers.find(ref)[0].account
         return EngineSpec(
             engine_type=engine_type,
             transport_type=transport,
@@ -884,7 +992,12 @@ class Bot:
             text[:4000],
             user=user,
             engine=self.make_ancillary_engine(
-                session, purpose="new_thread_metadata", use_session=False
+                session,
+                purpose="new_thread_metadata",
+                use_session=False,
+                decision=await sync_to_async(
+                    self.ancillary_decision, thread_sensitive=True
+                )(session, pools.TITLE),
             ),
             metadata={"bot": self.name, "session": str(session.id) if session else ""},
         )
@@ -902,6 +1015,7 @@ class Bot:
         *,
         purpose: str,
         use_session: bool = True,
+        decision: pools.Decision | None = None,
     ) -> Engine:
         """The engine for an ancillary text call (titles, compaction, ...).
 
@@ -918,7 +1032,20 @@ class Bot:
         if self.providers.is_private(ref):
             msg = "Private ancillary inference is restricted to a private pool's allowed_bots"
             raise PolicyError(msg)
-        return self.make_engine(selected_session, purpose=purpose)
+        privacy = pools.privacy_for(self, session)
+        if privacy.restricted:
+            msg = (
+                f"Privacy policy {privacy.label()} covers this chat; {self.name} has "
+                "no approved model for its ancillary calls"
+            )
+            raise PolicyError(msg)
+        return self.make_engine(
+            selected_session,
+            decision.route if decision is not None else "",
+            purpose=purpose,
+            decision=decision,
+            privacy_session=session,
+        )
 
     def make_engine(
         self,
@@ -926,8 +1053,21 @@ class Bot:
         model: str = "",
         *,
         purpose: str = "chat",
+        decision: pools.Decision | None = None,
+        privacy_session: ConversationSession | None = None,
     ) -> Engine:
+        """The engine for a call. With pools configured, a metered (API-billed)
+        route gets the spend guard of ``decision`` (or of the chat's routed
+        decision); without one it refuses to send (``conversation.spend_guard``)."""
+        if privacy_session is not None and session is None:
+            privacy = pools.privacy_for(self, privacy_session)
+            if privacy.restricted and not self.private_pool:
+                msg = f"Privacy policy {privacy.label()} covers this chat"
+                raise PolicyError(msg)
+        decision, model = self._pool_dispatch(session, model, decision, purpose)
         spec = self.engine_spec(session, model)
+        if decision is not None:
+            self._check_dispatch(spec, decision)
         if self._engine_factory is not None:
             if self.private_pool:
                 msg = "Private pool engines cannot use an engine factory override"
@@ -948,8 +1088,10 @@ class Bot:
                     user_id=getattr(session, "user_id", None),
                     session_id=getattr(session, "pk", None),
                     purpose=purpose,
+                    lineage=tuple(pools.lineage(self)[1:]),
                 )
             )
+        self._attach_spend_guard(engine, spec, session, decision, purpose)
         if self.definition.tool_results_in_context is not None:
             engine.tool_results_in_context = self.definition.tool_results_in_context
         config = spec.config
@@ -967,6 +1109,157 @@ class Bot:
             user = session.user if cached else None
             engine.message_timezone = ToolContext(bot=self, user=user).timezone
         return engine
+
+    def _pooled(self) -> bool:
+        return not self.providers.pools.legacy and not self.private_pool
+
+    def _pool_dispatch(
+        self,
+        session: ConversationSession | None,
+        model: str,
+        decision: pools.Decision | None,
+        purpose: str,
+    ) -> tuple[pools.Decision | None, str]:
+        """With pools: the decision this engine sends under and the exact
+        route to build it from. A chat turn's engine is built from the turn's
+        decision (``route``), never re-resolved from global tiers; a chat
+        engine without a decision refuses."""
+        if not self._pooled():
+            return None, model
+        if decision is None and session is not None:
+            current = getattr(session, "_ergo_decision", None)
+            if current is not None and model in ("", current.route):
+                decision = current
+        if decision is None or decision.legacy or decision.mode == "private":
+            ref = model or self.session_model(session) or self.model_ref()
+            if (
+                decision is None
+                and session is not None
+                and (model or purpose == "chat")
+                and ref
+                and not self.providers.is_private(ref)
+            ):
+                msg = (
+                    f"Bot {self.name!r}: {ref} has no pool decision for this "
+                    f"{purpose} call; it must be routed through the chat's active "
+                    "pool before sending"
+                )
+                raise PolicyError(msg)
+            return decision, model
+        if model and model != decision.route:
+            msg = (
+                f"Pool {decision.pool!r} selected {decision.route}, not {model}; "
+                "refusing to build another engine"
+            )
+            raise PolicyError(msg)
+        return decision, decision.route
+
+    def _check_dispatch(self, spec: EngineSpec, decision: pools.Decision) -> None:
+        """The engine about to send must be exactly the decision's route: same
+        pool membership, provider (account), model, engine type, transport and
+        billing. PolicyError otherwise (nothing is sent)."""
+        if decision.legacy or decision.mode == "private":
+            return
+        provider = self.providers.providers.get(decision.provider)
+        pool = self.providers.pools.get(decision.pool)
+        expected_type, expected, _ = (
+            self.providers.engine(decision.route)
+            if provider is not None
+            else ("", {}, "")
+        )
+        problems = []
+        if provider is None:
+            problems.append(f"{decision.provider} isn't a provider")
+        if pool is None or not pool.contains_ref(decision.route):
+            problems.append(f"{decision.route} isn't in pool {decision.pool!r}")
+        if f"{decision.provider}/{decision.model}" != decision.route:
+            problems.append("the decision's provider/model don't match its route")
+        if str(spec.config.get("provider") or "") != decision.provider:
+            problems.append(f"the engine is for {spec.config.get('provider')!r}")
+        if spec.engine_type != expected_type or spec.config.get(
+            "model"
+        ) != expected.get("model"):
+            problems.append(
+                f"the engine is {spec.engine_type}/{spec.config.get('model')}"
+            )
+        if provider is not None and spec.transport_type != provider.transport:
+            problems.append(f"the engine's transport is {spec.transport_type}")
+        if provider is not None and provider.billing != decision.billing:
+            problems.append(f"{decision.provider} now bills as {provider.billing}")
+        if problems:
+            msg = (
+                f"Refusing to send: pool {decision.pool!r} selected {decision.route} "
+                f"but {'; '.join(problems)}"
+            )
+            raise PolicyError(msg)
+
+    def _attach_spend_guard(self, engine, spec, session, decision, purpose) -> None:
+        """Metered public routes send only with a pool decision's guard, on an
+        engine that enforces it (``spend_adapter``); anything else refuses."""
+        if spec.engine_type in PRIVATE_ENGINE_TYPES:
+            return
+        if self.providers.pools.legacy:
+            return  # API adapters re-read the durable latch at each unguarded send.
+        provider_name = str(spec.config.get("provider") or "")
+        model = str(spec.config.get("model") or "")
+        provider = self.providers.providers.get(provider_name)
+        if (
+            provider is not None
+            and provider.metered
+            and (getattr(engine, "spend_adapter", None) is None)
+        ):
+            msg = (
+                f"{provider_name}/{model} bills per token but its "
+                f"{spec.engine_type} {spec.transport_type} engine can't enforce a "
+                "spend bound; refusing to send"
+            )
+            raise PolicyError(msg)
+        if spec.transport_type != "api":
+            return
+        if provider is None:
+            engine.spend_guard = pools.deny_guard(
+                provider_name,
+                model,
+                f"Bot {self.name!r}: an API engine outside providers.yaml can't send "
+                "while pools are configured",
+            )
+            return
+        if not provider.metered:
+            return
+        decision = decision or getattr(session, "_ergo_decision", None)
+        if decision is not None and decision.route == f"{provider_name}/{model}":
+            engine.spend_guard = decision.guard(self, session, purpose=purpose)
+            if engine.spend_guard is not None:
+                from django_ergo.conversation.transport_identity import identity
+
+                engine.spend_guard.check_transport(
+                    identity(
+                        spec.engine_type,
+                        spec.transport_type,
+                        spec.config,
+                        account=spec.config.get("_pool_account", ""),
+                        model=model,
+                    )
+                )
+            return
+        engine.spend_guard = pools.deny_guard(
+            provider_name,
+            model,
+            f"{provider_name}/{model} is metered and wasn't selected through a pool "
+            "for this call; refusing to send",
+        )
+
+    def ancillary_decision(
+        self, session: ConversationSession | None, consumer: str
+    ) -> pools.Decision | None:
+        """With pools configured: the route for a title or other ancillary
+        call on the bot's default model, in the chat's active pool. Runs the ORM."""
+        if self.providers.pools.legacy or self.private_pool:
+            return None
+        ref = self.model_ref()
+        if not ref or self.providers.is_private(ref):
+            return None
+        return pools.select_route(self, session, ref=ref, consumer=consumer)
 
     # -- sessions ----------------------------------------------------------
 
@@ -1112,6 +1405,9 @@ class Bot:
         metadata=None,
     ) -> ConversationSession:
         metadata = dict(metadata or {})
+        origin = self.inherited_origin(parent, metadata.pop(pools.ORIGIN_KEY, None))
+        if origin:
+            metadata[pools.ORIGIN_KEY] = origin
         model = self.session_model_ref(metadata.pop("model", ""))
         engine = self.make_engine(model=model)
         session = await ConversationSession.objects.acreate(
@@ -1136,6 +1432,40 @@ class Bot:
         for plugin in self.plugins:
             await _maybe_await(plugin.on_session_created(session))
         return session
+
+    def inherited_origin(
+        self, parent: ConversationSession | None, given=None
+    ) -> list[str]:
+        """Privacy policies a new session of this bot inherits: its parent's
+        (recorded origin and the parent bot's own), the turn being handled and
+        ``given``. PolicyError when this bot isn't approved by them (a
+        privacy-restricted chat delegating to a bot outside its policy)."""
+        names = list(given or [])
+        if parent is not None:
+            names += pools.session_origin(parent)
+            registry = getattr(self, "registry", None)
+            parent_bot = (
+                registry.bots.get(parent.bot_name) if registry is not None else None
+            )
+            if parent_bot is None and parent.bot_name == self.name:
+                parent_bot = self
+            if parent_bot is not None:
+                names += pools.bot_policy_names(parent_bot)
+            elif parent.bot_name and parent.bot_name != self.name:
+                names += [
+                    name
+                    for name, policy in self.providers.pools.privacy.items()
+                    if parent.bot_name in policy.bots
+                ]
+        names += list(pools.current_origin())
+        names = list(dict.fromkeys(str(n) for n in names))
+        if names:
+            privacy = pools.privacy_for(self, None, names)
+            pools.check_delegation(
+                pools.lineage(self), privacy, what=f"bot {self.name!r}"
+            )
+        own = set(pools.bot_policy_names(self))
+        return [n for n in names if n not in own]
 
     async def close_session(self, session: ConversationSession) -> None:
         await session.arefresh_from_db(fields=["is_permanent"])
@@ -1167,11 +1497,14 @@ class Bot:
     def history_sources(self, session: ConversationSession) -> list[SessionSource]:
         """Sessions the history tools can read: all of this user's sessions
         with the bot, from any chat or thread."""
+        from django_ergo.bots.registry import privacy_readable
+
         return [
             SessionSource(s)
             for s in self.sessions()
             .filter(user_id=session.user_id)
             .order_by("created_at")
+            if privacy_readable(self, s)
         ]
 
     def linked_source(
@@ -1402,6 +1735,47 @@ class Bot:
     ) -> TurnResult:
         """Answer one message with a ChatReply. Plugins see before/after hooks.
 
+        The turn runs under its privacy origin (``bots.pools``): the bot's
+        policies, the chat's recorded origin and the handled message's, so
+        tools, background tasks and workers it starts inherit them."""
+        carried = (
+            (thread_message.metadata or {}).get(pools.ORIGIN_KEY)
+            if thread_message is not None
+            else None
+        ) or []
+        # The turn's own origin replaces whatever context called it (an inline,
+        # eager-mode delivery), so unrelated work never leaks into it.
+        with pools.origin_scope(
+            [
+                *pools.bot_policy_names(self),
+                *pools.session_origin(session),
+                *(str(n) for n in carried if isinstance(carried, list)),
+            ],
+            replace=True,
+        ):
+            return await self._ask(
+                session,
+                message,
+                attachments=attachments,
+                thread_message=thread_message,
+                author=author,
+                control=control,
+                budget=budget,
+            )
+
+    async def _ask(  # noqa: PLR0913
+        self,
+        session: ConversationSession,
+        message: str,
+        *,
+        attachments: list[Attachment] | None = None,
+        thread_message: ThreadMessage | None = None,
+        author: dict | None = None,
+        control: TurnControl | None = None,
+        budget: TurnBudget | None = None,
+    ) -> TurnResult:
+        """Answer one message with a ChatReply. Plugins see before/after hooks.
+
         With ``thread_message`` (another session's message, see
         ``django_ergo.bots.messaging``) the reply is routed back to its sender.
         ``control`` steers or stops the turn between steps (see
@@ -1457,7 +1831,9 @@ class Bot:
                 if not isinstance(source, OverviewSource)
             ]
             metadata["context_policy"] = "current_chat_only"
-        if budget is None:  # routing may move the chat to another (priced) model
+        if budget is None or self._pooled():
+            # Routing may move the chat to another (priced) model. With pools
+            # it is also the turn's spend and route authority, so it always runs.
             await sync_to_async(self.route, thread_sensitive=True)(session)
         from django_ergo.bots.recurring_reply import apply_notification_policy
 

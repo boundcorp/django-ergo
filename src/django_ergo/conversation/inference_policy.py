@@ -115,8 +115,11 @@ class PrivatePool:
             raise PolicyError(msg)
         return alias, model_id
 
-    def check_bot(self, bot: str) -> None:
-        if not bot or bot not in self.allowed_bots:
+    def check_bot(self, bot: str, lineage: tuple[str, ...] = ()) -> None:
+        """PolicyError unless ``bot`` (or a folder ancestor in ``lineage``, a
+        nested bot inheriting its parent's pool) is allowlisted and the pool
+        is enabled."""
+        if not bot or not ({bot, *lineage} & self.allowed_bots):
             msg = (
                 f"Bot {bot!r} isn't allowed to use private pool {self.name!r} "
                 f"(allowed_bots in providers.yaml)"
@@ -147,6 +150,7 @@ class PrivateGrant:
         "alias",
         "bot",
         "expires_at",
+        "lineage",
         "model_id",
         "pool",
         "purpose",
@@ -167,6 +171,7 @@ class PrivateGrant:
         user_id=None,
         session_id=None,
         purpose: str = "chat",
+        lineage: tuple[str, ...] = (),
     ):
         if _mint is not _MINT:
             msg = "Private grants are minted by inference_policy.mint_grant only"
@@ -180,6 +185,7 @@ class PrivateGrant:
             "user_id": user_id,
             "session_id": session_id,
             "purpose": purpose,
+            "lineage": tuple(lineage),
             "expires_at": time.monotonic() + GRANT_TTL_SECONDS,
         }
         for name, value in fields.items():
@@ -217,6 +223,7 @@ def mint_grant(  # noqa: PLR0913
     user_id=None,
     session_id=None,
     purpose: str = "chat",
+    lineage: tuple[str, ...] = (),
 ) -> PrivateGrant:
     """A grant for ``bot`` to send to ``selector``'s model in ``pool``.
 
@@ -228,7 +235,7 @@ def mint_grant(  # noqa: PLR0913
         msg = f"Selector {selector!r} isn't in private pool {pool.name!r}"
         raise PolicyError(msg)
     alias, model_id = pool.resolve(alias)
-    pool.check_bot(bot)
+    pool.check_bot(bot, tuple(lineage))
     grant = PrivateGrant(
         _mint=_MINT,
         pool=pool,
@@ -239,6 +246,7 @@ def mint_grant(  # noqa: PLR0913
         user_id=user_id,
         session_id=session_id,
         purpose=purpose,
+        lineage=tuple(lineage),
     )
     _ISSUED.add(grant)
     return grant
@@ -253,7 +261,7 @@ def check_grant(grant, *, model_id: str) -> PrivateGrant:
         msg = "The private-inference grant has expired; refusing to send"
         raise PolicyError(msg)
     pool = grant.pool
-    pool.check_bot(grant.bot)
+    pool.check_bot(grant.bot, grant.lineage)
     if model_id != grant.model_id or model_id not in pool.model_ids:
         msg = (
             f"The private-inference grant is for {grant.model_id!r}, "

@@ -14,3 +14,25 @@ def pytest_configure(config):
     )
     config.addinivalue_line("markers", "slow: mark test as slow")
     config.addinivalue_line("markers", "integration: mark test as integration test")
+
+
+import pytest  # noqa: E402
+
+DB_FIXTURES = {"db", "transactional_db", "django_db_reset_sequences"}
+
+
+@pytest.fixture(autouse=True)
+def _provider_switches_without_db(request, monkeypatch):
+    """Runtime provider switches (bots.pools) live in the database. Tests that
+    don't use it read none, as a fresh deployment has none."""
+    if request.node.get_closest_marker("django_db") is None and not (
+        DB_FIXTURES & set(request.fixturenames)
+    ):
+        monkeypatch.setattr("django_ergo.bots.pools.disabled_providers", set)
+        monkeypatch.setattr(
+            "django_ergo.bots.pools.paid_dispatch_problem", lambda **kwargs: ""
+        )
+        monkeypatch.setattr(
+            "django_ergo.conversation.spend_guard.paid_dispatch_problem",
+            lambda **kwargs: "",
+        )

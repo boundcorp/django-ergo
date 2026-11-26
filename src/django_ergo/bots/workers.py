@@ -363,6 +363,10 @@ def resolve(bot: Bot, function: str):
     return found
 
 
+PRIVACY_ARG = "_privacy_origin"
+POLICY_ARG = "_pool_policy"
+
+
 def start(  # noqa: PLR0913
     bot: Bot,
     session: ConversationSession,
@@ -402,13 +406,25 @@ def start(  # noqa: PLR0913
         origin = ThreadMessage.objects.filter(
             pk=call_metadata.get("thread_message"), recipient_session=session
         ).first()
+    from django_ergo.bots import pools
+
+    # The privacy origin of the turn that started it travels with the worker,
+    # so its steps (in any process) stay restricted (bots.pools).
+    privacy_origin = list(pools.current_origin())
+    # So does the pool and grant it was started under (bots.pools): its steps
+    # never pick up a later, wider pool choice.
+    policy = pools.capture_policy(bot, session)
     with transaction.atomic():
         worker = Worker.objects.create(
             session=session,
             bot_name=bot.name,
             title=(title or function)[:200],
             function=function,
-            args=dict(args),
+            args={
+                **dict(args),
+                **({PRIVACY_ARG: privacy_origin} if privacy_origin else {}),
+                **({POLICY_ARG: policy} if policy else {}),
+            },
             notify=notify,
             recurring_origin=recurring_origin or None,
             originating_message=origin,
@@ -554,16 +570,30 @@ def _run(worker_id: str, registry=None) -> str:
         args.pop("_agent_replies", None)
         args.pop("_agent_instructions", None)
         args.pop("_agent_mail_closed", None)
-        outcome = (
-            function(ctx, **args) if params and params[0] == "ctx" else function(**args)
-        )
-        if inspect.isawaitable(outcome):
-            from asgiref.sync import async_to_sync
+        carried = args.pop(PRIVACY_ARG, None) or []
+        policy = args.pop(POLICY_ARG, None)
+        from django_ergo.bots import pools
 
-            async def wait(awaitable=outcome):
-                return await awaitable
+        with (
+            pools.origin_scope(
+                [str(n) for n in carried if isinstance(n, str)], replace=True
+            ),
+            pools.policy_scope(policy if isinstance(policy, dict) else None),
+        ):
+            outcome = (
+                function(ctx, **args)
+                if params and params[0] == "ctx"
+                else function(**args)
+            )
+            if inspect.isawaitable(outcome):
+                from asgiref.sync import async_to_sync
 
-            outcome = async_to_sync(wait)()
+                # Awaited inside the scope: an async step's body runs here,
+                # and asgiref carries the context (origin, policy) into it.
+                async def wait(awaitable=outcome):
+                    return await awaitable
+
+                outcome = async_to_sync(wait)()
         worker.state = ctx.state
     except Exception as exc:  # noqa: BLE001 — recorded on the worker
         error = f"{type(exc).__name__}: {exc}"

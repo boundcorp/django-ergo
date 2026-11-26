@@ -31,6 +31,7 @@ from django_ergo.conversation.messages import add_message
 from django_ergo.conversation.messages import model_rows
 from django_ergo.conversation.messages import tool_use_block
 from django_ergo.conversation.request_context import prepare_turn_context
+from django_ergo.conversation.spend_guard import OpenAIChatAdapter
 from django_ergo.conversation.telemetry import record_usage
 from django_ergo.conversation.telemetry import trace_engine_call
 from django_ergo.openai_options import DEFAULT_OPENAI_MODEL
@@ -216,6 +217,7 @@ class OpenAIAPIEngine(StoredMessagesMixin, Engine):
 
     engine_type = "openai"
     supports_request_limits = True
+    spend_adapter = OpenAIChatAdapter()
 
     def __init__(self, config: dict):
         self.config = config
@@ -225,7 +227,18 @@ class OpenAIAPIEngine(StoredMessagesMixin, Engine):
         )
         self.model = config.get("model", DEFAULT_OPENAI_MODEL)
         self.api_key = config.get("api_key")
-        self.base_url = config.get("base_url")
+        self.base_url = effective_openai_base_url(
+            config.get("base_url") or config.get("api_base") or config.get("endpoint")
+        )
+        from django_ergo.conversation.transport_identity import identity
+
+        self._transport_identity = identity(
+            "openai",
+            "api",
+            config,
+            account=config.get("_pool_account", ""),
+            model=self.model,
+        )
         self.temperature = config.get("temperature", 0.7)
         self.max_tokens = config.get("max_tokens", 32000)
         # Reasoning models only; GPT-6 tool calls always use "none".
@@ -276,8 +289,32 @@ class OpenAIAPIEngine(StoredMessagesMixin, Engine):
         With ``request_limits`` (a budgeted turn) the request is refused if its
         input could pass them, its output tokens (reasoning included) are cut
         to what is left, and it is sent without retries and with the time left
-        as its timeout."""
+        as its timeout.
+
+        With a ``spend_guard`` (a metered pool route, ``conversation.spend_guard``)
+        each request reserves its worst-case cost first and is refused when
+        the pool's budget can't cover it."""
+        guard = getattr(self, "spend_guard", None)
+        if guard is not None:
+            guard.check_transport(self._transport_identity)
+            return await guard.call(
+                kwargs, self.spend_adapter, lambda: self._send_completion(kwargs)
+            )
+        from django_ergo.conversation.spend_guard import check_unguarded_dispatch
+
+        await check_unguarded_dispatch()
+        return await self._send_completion(kwargs)
+
+    async def _send_completion(self, kwargs: dict):
         client = self._get_client()
+        if guard := getattr(self, "spend_guard", None):
+            from django_ergo.conversation.transport_identity import with_endpoint
+
+            guard.check_transport(
+                with_endpoint(
+                    self._transport_identity, getattr(client, "base_url", self.base_url)
+                )
+            )
         assert_public_endpoint(
             getattr(client, "base_url", ""), what="The OpenAI API engine"
         )
@@ -286,10 +323,12 @@ class OpenAIAPIEngine(StoredMessagesMixin, Engine):
             options = enforce_request_limits(limits, kwargs, "max_completion_tokens")
             client = client.with_options(**options)
             return await with_deadline(limits, client.chat.completions.create(**kwargs))
-        if (
+        if getattr(self, "spend_guard", None) is not None or (
             not automatic_request_retries.get()
             and getattr(self, "transport_type", "api") == "api"
         ):
+            # Under a spend guard one call is one HTTP attempt: a retry is a
+            # new guarded call with its own reservation.
             client = client.with_options(max_retries=0)
         return await client.chat.completions.create(**kwargs)
 

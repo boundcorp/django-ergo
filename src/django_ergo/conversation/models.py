@@ -1345,6 +1345,317 @@ class RoutingSwitch(models.Model):
         return f"{self.from_model} -> {self.to_model}"
 
 
+class ModelPoolState(models.Model):
+    """Runtime gates of one providers.yaml pool (``bots.pools``), set by its
+    owner (or an admin) on Ergonaut's Pools page. A null field keeps the
+    providers.yaml value. Spend authority is never here: it is a
+    :class:`SpendGrant`. ``version`` guards concurrent edits."""
+
+    name = models.CharField(max_length=64, unique=True)
+    enabled = models.BooleanField(null=True, blank=True)
+    rollover_out = models.BooleanField(null=True, blank=True)
+    allow_auto_entry = models.BooleanField(null=True, blank=True)
+    version = models.PositiveIntegerField(default=1)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return self.name
+
+
+class SpendEnvelope(models.Model):
+    """The stable spending identity behind a line of spend authority
+    (``bots.pools``): one cumulative ledger and one lock for every revision
+    (:class:`SpendGrant`) of that authority. Spend and reservations (held
+    and uncertain ones included) are summed over all its revisions, revoked
+    ones too, and every reservation takes the advisory lock ``lock_key``.
+
+    ``key`` is ``config:<pool>:<owner id>`` for the owner's own authority
+    derived from providers.yaml: editing, removing and restoring the config
+    revise and revoke revisions of the same envelope, so its money is never
+    replenished by a config change. Its identity survives a rename: a new
+    pool whose metered accounts (``accounts``) overlap an envelope's
+    continues that envelope (re-keyed to the new name) or waits for an
+    admin's explicit link (``linked_by``); config sync never funds one.
+
+    A runtime-issued grant is its own envelope (``issued:<grant id>``) whose
+    ``parent`` is the owner's config envelope it was issued from: every send
+    on it is intersected with the parent's current authority, and the
+    cumulative spend of the parent and all its children stays within the
+    parent's current budget."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    key = models.CharField(max_length=160, unique=True)
+    pool = models.CharField(max_length=64, db_index=True)
+    source = models.CharField(max_length=16, default="issued")
+    owner = models.ForeignKey(User, on_delete=models.CASCADE, related_name="+")
+    grantee = models.ForeignKey(User, on_delete=models.CASCADE, related_name="+")
+    created_at = models.DateTimeField(auto_now_add=True)
+    # Issued: the owner's config envelope this authority is drawn from (set
+    # once, at creation). Null on a config envelope, or on an issued one
+    # whose owner had no config authority (it then authorizes nothing).
+    parent = models.ForeignKey(
+        "self",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="children",
+    )
+    # Config: every metered account it has ever funded (provider names, key
+    # env names, account names; only grows), to recognize a renamed pool.
+    accounts = models.JSONField(default=list, blank=True)
+    # An admin's explicit continuation or funding of this envelope for a
+    # config pool that overlapped another envelope (``bots.pools``).
+    linked_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True, related_name="+"
+    )
+    linked_at = models.DateTimeField(null=True, blank=True)
+    link_note = models.CharField(max_length=200, blank=True, default="")
+    # An admin's explicit lift of a person's revocation (only that: a link
+    # or an approval of accounts never lifts one).
+    restored_at = models.DateTimeField(null=True, blank=True)
+
+    def __str__(self):
+        return self.key
+
+    @property
+    def lock_key(self) -> str:
+        return f"envelope:{self.pk}"
+
+
+class SpendFunding(models.Model):
+    """Explicit authenticated funding revision, independent of config ceilings.
+
+    Revisions share the envelope's cumulative ledger, including uncertain holds.
+    Prior rows remain as the audit of who approved which exact terms.
+    """
+
+    envelope = models.ForeignKey(
+        SpendEnvelope, on_delete=models.PROTECT, related_name="funding"
+    )
+    actor = models.ForeignKey(User, on_delete=models.PROTECT, related_name="+")
+    created_at = models.DateTimeField(auto_now_add=True)
+    budget_usd = models.DecimalField(max_digits=16, decimal_places=4)
+    valid_from = models.DateTimeField()
+    expires_at = models.DateTimeField()
+    accounts = models.JSONField(default=list)
+    note = models.CharField(max_length=200)
+
+    def __str__(self):
+        return f"Funding {self.pk} for envelope {self.envelope_id}"
+
+
+class PaidDispatchState(models.Model):
+    """Singleton latch: activation is permanent; pause preserves all ledgers."""
+
+    id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
+    activated_at = models.DateTimeField(null=True, blank=True)
+    paused = models.BooleanField(default=False)
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by = models.ForeignKey(
+        User, on_delete=models.PROTECT, null=True, related_name="+"
+    )
+
+    def __str__(self):
+        return "Paid dispatch pause" if self.paused else "Paid dispatch state"
+
+
+class SpendControlAudit(models.Model):
+    """Audit of explicit funding, continuation, restoration and paid pause."""
+
+    actor = models.ForeignKey(User, on_delete=models.PROTECT, related_name="+")
+    created_at = models.DateTimeField(auto_now_add=True)
+    action = models.CharField(max_length=32)
+    envelope = models.ForeignKey(
+        SpendEnvelope, on_delete=models.PROTECT, null=True, related_name="control_audit"
+    )
+    details = models.JSONField(default=dict)
+
+    def __str__(self):
+        return f"{self.action} by actor {self.actor_id}"
+
+
+class SpendGrant(models.Model):
+    """One immutable revision of spend authority on a pool's metered routes,
+    for one user (``grantee``), issued by the pool's owner (``bots.pools``).
+    Changing the amount, routes or window makes a new revision. Revisions of
+    the same authority share a :class:`SpendEnvelope`: its cumulative ledger
+    and its lock. A superseded revision (``superseded_at``) still bounds
+    queued work that captured it, intersected with the current revision; a
+    revoked one authorizes nothing. Every metered send reserves against the
+    envelope under its lock and re-checks the grantee, the current config,
+    routes, window, ceiling and revocation.
+
+    ``source`` is ``config`` for the owner's own revision derived from the
+    pool's providers.yaml ``budget_usd``/``expires`` (``config_key``
+    fingerprints it), or ``issued`` for one made at runtime."""
+
+    IMMUTABLE_AFTER_CREATE = frozenset(
+        {"revoked_at", "revoked_reason", "superseded_at"}
+    )
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    envelope = models.ForeignKey(
+        SpendEnvelope, on_delete=models.CASCADE, related_name="revisions"
+    )
+    pool = models.CharField(max_length=64, db_index=True)
+    owner = models.ForeignKey(
+        User, on_delete=models.CASCADE, related_name="issued_spend_grants"
+    )
+    grantee = models.ForeignKey(
+        User, on_delete=models.CASCADE, related_name="spend_grants"
+    )
+    routes = models.JSONField(default=list)  # exact provider/model refs
+    budget_usd = models.DecimalField(max_digits=16, decimal_places=4)
+    per_launch_usd = models.DecimalField(
+        max_digits=16, decimal_places=4, null=True, blank=True
+    )
+    max_output_tokens = models.PositiveIntegerField()
+    valid_from = models.DateTimeField()
+    expires_at = models.DateTimeField()
+    source = models.CharField(max_length=16, default="issued")
+    config_key = models.CharField(max_length=64, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    revoked_reason = models.CharField(max_length=200, blank=True, default="")
+    superseded_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.pool} grant {self.pk} for user {self.grantee_id}"
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding:
+            fields = kwargs.get("update_fields")
+            if fields is None or set(fields) - self.IMMUTABLE_AFTER_CREATE:
+                msg = "A spend grant is immutable; revoke it and issue a new one"
+                raise ValueError(msg)
+        elif self.envelope_id is None:
+            if self.source == "config":
+                msg = "A config grant is a revision of its pool owner's envelope"
+                raise ValueError(msg)
+            # A grant issued on its own is a new authorization: its own
+            # envelope, drawn from the owner's config envelope on the pool.
+            with transaction.atomic():
+                self.envelope = SpendEnvelope.objects.create(
+                    key=f"issued:{self.pk}",
+                    pool=self.pool,
+                    source=self.source,
+                    owner_id=self.owner_id,
+                    grantee_id=self.grantee_id,
+                    parent=SpendEnvelope.objects.filter(
+                        key=f"config:{self.pool}:{self.owner_id}", source="config"
+                    ).first(),
+                )
+                super().save(*args, **kwargs)
+            return
+        super().save(*args, **kwargs)
+
+
+class ModelPoolPreference(models.Model):
+    """One user's pool choices (``key`` ``user:<id>``; ``deployment`` for
+    work without a user): preferred order, the manually selected pool ("" =
+    automatic, preferred order) and the auto-rollover gate (null = the
+    providers.yaml default, which is off)."""
+
+    key = models.CharField(max_length=64, unique=True)
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="model_pool_preferences",
+    )
+    order = models.JSONField(default=list, blank=True)
+    active_pool = models.CharField(max_length=64, blank=True, default="")
+    # Set when ``active_pool`` came from an automatic rollover: the pool it
+    # left. Work stays on the rolled-over pool until the person switches
+    # back or picks "use preferred order" (clearing ``active_pool``).
+    rolled_from = models.CharField(max_length=64, blank=True, default="")
+    auto_rollover = models.BooleanField(null=True, blank=True)
+    version = models.PositiveIntegerField(default=1)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.key}: {self.active_pool or 'auto'}"
+
+
+class ProviderToggle(models.Model):
+    """A runtime on/off switch for one providers.yaml provider (account).
+    Off removes it from listings, pins, retries and new workers everywhere."""
+
+    name = models.CharField(max_length=64, unique=True)
+    enabled = models.BooleanField(default=True)
+    # The provider's account identity when it was switched off
+    # (``bots.pools.provider_accounts``): metered sends stay off for it even
+    # after providers.yaml renames the provider.
+    accounts = models.JSONField(default=list, blank=True)
+    version = models.PositiveIntegerField(default=1)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.name}: {'on' if self.enabled else 'off'}"
+
+
+class RouteDecision(models.Model):
+    """A receipt for one pool selection (``bots.pools.select_route``): what was
+    asked for, which pool and route were chosen or why it was refused, and the
+    candidates left out. Never a prompt, message text or credential."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    session = models.ForeignKey(
+        ConversationSession,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="route_decisions",
+    )
+    user = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="route_decisions",
+    )
+    bot_name = models.CharField(max_length=100, blank=True, default="")
+    consumer = models.CharField(max_length=32)
+    origin = models.CharField(max_length=200, blank=True, default="")  # privacy
+    mode = models.CharField(max_length=16, blank=True, default="")  # auto/manual
+    requested = models.CharField(max_length=200, blank=True, default="")
+    tier = models.CharField(max_length=20, blank=True, default="")
+    pool = models.CharField(max_length=64, blank=True, default="")
+    route = models.CharField(max_length=200, blank=True, default="")
+    billing = models.CharField(max_length=16, blank=True, default="")
+    outcome = models.CharField(max_length=16)  # selected or refused
+    code = models.CharField(max_length=32, blank=True, default="")
+    reason = models.CharField(max_length=500, blank=True, default="")
+    rejected = models.JSONField(default=list, blank=True)
+    rollover = models.JSONField(default=list, blank=True)  # pools passed through
+    reserved_usd = models.DecimalField(
+        max_digits=16, decimal_places=10, null=True, blank=True
+    )
+    # The spend grant a metered route was selected under, and the versions of
+    # the user's preference, the pool's gates and the chat override (or the
+    # queued job's captured policy) the decision was made from.
+    grant = models.UUIDField(null=True, blank=True)
+    revision = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.consumer}: {self.pool}/{self.route or self.code}"
+
+
 class AuthorProfile(models.Model):
     """Who an external message author is, for apps to show: a name and a
     small picture, keyed like a message's ``author`` (``kind``, ``ref``), e.g.

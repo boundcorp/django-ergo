@@ -1,0 +1,3 @@
+/home/dev/orca/workspaces/django-ergo/model-pools-core/.venv/lib/python3.12/site-packages/platformdirs/api.py:441: RuntimeDirWarning: XDG_RUNTIME_DIR is not set, falling back to /tmp/runtime-1000
+  return Path(self.user_runtime_dir)
+No changes detected

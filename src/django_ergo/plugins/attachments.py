@@ -406,11 +406,26 @@ class AttachmentsPlugin(BotPlugin):
         end_seconds: float | None = None,
     ) -> str:
         """Ask Gemini about a video file."""
+        from django_ergo.bots import pools
         from django_ergo.conversation.video import VideoError
         from django_ergo.conversation.video import ask_gemini
         from django_ergo.conversation.video import local_path
         from django_ergo.conversation.video import video_media_type
 
+        privacy = pools.privacy_for(ctx.bot, ctx.session)
+        if privacy.restricted:
+            return (
+                f"Watching {row.filename} would send it to Gemini, which privacy policy "
+                f"{privacy.label()} doesn't allow for this chat."
+            )
+        if not ctx.bot.providers.pools.legacy:
+            # The Gemini video call is metered and has no spend-guard adapter
+            # yet, so with pools it never sends outside a pool grant.
+            return (
+                f"Watching {row.filename} would send it to Gemini outside the chat's "
+                "pool and its spend grant, so it isn't available while pools are "
+                "configured. Use ergo_attachments_frames to see still frames instead."
+            )
         key = ctx.secret(self.gemini_key_env)
         if not key:
             msg = (
