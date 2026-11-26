@@ -156,6 +156,34 @@ def test_r4_metered_cli_chat_route_is_refused_before_any_engine():
     assert not listed["claude/claude-opus-5-5"]["available"]
 
 
+@pytest.mark.parametrize(
+    "consumer",
+    [pools.CHAT, pools.TITLE, pools.COMPACTION, pools.BROWSER, pools.BACKGROUND],
+)
+@pytest.mark.parametrize("ref", ["auto/medium", "claude/claude-opus-5-5"])
+@pytest.mark.django_db
+def test_r4_metered_cli_route_refuses_unguarded_for_every_consumer(consumer, ref):
+    """The automatic-entry gate (N2) doesn't mask R4: a pool whose metered
+    routes no engine can guard isn't a paid entry boundary, and every
+    consumer gets the ``unguarded`` refusal the UI labels, before any send."""
+    _, bots = registry_of(METERED_CLI)
+    bot = bots["devbox"]
+    user = User.objects.create(username="lee")
+    session = chat(bot, user)
+    if ref.startswith("auto/"):
+        # Automatic routing passes over the unguarded metered routes.
+        try:
+            decision = pools.select_route(bot, session, ref=ref, consumer=consumer)
+        except pools.PoolRefusal as refused:
+            assert refused.code == pools.UNGUARDED  # noqa: PT017
+        else:
+            assert not decision.metered and decision.provider != "claude"
+        return
+    with pytest.raises(pools.PoolRefusal) as refused:
+        pools.select_route(bot, session, ref=ref, consumer=consumer)
+    assert refused.value.code == pools.UNGUARDED
+
+
 # -- R9: no opaque SDK retries under a guard ------------------------------------
 
 

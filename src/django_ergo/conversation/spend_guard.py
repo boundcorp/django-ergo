@@ -327,12 +327,32 @@ class AnthropicMessagesAdapter:
         {"text", "tool_use", "tool_result", "thinking", "redacted_thinking"}
     )
 
+    @staticmethod
+    def _check_cache_control(block: dict) -> None:
+        """Only the default 5-minute ephemeral cache is priced (``cache_write``);
+        a 1-hour write bills a higher rate, so it is refused."""
+        control = block.get("cache_control")
+        if control is None:
+            return
+        if (
+            not isinstance(control, dict)
+            or control.get("type") != "ephemeral"
+            or control.get("ttl", "5m") != "5m"
+        ):
+            msg = (
+                "only the default 5-minute prompt cache is priced; "
+                f"cache_control {control!r} isn't"
+            )
+            raise UnsupportedRequest(msg)
+
     def _check_blocks(self, blocks) -> bool:
         """Raise for a block it can't bound; True when one asks for caching."""
         caches = False
         for block in blocks if isinstance(blocks, list) else ():
             if not isinstance(block, dict):
-                continue
+                msg = f"a {type(block).__name__} content block can't be bounded; send dicts"
+                raise UnsupportedRequest(msg)
+            self._check_cache_control(block)
             kind = block.get("type")
             if kind not in self.block_types:
                 msg = (
@@ -352,12 +372,15 @@ class AnthropicMessagesAdapter:
             if not isinstance(tool, dict) or tool.get("type", "custom") != "custom":
                 msg = "only client tools can be sent under a spend guard (server-side tools bill fees)"
                 raise UnsupportedRequest(msg)
+            self._check_cache_control(tool)
             caches = caches or "cache_control" in tool
         caches = self._check_blocks(kwargs.get("system")) or caches
         messages = kwargs.get("messages") or []
         for message in messages:
-            if isinstance(message, dict):
-                caches = self._check_blocks(message.get("content")) or caches
+            if not isinstance(message, dict):
+                msg = f"a {type(message).__name__} message can't be bounded; send dicts"
+                raise UnsupportedRequest(msg)
+            caches = self._check_blocks(message.get("content")) or caches
         output = _clamp(kwargs, self.output_key, ceiling)
         thinking = kwargs.get("thinking")
         if isinstance(thinking, dict) and thinking.get("type") == "enabled":
@@ -388,6 +411,11 @@ class AnthropicMessagesAdapter:
             if value is None:
                 return None
             parts.append(value)
+        creation = getattr(usage, "cache_creation", None)
+        if creation is not None and getattr(
+            creation, "ephemeral_1h_input_tokens", 0
+        ) not in (None, 0):
+            return None  # 1-hour writes bill a rate the tariff doesn't have
         server = getattr(usage, "server_tool_use", None)
         if server is not None and any(
             getattr(server, name, 0) not in (None, 0)

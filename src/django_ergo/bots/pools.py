@@ -559,6 +559,7 @@ class Snapshot:
     chat_version: int = 0
     rolled_from: str = ""
     user_id: object = None
+    explicit_order: bool = False
 
     @property
     def legacy(self) -> bool:
@@ -687,6 +688,7 @@ def snapshot(providers: Providers, user_id=None, session=None) -> Snapshot:
         chat_version=chat_revision(session),
         rolled_from=rolled,
         user_id=user_id,
+        explicit_order=bool(pref and pref.order),
     )
 
 
@@ -1017,12 +1019,31 @@ def _pool_permitted(snap: Snapshot, view: PoolView, privacy: Privacy) -> bool:
     return False
 
 
+def _can_spend(snap: Snapshot, view: PoolView) -> bool:
+    """Whether automatic entry to ``view`` could spend money: it holds a
+    metered route an engine can send and bound (or a metered coding worker).
+    A metered route no engine can guard is refused per route (``UNGUARDED``),
+    so it doesn't make the pool an entry boundary."""
+    if snap.legacy or not view.pool.metered:
+        return False
+    for selector in view.pool.routes:
+        provider = snap.providers.providers.get(selector.partition("/")[0])
+        if (
+            provider is not None
+            and provider.metered
+            and (provider.worker_only or spend_enforced(provider))
+        ):
+            return True
+    return False
+
+
 def _start(snap: Snapshot, privacy: Privacy, consumer: str) -> tuple[int, str]:
     """(index of the active pool, mode). Automatic selection starts at the
     first pool in the user's order; reaching any later pool automatically
     (because earlier ones are off or not allowed) needs that pool's
     ``allow_auto_entry``, so an opt-in boundary stops selection instead of
-    being skipped."""
+    being skipped. A first pool that can spend money needs it too, unless
+    the user saved their own order (an explicit choice to start there)."""
     if snap.active_scope == "job" and not snap.active_pool:
         msg = "This queued work had no usable pool when it was queued; it can't pick one now"
         raise PoolRefusal(POOL_DISABLED, msg, consumer=consumer)
@@ -1045,9 +1066,13 @@ def _start(snap: Snapshot, privacy: Privacy, consumer: str) -> tuple[int, str]:
         usable = view.enabled and not (
             privacy.restricted and not _pool_permitted(snap, view, privacy)
         )
-        if usable and skipped and not view.allow_auto_entry:
+        if (
+            usable
+            and not view.allow_auto_entry
+            and (skipped or (not snap.explicit_order and _can_spend(snap, view)))
+        ):
             msg = (
-                f"{', '.join(skipped)} can't be used now and {view.title} needs to be "
+                f"{view.title} needs to be "
                 "picked by hand; not entering it automatically"
             )
             raise PoolRefusal(
@@ -2284,10 +2309,11 @@ def update_preference(  # noqa: PLR0913
 
     _require_version(version, "Changing your pool settings")
     names = [p.name for p in providers.pools.pools]
+    visible = [v.name for v in _views(providers, user_id)] if order is not None else []
     if active_pool:
         selectable_pool(providers, user_id, active_pool)
-    if order is not None and sorted(order) != sorted(names):
-        msg = "order must list every pool exactly once"
+    if order is not None and sorted(order) != sorted(visible):
+        msg = "order must list every visible pool exactly once"
         raise ValueError(msg)
     if auto_rollover is not None and not isinstance(auto_rollover, bool):
         msg = "auto_rollover must be true or false"
@@ -2307,7 +2333,13 @@ def update_preference(  # noqa: PLR0913
         if clear_auto_rollover:
             pref.auto_rollover = None
         if order is not None:
-            pref.order = order
+            # The visible pools take the new order in the slots they held; a
+            # pool hidden from this user stays where it was (and one never in
+            # their order isn't added: its name isn't theirs to see).
+            kept = [n for n in pref.order if n in names]
+            selected = iter(order)
+            merged = [next(selected) if n in visible else n for n in kept]
+            pref.order = merged + list(selected)
         pref.version += 1
         pref.save()
     return pref

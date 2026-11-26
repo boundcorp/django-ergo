@@ -96,7 +96,7 @@ pools:
 | `per_launch_usd`    | Reserved against the grant for each metered coding launch (and each resumed run). At most `budget_usd`.                                                         |
 | `max_output_tokens` | Output ceiling: every metered request's output limit is clamped to it (and to the grant's) before reserving.                                                    |
 | `rollover_out`      | This pool may hand over to the next one when exhausted.                                                                                                         |
-| `allow_auto_entry`  | The pool may be entered automatically by rollover.                                                                                                              |
+| `allow_auto_entry`  | The pool may be entered automatically: by rollover, past a switched-off pool, or as the first pool when it can spend money and the user hasn't saved an order. |
 | `enabled`           | Off = a boundary: automatic selection doesn't skip past it into a pool that needs a manual pick, and a manual pick of it is refused.                            |
 
 A provider takes `enabled` and `billing` (`subscription` or `metered`). A
@@ -110,6 +110,7 @@ price:
   output: 10 # required: output, reasoning included
   cached: 0.125 # cached input (default: input)
   cache_write: 1.5625 # optional; without it a request that can write cache isn't sent
+  # cache_write is the 5-minute rate: Anthropic 1-hour cache writes are refused
   long_context: # optional: the whole request's rates once its prompt passes threshold
     threshold: 200000
     input: 2.5
@@ -145,7 +146,13 @@ spend.
   user's order. If it is switched off (or not allowed by privacy), a later
   pool is entered only when its `allow_auto_entry` permits; otherwise
   selection stops with `pool_disabled` and names the next choices. Disabling
-  a pool never silently moves work into a paid one.
+  a pool never silently moves work into a paid one. A first pool that can
+  spend money (a metered route an engine can guard) needs `allow_auto_entry`
+  too, unless the user saved their own order. A metered route no engine can
+  guard is refused per route with `unguarded`, for every consumer.
+- **Order**: a user orders the pools they can see. Pools hidden from them
+  keep their places, and a hidden pool's name is never written into their
+  order.
 - **Manual**: a user-wide default (`ModelPoolPreference.active_pool`) or a
   per-chat override (`session.metadata["pool"]`, versioned by
   `pool_version`). Only pools the user may see can be picked. New turns and
