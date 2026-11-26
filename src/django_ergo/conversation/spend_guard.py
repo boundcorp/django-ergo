@@ -787,6 +787,7 @@ def reserve(  # noqa: PLR0913, PLR0912, PLR0915, C901
                     provider=provider[:32],
                     model=model[:200],
                     billing_mode="metered",
+                    vendor=captured_family if captured_identity else "",
                     reserved_usd=amount,
                     cost_status="pending",
                     **fields,

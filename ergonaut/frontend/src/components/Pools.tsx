@@ -212,7 +212,10 @@ export function FundingForm({
   onApprove: (body: FundingApproval) => Promise<void>
 }) {
   const [amount, setAmount] = useState('')
-  const [period, setPeriod] = useState<'cumulative' | 'calendar_month_utc'>('cumulative')
+  const current = (details.approval?.budget_period ?? 'cumulative') as 'cumulative' | 'calendar_month_utc'
+  const [period, setPeriod] = useState<'cumulative' | 'calendar_month_utc'>(current)
+  const [convert, setConvert] = useState(false)
+  const converting = period !== current
   const [expiry, setExpiry] = useState('')
   const [accounts, setAccounts] = useState<string[]>([])
   const [note, setNote] = useState('')
@@ -231,7 +234,9 @@ export function FundingForm({
             note,
             budget_period: period,
             version: details.version ?? 0,
+            ...(converting && convert ? { convert_period: true } : {}),
           })
+          setConvert(false)
           setAmount('')
           setExpiry('')
           setAccounts([])
@@ -264,6 +269,18 @@ export function FundingForm({
           <option value="calendar_month_utc">Recurring calendar month (UTC)</option>
         </select>
       </label>
+      {converting && (
+        <label className="text-xs">
+          <input
+            type="checkbox"
+            aria-label="Convert funding period"
+            checked={convert}
+            onChange={e => setConvert(e.target.checked)}
+          />{' '}
+          Convert this approval from {current === 'calendar_month_utc' ? 'recurring monthly' : 'cumulative'} to{' '}
+          {period === 'calendar_month_utc' ? 'recurring monthly' : 'cumulative'} (audited)
+        </label>
+      )}
       {period === 'calendar_month_utc' && (
         <p className="text-xs">
           Explicit recurring approval renews each UTC calendar month until expiry. Each provider also requires admin

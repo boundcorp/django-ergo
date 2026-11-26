@@ -32,6 +32,11 @@ class Migration(migrations.Migration):
             field=models.DateField(db_index=True, null=True),
         ),
         migrations.AddField(
+            model_name="inferencerequest",
+            name="vendor",
+            field=models.CharField(blank=True, default="", max_length=16),
+        ),
+        migrations.AddField(
             model_name="spendfunding",
             name="budget_period",
             field=models.CharField(default="cumulative", max_length=24),

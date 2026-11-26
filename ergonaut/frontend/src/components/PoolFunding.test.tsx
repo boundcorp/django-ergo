@@ -50,4 +50,26 @@ describe('explicit funding consent form', () => {
     expect(html).not.toContain('checked=""')
     expect(html).toContain('Changing this approval keeps all prior use and holds.')
   })
+  test('a recurring approval keeps its kind in the form and conversion is explicit', () => {
+    const monthly = {
+      ...details,
+      pending: false,
+      version: 4,
+      approval: {
+        id: 4,
+        budget_period: 'calendar_month_utc' as const,
+        budget_usd: '100',
+        valid_from: '2026-01-01T00:00:00Z',
+        expires_at: '2099-01-01T00:00:00Z',
+        accounts: ['exact-account-model'],
+        actor_id: 1,
+      },
+    }
+    const html = renderToStaticMarkup(
+      createElement(FundingForm, { details: monthly, busy: false, onApprove: async () => {} }),
+    )
+    expect(html).toContain('<option value="calendar_month_utc" selected="">')
+    expect(html).not.toContain('<option value="cumulative" selected="">')
+    expect(html).not.toContain('Convert funding period') // same kind: no conversion
+  })
 })

@@ -668,7 +668,10 @@ separately authorized rollout; this implementation authorizes no activation:
 3. The pool owner/admin inspects `GET /api/pools/secondary-api/funding`, chooses
    the exact accounts/models, and explicitly approves pool funding with
    `budget_period: calendar_month_utc`, an amount, expiry and that response's
-   `version`. Without this explicit recurring pool approval a cumulative grant
+   `version`. Every funding write must state `version` and `budget_period`;
+   a stale version returns 409, and a change of kind (cumulative <-> monthly)
+   is refused unless the request also sets `convert_period: true`, which is
+   recorded in the audit trail (`converted_from`). Without this explicit recurring pool approval a cumulative grant
    stays cumulative, even when provider-level recurring consent exists.
 
 ```json
@@ -686,7 +689,17 @@ separately authorized rollout; this implementation authorizes no activation:
 `POST /api/pools/monthly-mapping` requires admin authentication and a currently
 configured exact transport identity (returned by the funding inspection). Its
 body contains `identity`, `owner` (username), `account_label`, `assertion`, and
-optional `attempt_ids`. That mapping is permanent; corrections cannot rewrite
+optional `attempt_ids` and `family`. The vendor family is part of the audited
+assertion, not read from the wire type: it must agree with the endpoint host
+(`api.openai.com`, `generativelanguage.googleapis.com`, `api.anthropic.com`),
+native `google`/`claude` wires only map to their own vendor, an OpenAI-compatible
+endpoint of any other vendor can't join a family, and one credential source
+and account can belong to a single family, so an alias or endpoint never opens
+a second cap. The history gate is per vendor: unmapped or unbounded history
+recorded against vendor X (or of unknown vendor) blocks only X's recurring
+budget (unknown-vendor rows block every family), and private-pool ledger rows
+(for example the personal Fireworks pool) never block or need mapping.
+That mapping is permanent; corrections cannot rewrite
 its vendor, owner or prior attempt attribution. Consent/funding stale versions
 return 409, and malformed or unapproved terms fail closed. Funding inspection
 shows its period, actor, version and timezone. Provider inspection shows the

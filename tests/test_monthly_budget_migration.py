@@ -70,14 +70,14 @@ def test_monthly_upgrade_and_reverse_preserve_ambiguous_paid_history(settings):
         ).objects.exists()
         from django_ergo.conversation.monthly_budgets import historical_problem
 
-        assert "Ambiguous" in historical_problem()
+        assert "Ambiguous" in historical_problem("openai")
         MigrationExecutor(connection).migrate([before])
         rolled_back = old.get_model("django_ergo", "InferenceRequest").objects.get(
             pk=attempt.pk
         )
         assert rolled_back.reserved_usd == migrated.reserved_usd
         MigrationExecutor(connection).migrate([after])
-        assert "Ambiguous" in historical_problem()
+        assert "Ambiguous" in historical_problem("openai")
     finally:
         executor = MigrationExecutor(connection)
         executor.migrate(executor.loader.graph.leaf_nodes())

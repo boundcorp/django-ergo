@@ -66,8 +66,9 @@ class FundingIn(Schema):
     valid_from: datetime | None = None
     accounts: list[str]
     note: str = ""
-    budget_period: str = "cumulative"
-    version: int | None = None
+    budget_period: str
+    version: StrictInt
+    convert_period: StrictBool = False  # explicit audited cumulative <-> monthly change
 
 
 class MonthlyMappingIn(Schema):
@@ -78,6 +79,7 @@ class MonthlyMappingIn(Schema):
     account_label: str
     assertion: str
     attempt_ids: list[str] = []
+    family: str = ""  # the vendor the admin asserts; validated against type and host
 
 
 class MonthlyConsentIn(Schema):
@@ -242,6 +244,7 @@ def approve_funding(request, name: str, data: FundingIn):
         note=data.note,
         budget_period=data.budget_period,
         version=data.version,
+        convert_period=data.convert_period,
     )
     return _settings(request)
 
@@ -269,6 +272,7 @@ def monthly_mapping(request, data: MonthlyMappingIn):
         account_label=data.account_label,
         assertion=data.assertion,
         attempt_ids=data.attempt_ids,
+        family=data.family,
     )
     return monthly.inspect_family(mapping.family_id)
 

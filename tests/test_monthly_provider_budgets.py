@@ -2,6 +2,7 @@
 
 import datetime as dt
 import threading
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 from types import SimpleNamespace
@@ -350,7 +351,11 @@ def test_unbounded_historical_exposure_blocks_consent_even_after_mapping(clock):
     owner = User.objects.create(username="lee")
     admin = User.objects.create(username="admin", is_superuser=True)
     old = InferenceRequest.objects.create(
-        provider="old", model="x", billing_mode="api", reserved_usd=None
+        pool=f"grant:{uuid.uuid4()}",
+        provider="old",
+        model="x",
+        billing_mode="api",
+        reserved_usd=None,
     )
     providers = parse_providers(POOLS)
     monthly.assert_mapping(
@@ -570,6 +575,7 @@ def test_explicit_monthly_conversion_renews_new_authority_but_preserves_queued_c
         accounts=pools.funding_accounts(providers, providers.pools.get("paid")),
         budget_period=monthly.MONTHLY,
         version=previous.pk,
+        convert_period=True,
     )
     clock[0] += dt.timedelta(seconds=1)
     view = pools.snapshot(providers, owner.pk).get("paid")

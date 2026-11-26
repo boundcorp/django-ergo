@@ -4,9 +4,26 @@ import { api } from '../api'
 import { fromLocalInput } from '../localTime'
 
 const families: Record<string, string> = { openai: 'openai', google: 'google', claude: 'anthropic' }
+const hosts: Record<string, string> = {
+  'api.openai.com': 'openai',
+  'generativelanguage.googleapis.com': 'google',
+  'api.anthropic.com': 'anthropic',
+}
+
+/** The vendor an account is billed by: its endpoint host when first-party, else its wire type. */
+export function vendorOf(account: { identity: string; provider_type?: string }): string {
+  try {
+    const endpoint = String(JSON.parse(account.identity)[4] ?? '')
+    const host = new URL(endpoint).hostname.toLowerCase()
+    if (hosts[host]) return hosts[host]
+  } catch {
+    // fall back to the wire type
+  }
+  return families[account.provider_type || ''] ?? ''
+}
 
 export function MonthlyFunding({ details, admin }: { details: PoolFunding; admin: boolean }) {
-  const names = [...new Set(details.accounts.map(a => families[a.provider_type || '']).filter(Boolean))]
+  const names = [...new Set(details.accounts.map(vendorOf).filter(Boolean))]
   return (
     <div>
       {names.map(family => (
@@ -95,6 +112,7 @@ export function MonthlyProviderForm({
                 account_label: label,
                 assertion,
                 attempt_ids: attempts.split(/[\s,]+/).filter(Boolean),
+                family,
               }),
             )
           }}
@@ -112,7 +130,7 @@ export function MonthlyProviderForm({
           >
             <option value="">Choose account and model</option>
             {details.accounts
-              .filter(a => families[a.provider_type || ''] === family)
+              .filter(a => vendorOf(a) === family)
               .map(a => (
                 <option key={a.identity} value={a.identity}>
                   {a.label}

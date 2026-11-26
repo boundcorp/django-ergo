@@ -29,7 +29,16 @@ MONTHLY = "calendar_month_utc"
 MAX_MONTHLY_USD = Decimal("100")
 MAX_NOTE_LENGTH = 200
 IDENTITY_PARTS = 6
+# Wire type -> the vendor that type natively speaks to.
 FAMILIES = {"openai": "openai", "google": "google", "claude": "anthropic"}
+# The first-party API host of each vendor. An OpenAI-compatible endpoint is
+# billed by whoever owns its host, whatever wire type it speaks.
+VENDOR_HOSTS = {
+    "api.openai.com": "openai",
+    "generativelanguage.googleapis.com": "google",
+    "api.anthropic.com": "anthropic",
+}
+LEDGER_PREFIX = "grant:"  # InferenceRequest.pool of metered (spend_guard) attempts
 
 
 def utc(value):
@@ -71,8 +80,55 @@ def account_identity(identity):
 
 
 def family_of(identity):
+    """The vendor bucket of an account identity.
+
+    The audited admin mapping decides. An unmapped identity that shares a
+    credential source and account with a mapped one belongs to the same vendor
+    (so an endpoint or alias can't open a second cap for one account). Only an
+    identity with neither falls back to the wire type's native vendor, where it
+    is denied until an admin maps it.
+    """
     account = json.loads(account_identity(identity))
+    canonical = json.dumps(account, separators=(",", ":"))
+    mapped = ProviderAccountMapping.objects.filter(identity=canonical).first()
+    if mapped is not None:
+        return mapped.family_id
+    for other, family_id in ProviderAccountMapping.objects.values_list(
+        "identity", "family_id"
+    ):
+        parts = json.loads(other)
+        if parts[2] == account[2] and parts[3] == account[3]:
+            return family_id
     return FAMILIES[account[0]]
+
+
+def _validated_family(account, family):
+    """The admin-asserted vendor, checked against the wire type and endpoint host."""
+    from urllib.parse import urlsplit
+
+    wire = FAMILIES[account[0]]
+    family = family or wire
+    if family not in FAMILIES.values():
+        msg = "Choose a supported provider family"
+        raise ValueError(msg)
+    host = (urlsplit(account[4]).hostname or "").lower()
+    owner_of_host = VENDOR_HOSTS.get(host)
+    if account[0] != "openai":
+        # Native google/claude wires only speak to their own vendor.
+        if family != wire:
+            msg = f"A {account[0]} account belongs to the {wire} family"
+            raise ValueError(msg)
+    elif owner_of_host is not None:
+        if family != owner_of_host:
+            msg = f"The endpoint {host} is billed by {owner_of_host}, not {family}"
+            raise ValueError(msg)
+    else:
+        msg = (
+            "An OpenAI-compatible endpoint that is not a supported vendor's "
+            "first-party API can't join a provider family"
+        )
+        raise ValueError(msg)
+    return family
 
 
 def lock_family(family):
@@ -97,7 +153,7 @@ def _note(note):
 
 
 def assert_mapping(  # noqa: PLR0913 -- explicit audited account assertion
-    *, actor_id, owner_id, identity, account_label, assertion, attempt_ids=()
+    *, actor_id, owner_id, identity, account_label, assertion, attempt_ids=(), family=""
 ):
     """Admin attestation, never credential inspection. History is mapped explicitly.
 
@@ -107,7 +163,7 @@ def assert_mapping(  # noqa: PLR0913 -- explicit audited account assertion
     actor = _actor(actor_id, admin=True)
     owner = _actor(owner_id)
     canonical = account_identity(identity)
-    family_id = family_of(identity)
+    family_id = _validated_family(json.loads(canonical), family)
     assertion = _note(assertion)
     account_label = _note(account_label)
     attempt_ids = [UUID(str(pk)) for pk in attempt_ids]
@@ -132,6 +188,18 @@ def assert_mapping(  # noqa: PLR0913 -- explicit audited account assertion
         if mapping.family_id != family_id:
             msg = "The account's provider family is immutable"
             raise ValueError(msg)
+        # One credential source and account is one vendor account: never two caps.
+        parts = json.loads(canonical)
+        for other, other_family in ProviderAccountMapping.objects.exclude(
+            pk=mapping.pk
+        ).values_list("identity", "family_id"):
+            found = json.loads(other)
+            if found[2:4] == parts[2:4] and other_family != family_id:
+                msg = (
+                    "This credential source and account is already mapped to the "
+                    f"{other_family} family"
+                )
+                raise ValueError(msg)
         attempts = list(
             InferenceRequest.objects.filter(pk__in=attempt_ids).select_for_update()
         )
@@ -139,8 +207,11 @@ def assert_mapping(  # noqa: PLR0913 -- explicit audited account assertion
             msg = "Every historical attempt must exist"
             raise ValueError(msg)
         for attempt in attempts:
-            if attempt.billing_mode not in ("api", "metered"):
-                msg = "Only paid API attempts can be mapped"
+            if attempt.billing_mode not in ("api", "metered") or is_private(attempt):
+                msg = "Only paid provider API attempts can be mapped"
+                raise ValueError(msg)
+            if attempt.vendor and attempt.vendor != family_id:
+                msg = f"Attempt {attempt.pk} was recorded against {attempt.vendor}"
                 raise ValueError(msg)
             if attempt.account_mapping_id and attempt.account_mapping_id != mapping.pk:
                 msg = "A historical attempt's account mapping is immutable"
@@ -148,6 +219,7 @@ def assert_mapping(  # noqa: PLR0913 -- explicit audited account assertion
             InferenceRequest.objects.filter(pk=attempt.pk).update(
                 provider_family=family,
                 account_mapping=mapping,
+                vendor=family_id,
                 budget_month=month_of(attempt.created_at),
             )
         SpendControlAudit.objects.create(
@@ -164,9 +236,27 @@ def assert_mapping(  # noqa: PLR0913 -- explicit audited account assertion
     return mapping
 
 
-def historical_problem():
-    paid = InferenceRequest.objects.filter(billing_mode__in=["api", "metered"]).exclude(
-        outcome=InferenceOutcome.NOT_SENT
+def is_private(row):
+    """A private-pool ledger row (``inference_ledger``): its own pool and cap,
+    never a shared provider-family attempt."""
+    return row.billing_mode == "api" and not row.pool.startswith(LEDGER_PREFIX)
+
+
+def historical_problem(family_id):
+    """Unmapped or unbounded history that could belong to ``family_id``.
+
+    Scoped per vendor: rows recorded against another vendor and private-pool
+    ledger rows never block this one. A row of unknown vendor could be anyone's,
+    so it still fails closed for every family, as does this vendor's own.
+    """
+    paid = (
+        InferenceRequest.objects.filter(billing_mode__in=["api", "metered"])
+        .exclude(outcome=InferenceOutcome.NOT_SENT)
+        .exclude(Q(billing_mode="api") & ~Q(pool__startswith=LEDGER_PREFIX))
+        .filter(
+            Q(provider_family_id=family_id)
+            | Q(provider_family__isnull=True, vendor__in=[family_id, ""])
+        )
     )
     if paid.filter(
         Q(provider_family__isnull=True)
@@ -226,7 +316,7 @@ def set_consent(  # noqa: PLR0913 -- explicit recurring consent terms
         if type(version) is not int or version != expected:
             msg = "Recurring consent changed; refresh before writing"
             raise VersionConflict(msg)
-        if enabled and (problem := historical_problem()):
+        if enabled and (problem := historical_problem(family_id)):
             raise ValueError(problem)
         consent = ProviderMonthlyConsent.objects.create(
             family=family,
@@ -326,7 +416,7 @@ def reservation_context(identity, amount, *, required=False, now=None):  # noqa:
     ):
         msg = "Provider recurring consent is disabled, revoked or outside its validity window"
         raise SpendDenied(msg)
-    if problem := historical_problem():
+    if problem := historical_problem(family_id):
         raise SpendDenied(problem)
     spent, held = totals(family.attempts.all(), period=MONTHLY, now=now)
     if spent + held + amount > consent.monthly_usd:
@@ -356,7 +446,7 @@ def inspect_family(family_id):
         "valid_from": consent.valid_from.isoformat() if consent else None,
         "expires_at": consent.expires_at.isoformat() if consent else None,
         "actor_id": str(consent.actor_id) if consent else None,
-        "history_problem": historical_problem(),
+        "history_problem": historical_problem(family_id),
         "accounts": list(
             family.accounts.values(
                 "id", "identity", "account_label", "actor_id", "assertion"

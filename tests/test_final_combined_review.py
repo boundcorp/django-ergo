@@ -223,6 +223,8 @@ def test_funding_requires_actual_owner_or_admin_and_explicit_accounts(tmp_path):
             budget_usd="2",
             expires_at=config.expires_at,
             accounts=[],
+            budget_period="cumulative",
+            version=0,
         )
 
 

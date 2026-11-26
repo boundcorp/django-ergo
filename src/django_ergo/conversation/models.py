@@ -1831,6 +1831,8 @@ class InferenceRequest(TimeStampedMixin):
         related_name="attempts",
     )
     budget_month = models.DateField(null=True, db_index=True)
+    # The vendor family this attempt was recorded against (blank: unknown).
+    vendor = models.CharField(max_length=16, blank=True, default="")
     structured_call = models.ForeignKey(
         StructuredCall,
         on_delete=models.SET_NULL,

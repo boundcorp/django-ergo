@@ -535,6 +535,23 @@ def set_paid_pause(*, by_id, paused: bool, version: str):
     return state
 
 
+def _check_funding_revision(latest, version, budget_period, convert_period):
+    """Refuse a stale revision, or a kind change that wasn't asked for.
+    Returns the kind converted from, for the audit trail."""
+    if type(version) is not int or version != (latest.pk if latest else 0):
+        msg = "Funding changed; refresh and try again"
+        raise VersionConflict(msg)
+    if latest is None or latest.budget_period == budget_period:
+        return None
+    if convert_period is not True:
+        msg = (
+            f"This approval is {latest.budget_period}; changing it to "
+            f"{budget_period} is a conversion and must be requested explicitly"
+        )
+        raise ValueError(msg)
+    return latest.budget_period
+
+
 def approve_funding(  # noqa: PLR0913
     providers: Providers,
     pool: str,
@@ -545,10 +562,16 @@ def approve_funding(  # noqa: PLR0913
     accounts,
     valid_from=None,
     note: str = "",
-    budget_period: str = "cumulative",
-    version: int | None = None,
+    budget_period: str,
+    version: int,
+    convert_period: bool = False,
 ):
     """Owner/admin consent with explicit cap, window and exact account set.
+
+    ``version`` (the latest approval's id, 0 for none) and ``budget_period``
+    are required on every write. A stale version is refused, and so is a change
+    of kind (cumulative <-> monthly) unless ``convert_period`` explicitly asks
+    for the audited conversion.
 
     Nothing is inferred from config. Increasing an approval is an explicit
     new audited action on the SAME cumulative ledger, never a budget reset.
@@ -604,6 +627,9 @@ def approve_funding(  # noqa: PLR0913
         msg = "Select a nonempty exact set of configured accounts"
         raise ValueError(msg)
     monthly.validate_pool_period(budget_period, version, accounts)
+    if type(version) is not int:
+        msg = "Funding requires the version last inspected"
+        raise ValueError(msg)
     with transaction.atomic():
         lock(CONFIG_ENVELOPES_LOCK)
         envelope = _config_envelope(config, providers, owners, timezone.now())
@@ -616,11 +642,9 @@ def approve_funding(  # noqa: PLR0913
             )
         lock(envelope_lock_key(envelope.pk))
         latest = envelope.funding.order_by("-pk").first()
-        if version is not None and (
-            type(version) is not int or version != (latest.pk if latest else 0)
-        ):
-            msg = "Funding changed; refresh and try again"
-            raise VersionConflict(msg)
+        converted_from = _check_funding_revision(
+            latest, version, budget_period, convert_period
+        )
         approval = SpendFunding.objects.create(
             budget_period=budget_period,
             envelope=envelope,
@@ -638,6 +662,7 @@ def approve_funding(  # noqa: PLR0913
             details={
                 "approval": approval.pk,
                 "budget_period": budget_period,
+                **({"converted_from": converted_from} if converted_from else {}),
                 "budget_usd": str(amount),
                 "valid_from": start.isoformat(),
                 "expires_at": expires_at.isoformat(),

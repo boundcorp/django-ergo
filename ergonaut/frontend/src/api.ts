@@ -224,8 +224,9 @@ export type FundingApproval = {
   expires_at: string
   accounts: string[]
   note: string
-  budget_period?: 'cumulative' | 'calendar_month_utc'
-  version?: number
+  budget_period: 'cumulative' | 'calendar_month_utc'
+  version: number // the funding revision last inspected; a stale one is refused
+  convert_period?: boolean // explicit, audited cumulative <-> monthly conversion
 }
 
 export type MonthlyProviderBudget = {
@@ -1285,6 +1286,7 @@ export const api = {
     account_label: string
     assertion: string
     attempt_ids: string[]
+    family: string
   }) => request<MonthlyProviderBudget>('POST', '/pools/monthly-mapping', body),
   poolEnvelopes: (pool: string) =>
     request<PoolEnvelopeCandidates>('GET', `/pools/${encodeURIComponent(pool)}/envelope`),

@@ -140,3 +140,61 @@ def test_other_users_cannot_inspect_or_change_global_provider_terms(client, kitc
     client.logout()
     assert client.get("/api/pools/monthly/openai").status_code == 401
     assert get_user_model().objects.count() == 3
+
+
+def _fund_monthly(client, kitchen):  # noqa: F811
+    owner = login(client, "lee")
+    details = client.get("/api/pools/paid/funding").json()
+    identity = details["accounts"][0]["identity"]
+    client.logout()
+    login(client, "root", admin=True)
+    body = {
+        "identity": identity,
+        "owner": "lee",
+        "account_label": "Synthetic OpenAI account",
+        "assertion": "Admin asserts this OpenAI billing account",
+    }
+    assert send(client, "post", "/api/pools/monthly-mapping", body).status_code == 200
+    client.logout()
+    assert (
+        client.post(
+            "/api/auth/login", '{"username":"lee","password":"pw"}', content_type="application/json"
+        ).status_code
+        == 200
+    )
+    funding = {
+        "version": details["version"],
+        "budget_period": "calendar_month_utc",
+        "budget_usd": "100",
+        "expires_at": "2099-01-01T00:00:00Z",
+        "accounts": [identity],
+    }
+    assert send(client, "post", "/api/pools/paid/funding", funding).status_code == 200
+    return owner, identity
+
+
+def test_funding_write_requires_version_and_period_and_never_converts_silently(client, kitchen):  # noqa: F811
+    from django_ergo.conversation.models import SpendFunding
+
+    _, identity = _fund_monthly(client, kitchen)
+    current = client.get("/api/pools/paid/funding").json()
+    base = {"budget_usd": "100", "expires_at": "2099-01-01T00:00:00Z", "accounts": [identity]}
+    count = SpendFunding.objects.count()
+    # No version, or no period (the pre-fix defaults): refused, nothing written.
+    for body in (
+        {**base, "budget_period": "calendar_month_utc"},
+        {**base, "version": current["version"]},
+        {**base},
+    ):
+        assert send(client, "post", "/api/pools/paid/funding", body).status_code in (400, 422)
+    # A cumulative write on a monthly approval is a conversion and must be explicit.
+    silent = {**base, "budget_period": "cumulative", "version": current["version"]}
+    assert send(client, "post", "/api/pools/paid/funding", silent).status_code == 400
+    assert SpendFunding.objects.count() == count
+    stale = {**base, "budget_period": "calendar_month_utc", "version": current["version"] - 1}
+    assert send(client, "post", "/api/pools/paid/funding", stale).status_code == 409
+    assert client.get("/api/pools/paid/funding").json()["budget_period"] == "calendar_month_utc"
+    # The explicit, audited conversion works once.
+    converted = {**silent, "convert_period": True}
+    assert send(client, "post", "/api/pools/paid/funding", converted).status_code == 200
+    assert client.get("/api/pools/paid/funding").json()["budget_period"] == "cumulative"
