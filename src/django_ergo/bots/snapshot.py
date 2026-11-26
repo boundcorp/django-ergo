@@ -161,9 +161,13 @@ def session_ref(session: ConversationSession) -> dict:
 
 
 def _sessions(ctx: ToolContext, names: list[str]):
+    from django_ergo.bots.registry import unreadable
+
+    # Sessions under a privacy policy this work isn't under (bots.pools) are
+    # out of scope: not counted, named or summarized.
     return ConversationSession.objects.filter(
         user_id=ctx.session.user_id, bot_name__in=names
-    )
+    ).exclude(unreadable(ctx.bot))
 
 
 def _annotated(qs):
@@ -373,9 +377,15 @@ def _worker_activity(worker) -> datetime:
 
 
 def _workers(ctx, names, *, limit, cutoff, **_) -> tuple[list, dict]:
-    qs = Worker.objects.filter(
-        session__user_id=ctx.session.user_id, session__bot_name__in=names
-    ).filter(Q(status__in=ACTIVE_WORKERS) | Q(updated_at__gte=cutoff))
+    from django_ergo.bots.registry import unreadable
+
+    qs = (
+        Worker.objects.filter(
+            session__user_id=ctx.session.user_id, session__bot_name__in=names
+        )
+        .exclude(unreadable(ctx.bot, "session__"))
+        .filter(Q(status__in=ACTIVE_WORKERS) | Q(updated_at__gte=cutoff))
+    )
     total = qs.count()
     from django.db.models import Case
     from django.db.models import IntegerField
@@ -422,9 +432,11 @@ def _visible_files(ctx: ToolContext, names: list[str]):
     when the attachments plugin allows other sessions, and a private-export copy
     only in the chat it was exported to (as ``AttachmentsPlugin.file_for``)."""
     plugin = ctx.bot.plugin("attachments")
+    from django_ergo.bots.registry import unreadable
+
     qs = ConversationAttachment.objects.filter(
         session__user_id=ctx.session.user_id, session__bot_name__in=names
-    )
+    ).exclude(unreadable(ctx.bot, "session__"))
     own = Q(session_id=ctx.session.id)
     others = (
         Q(private_export__isnull=True)

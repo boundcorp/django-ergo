@@ -825,3 +825,221 @@ def test_r17_grant_amounts_must_be_finite_and_non_negative(field, value):
         )
     with pytest.raises(ValueError, match="budgets and expiry are spend grants"):
         set_state("paid", bots["devbox"].providers, per_launch_usd=-2)
+
+
+# -- R5: async worker steps run inside their origin ----------------------------
+
+
+def test_r5_async_worker_step_runs_inside_its_origin(monkeypatch):
+    from django_ergo.bots import workers
+
+    seen = []
+
+    async def step():
+        seen.append((pools.current_origin(), pools.current_policy()))
+
+    worker = SimpleNamespace(
+        bot_name="devbox",
+        function="mock",
+        args={
+            workers.PRIVACY_ARG: ["personal"],
+            workers.POLICY_ARG: {"pool": "subs", "grant": ""},
+        },
+    )
+    monkeypatch.setattr(workers, "_claim", lambda _: (worker, ""))
+    monkeypatch.setattr(workers, "_notify", lambda _: None)
+    monkeypatch.setattr(
+        "django_ergo.bots.background.find_bot", lambda *a: SimpleNamespace()
+    )
+    monkeypatch.setattr(workers, "resolve", lambda *a: step)
+    monkeypatch.setattr(workers, "WorkerContext", lambda *a: SimpleNamespace(state={}))
+    monkeypatch.setattr(workers, "_apply_step", lambda *a: "done")
+    workers._run("mock")
+    assert seen == [(("personal",), {"pool": "subs", "grant": ""})]
+
+
+# -- R6: summaries leave out sessions under another privacy policy ---------------
+
+
+@pytest.mark.django_db(transaction=True)
+def test_r6_overview_and_thread_list_hide_restricted_sessions():
+    from django_ergo.bots import overview
+    from django_ergo.bots.orchestrator import ergo_thread_list
+    from django_ergo.bots.registry import unreadable
+    from django_ergo.bots.tools import ToolContext
+    from django_ergo.conversation.messages import add_message
+    from django_ergo.conversation.models import ConversationSession
+
+    _, bots = registry_of()
+    bot = bots["devbox"]
+    user = User.objects.create(username="history")
+    plain = chat(bot, user)
+    tainted = chat(bot, user, **{pools.ORIGIN_KEY: ["personal"]})
+    async_to_sync(add_message)(
+        tainted, "user", [{"block_type": "text", "text": "synthetic private phrase"}]
+    )
+    ctx = ToolContext(bot=bot, session=plain)
+    assert tainted.pk not in {s.session.pk for s in bot.history_sources(plain)}
+    text = overview.overview(ctx)
+    assert "synthetic private phrase" not in text
+    assert str(tainted.pk) not in text
+    listed = (
+        ergo_thread_list.__wrapped__(ctx)
+        if hasattr(ergo_thread_list, "__wrapped__")
+        else ergo_thread_list(ctx)
+    )
+    assert str(tainted.pk) not in str(listed)
+    assert set(
+        ConversationSession.objects.filter(user=user)
+        .exclude(unreadable(bot))
+        .values_list("pk", flat=True)
+    ) == {plain.pk}
+    # Work under the same policy still sees it.
+    with pools.origin_scope(["personal"]):
+        assert tainted.pk in set(
+            ConversationSession.objects.filter(user=user)
+            .exclude(unreadable(bot))
+            .values_list("pk", flat=True)
+        )
+
+
+# -- R7: memory under the inherited policy -------------------------------------
+
+
+MEMORY_POLICY = POOLS.replace(
+    "private_pools:",
+    "privacy:\n  personal:\n    memory: [personal-memory]\nprivate_pools:",
+)
+
+
+def memory_plugin(monkeypatch, settings, text=POOLS, bank="ergonaut"):
+    from django_ergo.plugins import hindsight_memory as memory
+
+    settings.HINDSIGHT_URL = "http://mock.invalid"
+    _, bots = registry_of(text)
+    plugin = memory.HindsightMemoryPlugin(bots["devbox"], {"bank": bank})
+    plugin.on_load()
+    queued = []
+    monkeypatch.setattr(memory._pool, "submit", lambda *args: queued.append(args))
+    posts = []
+    monkeypatch.setattr(memory, "_post", lambda *a, **k: posts.append(a) or {})
+    return memory, plugin, queued, posts
+
+
+def test_r7_restricted_work_never_reaches_an_unapproved_bank(monkeypatch, settings):
+    memory, plugin, queued, posts = memory_plugin(monkeypatch, settings)
+    session = SimpleNamespace(id="mock", user_id=1, parent_id=None, metadata={})
+    with pools.origin_scope(["personal"]):
+        plugin._retain(session, "synthetic private data")
+        assert "refused" in plugin._recall(session, "q", timeout=1)
+        ctx = SimpleNamespace(session=session)
+        toolkit = plugin.make_toolkit(ctx)
+        reflected = toolkit.execute_tool("memory_reflect", {"question": "q"})
+        assert "refused" in reflected
+        assert "Not saved" in toolkit.execute_tool("memory_retain", {"text": "x"})
+        assert plugin.always_context_sources(ctx, "hello") == []
+    assert queued == [] and posts == []
+
+
+def test_r7_approved_bank_carries_the_policy_through_the_queue(monkeypatch, settings):
+    memory, plugin, queued, posts = memory_plugin(
+        monkeypatch, settings, MEMORY_POLICY, bank="personal-memory"
+    )
+    session = SimpleNamespace(id="mock", user_id=1, parent_id=None, metadata={})
+    with pools.origin_scope(["personal"]):
+        plugin._retain(session, "synthetic private data")
+        ctx = SimpleNamespace(session=session)
+        toolkit = plugin.make_toolkit(ctx)
+        # Reflect is LLM synthesis: it needs its own approval.
+        assert "refused" in toolkit.execute_tool("memory_reflect", {"question": "q"})
+    assert len(queued) == 1
+    _, bank, item = queued[0]
+    assert bank == "personal-memory"
+    assert item[memory.PRIVACY_ITEM_KEY] == {
+        "origin": ["personal"],
+        "banks": ["personal-memory"],
+    }
+    assert "privacy:personal" in item["tags"]
+    # The worker posts it to the approved bank only, without the private key.
+    memory.retain_item("ergonaut", dict(item))
+    assert posts == []
+    memory.retain_item("personal-memory", dict(item))
+    assert len(posts) == 1 and memory.PRIVACY_ITEM_KEY not in posts[0][2]["items"][0]
+
+
+def test_r7_a_policy_bank_is_closed_to_other_work(monkeypatch, settings):
+    _, plugin, queued, _ = memory_plugin(
+        monkeypatch, settings, MEMORY_POLICY, bank="personal-memory"
+    )
+    session = SimpleNamespace(id="mock", user_id=1, parent_id=None, metadata={})
+    plugin._retain(session, "public data")
+    assert queued == []
+    assert "refused" in plugin._recall(session, "q", timeout=1)
+
+
+# -- R8: video and LLM search go through the pool or refuse --------------------
+
+
+def test_r8_video_refuses_before_sending_with_pools(monkeypatch):
+    from contextlib import nullcontext
+
+    from django_ergo.conversation import video
+    from django_ergo.plugins.attachments import AttachmentsPlugin
+
+    _, bots = registry_of()
+    bot = bots["devbox"]
+    plugin = AttachmentsPlugin(bot, {})
+    plugin.on_load()
+    monkeypatch.setattr(video, "local_path", lambda row: nullcontext("/mock.mp4"))
+    sent = []
+    monkeypatch.setattr(video, "ask_gemini", lambda *a, **k: sent.append(True))
+    session = SimpleNamespace(metadata={pools.SESSION_POOL_KEY: "subs"}, user_id=None)
+    ctx = SimpleNamespace(bot=bot, session=session, secret=lambda _: "mock-key")
+    row = SimpleNamespace(filename="mock.mp4", size=1, media_type="video/mp4")
+    assert "isn't available while pools are configured" in plugin.watch(ctx, row)
+    assert sent == []
+
+
+@pytest.mark.django_db
+def test_r8_llm_web_search_needs_the_active_pool(monkeypatch):
+    from django_ergo.plugins.web_search import WebSearchPlugin
+
+    _, bots = registry_of()
+    bot = bots["devbox"]
+    user = User.objects.create(username="lee")
+    session = chat(bot, user)
+    sent = []
+    anthropic = WebSearchPlugin(bot, {"backend": "anthropic"})
+    anthropic.on_load()
+    monkeypatch.setattr(
+        anthropic, "_search_anthropic", lambda *a: sent.append("a") or "x"
+    )
+    assert anthropic.search("q", session=session).startswith("Search failed")
+    claude = WebSearchPlugin(bot, {"backend": "claude_code"})
+    claude.on_load()
+    monkeypatch.setattr(
+        claude, "_search_claude_code", lambda *a: sent.append("c") or "ok"
+    )
+    assert claude.search("q", session=session) == "ok"  # subs has Claude
+    assert sent == ["c"]
+    # On a pool without a Claude subscription it refuses before sending.
+    set_pref(user.pk, bot.providers, active_pool="paid")
+    assert claude.search("q", session=chat(bot, user)).startswith("Search failed")
+    assert sent == ["c"]
+
+
+def test_r8_personal_web_search_uses_brave_when_configured(monkeypatch):
+    from django_ergo.plugins.web_search import WebSearchPlugin
+
+    text = POOLS.replace(
+        "private_pools:",
+        "privacy:\n  personal:\n    web_search: [brave]\nprivate_pools:",
+    )
+    _, bots = registry_of(text)
+    plugin = WebSearchPlugin(bots["devbox"], {"backend": "claude_code"})
+    plugin.on_load()
+    monkeypatch.setenv(plugin.brave_key_env, "mock-brave")
+    monkeypatch.setattr(plugin, "_search_brave", lambda *a: "brave results")
+    monkeypatch.setattr(plugin, "_search_claude_code", lambda *a: "llm!")
+    with pools.origin_scope(["personal"]):
+        assert plugin.search("q") == "brave results"

@@ -73,7 +73,9 @@ COMPACTION = "compaction"
 BROWSER = "browser"
 CODING = "coding"
 BACKGROUND = "background"
-CONSUMERS = (CHAT, TITLE, COMPACTION, BROWSER, CODING, BACKGROUND)
+WEB_SEARCH = "web_search"
+VIDEO = "video"
+CONSUMERS = (CHAT, TITLE, COMPACTION, BROWSER, CODING, BACKGROUND, WEB_SEARCH, VIDEO)
 
 # Refusal codes. Only EXHAUSTED may roll over.
 EXHAUSTED = "pool_exhausted"
@@ -198,6 +200,13 @@ class Privacy:
     def permits_search(self, backend: str) -> bool:
         return all(p.permits_search(backend) for p in self.policies)
 
+    def permits_memory(self, bank: str, *, reflect: bool = False) -> bool:
+        """Whether every policy approves this Hindsight bank as a recipient
+        (and, with ``reflect``, its LLM synthesis)."""
+        return all(
+            bank in (p.memory_reflect if reflect else p.memory) for p in self.policies
+        )
+
     def label(self) -> str:
         return ", ".join(p.label or p.name for p in self.policies)
 
@@ -232,6 +241,30 @@ def privacy_for(bot: Bot, session=None, origin=()) -> Privacy:
     )
     policies = tuple(configured.get(name) or PrivacyPolicy(name=name) for name in names)
     return Privacy(policies=policies, private_pools=frozenset(providers.private_pools))
+
+
+def memory_refusal(bot: Bot, session, bank: str, *, reflect: bool = False) -> str:
+    """Why this work may not send to (or read from) Hindsight bank ``bank``,
+    or "": restricted work only uses banks its policy lists (``memory``, and
+    ``memory_reflect`` for reflect); a bank a policy lists is that policy's,
+    so other work neither writes nor reads it."""
+    privacy = privacy_for(bot, session)
+    if privacy.restricted:
+        if not privacy.permits_memory(bank, reflect=reflect):
+            what = "memory reflect" if reflect else "memory"
+            return (
+                f"privacy policy {privacy.label()} doesn't approve the {bank!r} "
+                f"{what} bank for this work"
+            )
+        return ""
+    owners = [
+        name
+        for name, policy in bot.providers.pools.privacy.items()
+        if bank in policy.memory
+    ]
+    if owners:
+        return f"memory bank {bank!r} belongs to privacy policy {', '.join(owners)}"
+    return ""
 
 
 def check_delegation(bot_names, privacy: Privacy, *, what: str = "this") -> None:
@@ -1816,6 +1849,67 @@ def confinement(bot: Bot, decision: Decision) -> dict | None:
         "model": decision.choice.model,
         "key_env": provider.api_key_env,
     }
+
+
+def authorize_subscription_call(
+    bot: Bot, session, *, provider_type: str, consumer: str
+) -> str:
+    """For an ancillary call that runs on a subscription CLI outside a chat
+    engine (``web_search``'s ``claude_code`` backend): the provider in the
+    chat's active pool it may use, or PoolRefusal. "" without pools. Records
+    a receipt. Runs the ORM."""
+    providers = bot.providers
+    if providers.pools.legacy:
+        return ""
+    privacy = privacy_for(bot, session)
+    user_id = getattr(session, "user_id", None)
+    if privacy.restricted:
+        msg = f"Privacy policy {privacy.label()} doesn't allow {consumer} on a model"
+        raise PoolRefusal(PRIVACY_DENIED, msg, consumer=consumer)
+    snap = snapshot(providers, user_id, session)
+    index, mode = _start(snap, privacy, consumer)
+    view = snap.pools[index]
+    if problem := view.problem():
+        raise PoolRefusal(problem[0], problem[1], pool=view.name, consumer=consumer)
+    rejected = []
+    for ref in pool_refs(providers, view.pool, metered=False):
+        head, _, model = ref.partition("/")
+        provider = providers.providers[head]
+        if provider.type != provider_type or provider.transport != "cli":
+            continue
+        if problem := route_problem(snap, privacy, consumer, head, model, view):
+            rejected.append({"route": ref, "code": problem[0], "reason": problem[1]})
+            continue
+        decision = Decision(
+            consumer=consumer,
+            pool=view.name,
+            pool_label=view.title,
+            route=ref,
+            provider=head,
+            model=model,
+            billing=provider.billing,
+            mode=mode,
+            rejected=rejected,
+            scope=snap.active_scope,
+            revision=snap.revision(view),
+            reason=f"{consumer} on the active pool's subscription",
+        )
+        decision.receipt_id = _record(
+            bot=bot,
+            session=session,
+            user_id=user_id,
+            consumer=consumer,
+            requested=provider_type,
+            decision=decision,
+        )
+        return head
+    msg = (
+        f"The active pool {view.title!r} has no usable {provider_type} subscription "
+        f"for {consumer}"
+    )
+    raise PoolRefusal(
+        NO_ROUTE, msg, pool=view.name, rejected=rejected, consumer=consumer
+    )
 
 
 # -- listing (UI and tools use the same eligibility) ---------------------------------

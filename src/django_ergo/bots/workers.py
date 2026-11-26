@@ -585,13 +585,15 @@ def _run(worker_id: str, registry=None) -> str:
                 if params and params[0] == "ctx"
                 else function(**args)
             )
-        if inspect.isawaitable(outcome):
-            from asgiref.sync import async_to_sync
+            if inspect.isawaitable(outcome):
+                from asgiref.sync import async_to_sync
 
-            async def wait(awaitable=outcome):
-                return await awaitable
+                # Awaited inside the scope: an async step's body runs here,
+                # and asgiref carries the context (origin, policy) into it.
+                async def wait(awaitable=outcome):
+                    return await awaitable
 
-            outcome = async_to_sync(wait)()
+                outcome = async_to_sync(wait)()
         worker.state = ctx.state
     except Exception as exc:  # noqa: BLE001 — recorded on the worker
         error = f"{type(exc).__name__}: {exc}"

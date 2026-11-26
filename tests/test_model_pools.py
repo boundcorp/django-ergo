@@ -996,6 +996,7 @@ def test_history_of_a_restricted_origin_is_unreadable_to_unrestricted_bots(user)
     assert tainted.pk not in sources and plain.pk in sources
 
 
+@pytest.mark.django_db
 def test_web_search_refuses_llm_backends_for_restricted_origins(monkeypatch):
     from django_ergo.plugins.web_search import WebSearchPlugin
 
@@ -1017,6 +1018,7 @@ def test_web_search_refuses_llm_backends_for_restricted_origins(monkeypatch):
     public = WebSearchPlugin(devbox, {"backend": "claude_code"})
     public.on_load()
     monkeypatch.setattr(public, "_search_claude_code", lambda q, c: "claude results")
+    # Public: the claude_code backend runs on the active pool's Claude login.
     assert public.search("x") == "claude results"
 
 

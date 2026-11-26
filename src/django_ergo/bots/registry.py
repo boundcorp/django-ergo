@@ -86,6 +86,44 @@ def privacy_readable(bot: Bot, session) -> bool:
     return names <= set(pools.privacy_for(bot).names)
 
 
+def unreadable(bot: Bot, prefix: str = ""):
+    """A ``Q`` matching sessions (or, with ``prefix`` ``"session__"``, rows of
+    sessions) that :func:`privacy_readable` refuses for ``bot`` in the current
+    turn, for summary and snapshot queries that must leave them out entirely:
+    sessions of a bot under a policy this work isn't under, and sessions whose
+    recorded origin names one. Callers that render rows should still check
+    :func:`privacy_readable` (it also fails closed on unknown policy names)."""
+    from django.db.models import Q
+
+    from django_ergo.bots import pools
+
+    reader = set(pools.privacy_for(bot).names)
+    configured = bot.providers.pools.privacy
+    restricted = {
+        name
+        for policy_name, policy in configured.items()
+        if policy_name not in reader
+        for name in policy.bots
+    }
+    registry = getattr(bot, "registry", None)
+    if registry is not None:
+        restricted |= {
+            each.name
+            for each in registry.bots.values()
+            if set(pools.lineage(each)) & restricted
+        }
+    origin = f"{prefix}metadata__{pools.ORIGIN_KEY}"
+    # has_key first: a missing key is SQL NULL, which NOT(...) would turn
+    # into "exclude every row".
+    has = Q(**{f"{prefix}metadata__has_key": pools.ORIGIN_KEY})
+    match = Q(**{f"{prefix}bot_name__in": sorted(restricted)})
+    if not reader:
+        match |= has & ~Q(**{origin: []})
+    for name in sorted(set(configured) - reader):
+        match |= has & Q(**{f"{origin}__contains": [name]})
+    return match
+
+
 def find_bot_folders(directory: str | Path) -> list[Path]:
     """Every folder at or under ``directory`` with a bot.yaml, parents first."""
     root = Path(directory).resolve()

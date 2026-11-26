@@ -47,6 +47,11 @@ Every ``private_pools`` entry is also a privacy policy of the same name::
         bots: [personal]              # default: the private pool's allowed_bots
         allow: [personal]             # private pool names, providers or provider/model
         web_search: [brave]           # non-LLM search backends it may use
+        memory: [personal-memory]     # Hindsight banks it may retain/recall in
+        memory_reflect: []            # banks whose reflect (LLM synthesis) it may use
+
+A memory bank listed by a policy is that policy's: work outside the policy
+neither writes nor reads it. Unlisted banks are refused for restricted work.
 """
 
 from __future__ import annotations
@@ -88,7 +93,9 @@ POOL_KEYS = frozenset(
         "agents",
     }
 )
-PRIVACY_KEYS = frozenset({"bots", "allow", "web_search", "label"})
+PRIVACY_KEYS = frozenset(
+    {"bots", "allow", "web_search", "memory", "memory_reflect", "label"}
+)
 NON_LLM_SEARCH = ("brave",)
 DEFAULT_MAX_OUTPUT_TOKENS = 16_000
 MAX_POOL_NAME = 40
@@ -147,6 +154,8 @@ class PrivacyPolicy:
     allow: frozenset[str] = frozenset()  # private pool names, providers, provider/model
     web_search: tuple[str, ...] = ()
     label: str = ""
+    memory: frozenset[str] = frozenset()  # Hindsight banks (retain, recall)
+    memory_reflect: frozenset[str] = frozenset()  # banks whose reflect is allowed
 
     def permits(self, ref: str, private_pools: frozenset[str] = frozenset()) -> bool:
         """Whether a model selector may be used under this policy."""
@@ -419,7 +428,15 @@ def parse_privacy(raw, private_pools: dict) -> dict[str, PrivacyPolicy]:  # noqa
         if allow is None:
             allow = [name] if pool else []
         search = spec.get("web_search") or []
-        for key, value in (("bots", bots), ("allow", allow), ("web_search", search)):
+        memory = spec.get("memory") or []
+        reflect = spec.get("memory_reflect") or []
+        for key, value in (
+            ("bots", bots),
+            ("allow", allow),
+            ("web_search", search),
+            ("memory", memory),
+            ("memory_reflect", reflect),
+        ):
             if not isinstance(value, list) or not all(
                 isinstance(v, str) and v.strip() for v in value
             ):
@@ -434,6 +451,8 @@ def parse_privacy(raw, private_pools: dict) -> dict[str, PrivacyPolicy]:  # noqa
             allow=frozenset(allow),
             web_search=tuple(search),
             label=str(spec.get("label") or ""),
+            memory=frozenset(memory),
+            memory_reflect=frozenset(reflect) & frozenset(memory),
         )
     for name, pool in private_pools.items():
         policies.setdefault(

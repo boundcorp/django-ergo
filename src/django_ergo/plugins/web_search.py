@@ -196,10 +196,45 @@ class WebSearchPlugin(BotPlugin):
             return "Give a search query."
         count = max(1, min(int(count or self.count), 20))
         try:
-            backend = self.private_backend(session) or self.resolved_backend()
+            backend = (
+                self.private_backend(session)
+                or self.pooled_backend(session)
+                or self.resolved_backend()
+            )
             return getattr(self, f"_search_{backend}")(query, count)
         except WebSearchError as exc:
             return f"Search failed: {exc}"
+
+    def pooled_backend(self, session=None) -> str:
+        """With pools configured (``bots.pools``), an LLM search runs only on
+        the chat's active pool: ``claude_code`` needs a usable Claude
+        subscription in it, and ``anthropic`` (a metered call with per-search
+        fees no pool grant can bound) is refused. Brave isn't a model and needs
+        no pool. "" without pools."""
+        from django_ergo.bots import pools
+
+        bot = getattr(self, "bot", None)
+        if bot is None or bot.providers.pools.legacy:
+            return ""
+        backend = self.backend
+        if backend == "auto":
+            backend = "brave" if os.environ.get(self.brave_key_env) else "claude_code"
+        if backend == "brave":
+            return "brave"
+        if backend == "anthropic":
+            msg = (
+                "the anthropic backend bills per search outside any pool grant; use "
+                "brave, or claude_code on a subscription in the active pool"
+            )
+            raise WebSearchError(msg)
+        try:
+            pools.authorize_subscription_call(
+                bot, session, provider_type="claude", consumer=pools.WEB_SEARCH
+            )
+        except pools.PoolRefusal as exc:
+            msg = f"claude_code search isn't allowed here: {exc}"
+            raise WebSearchError(msg) from exc
+        return "claude_code"
 
     def private_backend(self, session=None) -> str:
         """For a privacy-restricted origin (``bots.pools``): a non-LLM backend

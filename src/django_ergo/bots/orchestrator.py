@@ -621,7 +621,14 @@ def ergo_thread_list(
                 | Q(metadata__chat__icontains=word)
                 | Q(search_id__istartswith=word)
             )
-    return [_row(s, ctx.session) for s in qs[: max(1, min(int(limit), 50))]]
+    from django_ergo.bots.registry import privacy_readable
+
+    # Sessions under a privacy policy this work isn't under aren't listed.
+    return [
+        _row(s, ctx.session)
+        for s in qs[: max(1, min(int(limit), 50))]
+        if privacy_readable(ctx.bot, s)
+    ]
 
 
 @bot_tool(
