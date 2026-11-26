@@ -25,6 +25,7 @@ from django_ergo.conversation.engines.google_spend import GoogleAdapter
 from django_ergo.conversation.models import InferenceRequest
 from django_ergo.pricing import ExactPrice
 from django_ergo.pricing import LongContextRates
+from tests.pool_funding import fund
 
 User = get_user_model()
 MODEL = "gemini-2.5-pro"
@@ -304,6 +305,7 @@ def lee(db):
 
 def held(lee, route=f"gemini/{MODEL}", budget="10"):
     providers = parse_providers(POOLS)
+    fund(providers, lee)  # explicit owner consent; config alone funds nothing
     return pools.issue_grant(
         providers,
         "paid",

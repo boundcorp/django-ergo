@@ -6,7 +6,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('django_ergo', '0061_spend_envelope_families'),
+        ('django_ergo', '0062_explicit_funding_and_paid_latch'),
     ]
 
     operations = [

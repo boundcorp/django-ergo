@@ -102,6 +102,18 @@ class GoogleAPIEngine(OpenAIAPIEngine):
         self.api_key = config.get("api_key") or None  # tests; normally read from env
         self.api_key_env = str(config.get("api_key_env") or "")
         self.base_url = str(config.get("base_url") or wire.BASE_URL).rstrip("/")
+        self._base_url_configured = bool(config.get("base_url"))
+        from django_ergo.conversation.transport_identity import identity
+
+        # Captured once, here: the provider, credential source, pool account,
+        # model and endpoint this engine was built for. Every attempt re-checks it.
+        self._transport_identity = identity(
+            "google",
+            "api",
+            config,
+            account=config.get("_pool_account", ""),
+            model=self.model,
+        )
         self.temperature = config.get("temperature", 0.7)
         self.max_tokens = config.get("max_tokens", 32000)
         self.reasoning_effort = config.get("reasoning_effort")
@@ -190,13 +202,32 @@ class GoogleAPIEngine(OpenAIAPIEngine):
         it gets its own reservation."""
         guard = getattr(self, "spend_guard", None)
         if guard is None:
+            from django_ergo.conversation.spend_guard import check_unguarded_dispatch
+
+            await check_unguarded_dispatch()
             return await self._send(body, timeout)
+        self._check_transport(guard)
         body.setdefault("generationConfig", {})  # shared with the guard's view
+
+        async def send():
+            self._check_transport(guard)  # again at the HTTP attempt itself
+            return await self._send(body, timeout)
+
         return await guard.call(
             {"model": self.model, **body},
             GoogleAdapter(getattr(guard, "price", None)),
-            lambda: self._send(body, timeout),
+            send,
         )
+
+    def _check_transport(self, guard) -> None:
+        from django_ergo.conversation.transport_identity import with_endpoint
+
+        # The shared identity names the default endpoint with its API version;
+        # an explicitly configured base_url is named as given.
+        endpoint = self.base_url
+        if not self._base_url_configured and endpoint == wire.BASE_URL:
+            endpoint = f"{endpoint}/{wire.API_VERSION}"
+        guard.check_transport(with_endpoint(self._transport_identity, endpoint))
 
     async def _send(self, body: dict, timeout: float) -> dict:  # noqa: ASYNC109
         key = self._key()

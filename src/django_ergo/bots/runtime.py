@@ -872,7 +872,7 @@ class Bot:
                 picked = tier[0] if tier else ""
         return self.providers.check_public(picked, where=ref) if picked else ""
 
-    def engine_spec(  # noqa: C901, PLR0912
+    def engine_spec(  # noqa: C901
         self, session: ConversationSession | None = None, model: str = ""
     ) -> EngineSpec:
         """The engine for a chat: the model picked for it (or ``model``), else the bot's."""
