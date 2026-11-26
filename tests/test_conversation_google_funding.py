@@ -11,6 +11,7 @@ from django.contrib.auth import get_user_model
 from django_ergo.bots import pools
 from django_ergo.conversation import spend_guard
 from django_ergo.conversation.engines import google_api
+from django_ergo.conversation.models import PaidDispatchState
 from tests.pool_funding import fund
 from tests.test_conversation_google_spend import POOLS
 from tests.test_conversation_google_spend import reply
@@ -97,12 +98,17 @@ def test_paused_latch_refuses_google_before_send(tmp_path, monkeypatch):  # C4
     bot, _, session, _, engine, requests = _built(tmp_path, monkeypatch)
     _attach(bot, session, engine)
     admin = User.objects.create(username="admin", is_superuser=True)
-    pools.set_paid_pause(by_id=admin.pk, paused=True)
+    state = PaidDispatchState.objects.get(pk=1)
+    state = pools.set_paid_pause(
+        by_id=admin.pk, paused=True, version=state.updated_at.isoformat()
+    )
     with pytest.raises(spend_guard.SpendDenied, match="paused"):
         async_to_sync(engine.complete)(MESSAGES)
     assert requests == []
     # The latch is durable but lifts: the same built engine works again.
-    pools.set_paid_pause(by_id=admin.pk, paused=False)
+    pools.set_paid_pause(
+        by_id=admin.pk, paused=False, version=state.updated_at.isoformat()
+    )
     async_to_sync(engine.complete)(MESSAGES)
     assert len(requests) == 1
 
@@ -111,7 +117,10 @@ def test_paused_latch_refuses_google_before_send(tmp_path, monkeypatch):  # C4
 def test_unguarded_google_engine_refuses_while_paused(tmp_path, monkeypatch):  # C4
     _, _, _, _, engine, requests = _built(tmp_path, monkeypatch)
     admin = User.objects.create(username="admin", is_superuser=True)
-    pools.set_paid_pause(by_id=admin.pk, paused=True)
+    state = PaidDispatchState.objects.get(pk=1)
+    state = pools.set_paid_pause(
+        by_id=admin.pk, paused=True, version=state.updated_at.isoformat()
+    )
     with pytest.raises(spend_guard.SpendDenied):
         async_to_sync(engine.complete)(MESSAGES)
     assert requests == []

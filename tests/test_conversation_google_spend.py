@@ -25,6 +25,7 @@ from django_ergo.conversation.engines.google_spend import GoogleAdapter
 from django_ergo.conversation.models import InferenceRequest
 from django_ergo.pricing import ExactPrice
 from django_ergo.pricing import LongContextRates
+from tests.pool_authority import authority
 from tests.pool_funding import fund
 
 User = get_user_model()
@@ -341,7 +342,9 @@ async def test_revocation_stops_an_already_built_google_engine(wire, lee):
 
     grant = await _agrant(lee)
     engine = guarded(lee, grant)
-    engine.spend_guard.current = pools.SendAuthority(parse_providers(POOLS))
+    engine.spend_guard.current = authority(
+        parse_providers(POOLS), ref=f"gemini/{MODEL}"
+    )
     w = wire(reply())
     await engine.complete(MESSAGES)
     await sync_to_async(pools.revoke_grant)(
@@ -356,7 +359,9 @@ async def test_revocation_stops_an_already_built_google_engine(wire, lee):
 async def test_long_context_uses_current_price_for_an_already_built_engine(wire, lee):
     grant = await _agrant(lee)
     engine = guarded(lee, grant)  # built with PRICE, which has long-context rates
-    engine.spend_guard.current = pools.SendAuthority(parse_providers(POOLS))
+    engine.spend_guard.current = authority(
+        parse_providers(POOLS), ref=f"gemini/{MODEL}"
+    )
     w = wire(reply())  # current config has no long-context rates
     with pytest.raises(spend_guard.SpendDenied, match="long_context"):
         await engine.complete([{"role": "user", "content": "x" * 210_000}])
