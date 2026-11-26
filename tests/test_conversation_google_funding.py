@@ -64,6 +64,7 @@ def test_funded_google_engine_sends_once(tmp_path, monkeypatch):
     _attach(bot, session, engine)
     async_to_sync(engine.complete)(MESSAGES)
     assert len(requests) == 1
+    assert requests[0].headers["x-goog-api-key"] == "fake-gemini-key"
 
 
 @pytest.mark.django_db(transaction=True)
@@ -126,3 +127,66 @@ def test_engine_built_for_one_endpoint_refuses_after_base_url_change(
     with pytest.raises(spend_guard.SpendDenied, match="transport/account"):
         async_to_sync(engine.complete)(MESSAGES)
     assert requests == []
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("alternate", ["GEMINI_API_KEY", "GOOGLE_API_KEY"])
+@pytest.mark.parametrize("routed", [False, True])
+def test_missing_selected_key_never_uses_alternate(
+    tmp_path, monkeypatch, alternate, routed
+):
+    bot, _, session, _, engine, requests = _built(tmp_path, monkeypatch)
+    decision = pools.select_route(bot, session, ref="gemini/gemini-2.5-pro")
+    monkeypatch.setenv(alternate, "fake-other-account")
+    monkeypatch.delenv("TEST_GEMINI_KEY")
+    if routed:
+        with pytest.raises(RuntimeError, match="TEST_GEMINI_KEY"):
+            bot.make_engine(session, "gemini/gemini-2.5-pro", decision=decision)
+    else:
+        engine.spend_guard = decision.guard(bot, session)
+        with pytest.raises(google_api.AuthenticationError):
+            async_to_sync(engine.complete)(MESSAGES)
+    assert requests == []
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("routed", [False, True])
+def test_selected_key_removed_after_build_refuses(tmp_path, monkeypatch, routed):
+    bot, _, session, _, engine, requests = _built(tmp_path, monkeypatch)
+    decision = pools.select_route(bot, session, ref="gemini/gemini-2.5-pro")
+    if routed:
+        engine = bot.make_engine(session, "gemini/gemini-2.5-pro", decision=decision)
+    else:
+        engine.spend_guard = decision.guard(bot, session)
+    monkeypatch.delenv("TEST_GEMINI_KEY")
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-other-account")
+    monkeypatch.setenv("GOOGLE_API_KEY", "fake-third-account")
+    with pytest.raises(google_api.AuthenticationError):
+        async_to_sync(engine.complete)(MESSAGES)
+    assert requests == []
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("routed", [False, True])
+def test_changed_key_reference_refuses(tmp_path, monkeypatch, routed):
+    bot, _, session, _, engine, requests = _built(tmp_path, monkeypatch)
+    decision = pools.select_route(bot, session, ref="gemini/gemini-2.5-pro")
+    if routed:
+        engine = bot.make_engine(session, "gemini/gemini-2.5-pro", decision=decision)
+    else:
+        engine.spend_guard = decision.guard(bot, session)
+    monkeypatch.setenv("OTHER_GEMINI_KEY", "fake-other-account")
+    engine.api_key_env = "OTHER_GEMINI_KEY"
+    with pytest.raises(spend_guard.SpendDenied, match="transport"):
+        async_to_sync(engine.complete)(MESSAGES)
+    assert requests == []
+
+
+@pytest.mark.django_db(transaction=True)
+def test_routed_selected_key_sends(tmp_path, monkeypatch):
+    bot, _, session, _, _, requests = _built(tmp_path, monkeypatch)
+    decision = pools.select_route(bot, session, ref="gemini/gemini-2.5-pro")
+    engine = bot.make_engine(session, "gemini/gemini-2.5-pro", decision=decision)
+    async_to_sync(engine.complete)(MESSAGES)
+    assert len(requests) == 1
+    assert requests[0].headers["x-goog-api-key"] == "fake-gemini-key"

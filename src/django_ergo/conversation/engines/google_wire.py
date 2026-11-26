@@ -79,7 +79,7 @@ _BUDGETS = {1: 512, 2: 1024, 3: 8192, 4: 24576, 5: 32768}
 
 def api_key(env_name: str = "") -> str:
     """The key from ``env_name`` (default: GEMINI_API_KEY, then GOOGLE_API_KEY)."""
-    for name in dict.fromkeys((env_name, *KEY_ENVS)):
+    for name in (env_name,) if env_name else KEY_ENVS:
         if name and (value := os.environ.get(name, "").strip()):
             return value
     return ""

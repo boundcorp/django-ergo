@@ -137,11 +137,16 @@ class GoogleAPIEngine(OpenAIAPIEngine):
         return wire.configured(env_name)
 
     def _key(self) -> str:
-        key = self.api_key or wire.api_key(self.api_key_env)
+        key = (
+            wire.api_key(self.api_key_env)
+            if self.api_key_env
+            else (self.api_key or wire.api_key())
+        )
         if not key:
             msg = (
-                "No Gemini API key: set GEMINI_API_KEY (or GOOGLE_API_KEY) "
-                "in the environment"
+                f"No Gemini API key: set {self.api_key_env} in the environment"
+                if self.api_key_env
+                else "No Gemini API key: set GEMINI_API_KEY or GOOGLE_API_KEY"
             )
             raise AuthenticationError(msg, reason="MISSING_KEY")
         return key
@@ -220,6 +225,7 @@ class GoogleAPIEngine(OpenAIAPIEngine):
         )
 
     def _check_transport(self, guard) -> None:
+        from django_ergo.conversation.transport_identity import identity
         from django_ergo.conversation.transport_identity import with_endpoint
 
         # The shared identity names the default endpoint with its API version;
@@ -227,7 +233,14 @@ class GoogleAPIEngine(OpenAIAPIEngine):
         endpoint = self.base_url
         if not self._base_url_configured and endpoint == wire.BASE_URL:
             endpoint = f"{endpoint}/{wire.API_VERSION}"
-        guard.check_transport(with_endpoint(self._transport_identity, endpoint))
+        current = identity(
+            "google",
+            "api",
+            {**self.config, "api_key_env": self.api_key_env},
+            account=self.config.get("_pool_account", ""),
+            model=self.model,
+        )
+        guard.check_transport(with_endpoint(current, endpoint))
 
     async def _send(self, body: dict, timeout: float) -> dict:  # noqa: ASYNC109
         key = self._key()

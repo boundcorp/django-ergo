@@ -941,8 +941,8 @@ class Bot:
     def _add_key(self, config: dict, engine_type: str, key_env: str) -> None:
         """Put the API key (or, for Gemini, the name of its env var) in ``config``."""
         if engine_type == "google":
-            # Gemini reads its key from the environment at send time (with a
-            # GOOGLE_API_KEY fallback); the key itself never enters the config.
+            # Gemini reads only this named variable at send time; the key itself
+            # never enters the config.
             from django_ergo.conversation.engines.google_wire import configured
 
             if not configured(key_env):

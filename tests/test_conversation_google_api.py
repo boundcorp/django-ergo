@@ -738,6 +738,8 @@ def test_google_provider_parses_with_prices(monkeypatch):
     assert provider.api_key_env == "GEMINI_API_KEY"
     assert provider.available is False
     monkeypatch.setenv("GOOGLE_API_KEY", "k")
+    assert provider.available is False
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
     assert provider.available is True
     kind, config, key_env = providers.engine("google/gemini-2.5-flash")
     assert (kind, config["model"], key_env) == (
