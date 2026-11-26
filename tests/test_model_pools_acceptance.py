@@ -23,6 +23,8 @@ from django_ergo.conversation.inference_policy import PolicyError
 from django_ergo.conversation.models import InferenceRequest
 from django_ergo.pricing import ExactPrice
 from django_ergo.pricing import LongContextRates
+from tests.test_agent_launches import launch_env  # noqa: F401 -- fake Orca
+from tests.test_bot_workers import workers  # noqa: F401 -- launch_env needs it
 from tests.test_model_pools import POOLS
 from tests.test_model_pools import chat
 from tests.test_model_pools import environment  # noqa: F401 -- fake keys and CLIs
@@ -831,7 +833,7 @@ def test_r17_grant_amounts_must_be_finite_and_non_negative(field, value):
 
 
 def test_r5_async_worker_step_runs_inside_its_origin(monkeypatch):
-    from django_ergo.bots import workers
+    from django_ergo.bots import workers as worker_steps
 
     seen = []
 
@@ -842,19 +844,21 @@ def test_r5_async_worker_step_runs_inside_its_origin(monkeypatch):
         bot_name="devbox",
         function="mock",
         args={
-            workers.PRIVACY_ARG: ["personal"],
-            workers.POLICY_ARG: {"pool": "subs", "grant": ""},
+            worker_steps.PRIVACY_ARG: ["personal"],
+            worker_steps.POLICY_ARG: {"pool": "subs", "grant": ""},
         },
     )
-    monkeypatch.setattr(workers, "_claim", lambda _: (worker, ""))
-    monkeypatch.setattr(workers, "_notify", lambda _: None)
+    monkeypatch.setattr(worker_steps, "_claim", lambda _: (worker, ""))
+    monkeypatch.setattr(worker_steps, "_notify", lambda _: None)
     monkeypatch.setattr(
         "django_ergo.bots.background.find_bot", lambda *a: SimpleNamespace()
     )
-    monkeypatch.setattr(workers, "resolve", lambda *a: step)
-    monkeypatch.setattr(workers, "WorkerContext", lambda *a: SimpleNamespace(state={}))
-    monkeypatch.setattr(workers, "_apply_step", lambda *a: "done")
-    workers._run("mock")
+    monkeypatch.setattr(worker_steps, "resolve", lambda *a: step)
+    monkeypatch.setattr(
+        worker_steps, "WorkerContext", lambda *a: SimpleNamespace(state={})
+    )
+    monkeypatch.setattr(worker_steps, "_apply_step", lambda *a: "done")
+    worker_steps._run("mock")
     assert seen == [(("personal",), {"pool": "subs", "grant": ""})]
 
 
@@ -1043,3 +1047,51 @@ def test_r8_personal_web_search_uses_brave_when_configured(monkeypatch):
     monkeypatch.setattr(plugin, "_search_claude_code", lambda *a: "llm!")
     with pools.origin_scope(["personal"]):
         assert plugin.search("q") == "brave results"
+
+
+# -- R13: one migration leaf; pool selection composed with the launch journal ----
+
+
+def test_r13_one_migration_leaf_after_the_launch_journal():
+    from django.db.migrations.loader import MigrationLoader
+
+    loader = MigrationLoader(None, ignore_no_migrations=True)
+    assert loader.detect_conflicts() == {}
+    leaves = [n for n in loader.graph.leaf_nodes() if n[0] == "django_ergo"]
+    assert leaves == [("django_ergo", "0059_model_pools")]
+    migration = loader.disk_migrations[("django_ergo", "0059_model_pools")]
+    assert ("django_ergo", "0058_agent_launch_intent") in migration.dependencies
+
+
+@pytest.mark.django_db(transaction=True)
+def test_r13_orca_launch_journals_its_pool_receipt_once(launch_env, monkeypatch):  # noqa: F811
+    from django_ergo.conversation.models import AgentLaunch
+    from django_ergo.conversation.models import Worker
+    from tests.test_agent_launches import start
+
+    selected = []
+
+    def select_agent(bot, session, **kwargs):
+        selected.append(kwargs)
+        return pools.Decision(
+            consumer=pools.CODING,
+            pool="subs",
+            route="claude/claude-opus-5-5",
+            provider="claude",
+            model="claude-opus-5-5",
+            receipt_id="receipt-1",
+            legacy=False,
+        )
+
+    monkeypatch.setattr(pools, "select_agent", select_agent)
+    first = start(launch_env)
+    intent = AgentLaunch.objects.get()
+    receipt = intent.watch_state["dispatch_receipt"]
+    assert (receipt["pool"], receipt["decision"]) == ("subs", "receipt-1")
+    calls = list(launch_env[2])
+    # Replaying the same key neither selects (or reserves) again nor launches.
+    again = start(launch_env)
+    assert again["id"] == first["id"]
+    assert len(selected) == 1
+    assert launch_env[2] == calls
+    assert Worker.objects.count() == 1
