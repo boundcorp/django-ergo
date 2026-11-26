@@ -6,7 +6,7 @@ import pytest
 from django_ergo.bots import pools
 from django_ergo.conversation.models import ConversationSession
 
-from ergonaut.apps.bots.tests.test_pools_api import kitchen, login, send  # noqa: F401
+from ergonaut.apps.bots.tests.test_pools_api import approve, kitchen, login, send  # noqa: F401
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -33,6 +33,7 @@ def test_r2_owner_issues_a_scoped_grant_and_the_grantee_sees_only_theirs(client,
 
     friend = get_user_model().objects.create_user("friend", "friend@example.com", "pw")
     login(client, "lee")
+    approve(client)
     # Only the owner issues; a grant needs an end date with a timezone.
     missing = send(client, "post", "/api/pools/paid/grants", {"grantee": "friend", "budget_usd": "3"})
     assert missing.status_code == 422
@@ -74,6 +75,7 @@ def test_r2_owner_issues_a_scoped_grant_and_the_grantee_sees_only_theirs(client,
 @pytest.mark.parametrize("amount", ["-2", "NaN", "Infinity", "1e400", "lots"])
 def test_r17_grant_amounts_are_checked_on_the_server(client, kitchen, amount):  # noqa: F811
     login(client, "lee")
+    approve(client)
     for field in ("budget_usd", "per_launch_usd"):
         body = {"grantee": "lee", "budget_usd": "5", "expires_at": "2099-01-01T00:00:00Z", field: amount}
         response = send(client, "post", "/api/pools/paid/grants", body)

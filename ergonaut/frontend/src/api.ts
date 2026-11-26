@@ -219,6 +219,42 @@ export type GrantIssue = {
   routes?: string[]
 }
 
+export type PoolFunding = {
+  envelope_id: string | null
+  pool: string
+  owner: string
+  pending: boolean
+  configured_ceiling_usd: string | null
+  configured_expires_at: string | null
+  accounts: { identity: string; label: string }[]
+  spent_usd: string
+  reserved_usd: string
+  approval: {
+    id: number
+    budget_usd: string
+    valid_from: string
+    expires_at: string
+    accounts: string[]
+    actor_id: number
+  } | null
+}
+
+export type PoolEnvelopeCandidates = {
+  pool: string
+  accounts: string[]
+  problem: string
+  envelopes: {
+    id: string
+    pool: string
+    owner_id: number
+    accounts: string[]
+    in_use: boolean
+    continuable: boolean
+    spent_usd: string
+    reserved_usd: string
+  }[]
+}
+
 export type PoolRow = {
   name: string
   label: string
@@ -228,6 +264,8 @@ export type PoolRow = {
   why?: string
   owner?: string // username; '' = a deployment pool
   is_owner?: boolean
+  funding_pending?: boolean
+  configured_ceiling_usd?: string | null
   manageable?: boolean // this user may change its gates and grants
   selectable_now?: boolean
   grant?: PoolGrant | null // this user's own grant
@@ -275,6 +313,8 @@ export type PoolSettings = {
   providers?: PoolProvider[]
   reset_times?: Record<string, Record<string, number>>
   editable?: boolean
+  paid_paused?: boolean
+  enforcement_activated?: boolean
   admin?: boolean // may switch providers
   privacy?: { restricted: boolean; policies: string[]; label: string }
 }
@@ -1180,6 +1220,14 @@ export const api = {
   models: (bot: string, session?: string) =>
     request<BotModels>('GET', `/bots/${bot}/models${session ? `?session=${encodeURIComponent(session)}` : ''}`),
   pools: () => request<PoolSettings>('GET', '/pools'),
+  poolFunding: (pool: string) => request<PoolFunding>('GET', `/pools/${encodeURIComponent(pool)}/funding`),
+  approveFunding: (pool: string, body: { budget_usd: string; expires_at: string; accounts: string[]; note: string }) =>
+    request<PoolSettings>('POST', `/pools/${encodeURIComponent(pool)}/funding`, body),
+  poolEnvelopes: (pool: string) =>
+    request<PoolEnvelopeCandidates>('GET', `/pools/${encodeURIComponent(pool)}/envelope`),
+  linkPoolEnvelope: (pool: string, body: { envelope?: string; fund?: boolean; restore?: boolean; note: string }) =>
+    request<PoolSettings>('POST', `/pools/${encodeURIComponent(pool)}/envelope`, body),
+  setPaidPause: (paused: boolean) => request<PoolSettings>('POST', '/pools/paid-pause', { paused }),
   updatePoolPreferences: (body: {
     version: number
     active_pool?: string

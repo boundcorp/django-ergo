@@ -79,8 +79,28 @@ def send(client, method, url, data):
     return getattr(client, method)(url, json.dumps(data), content_type="application/json")
 
 
+def approve(client, pool="paid", amount="5"):
+    """Explicit mock consent through the same endpoint the UI uses."""
+    details = client.get(f"/api/pools/{pool}/funding")
+    assert details.status_code == 200, details.content
+    response = send(
+        client,
+        "post",
+        f"/api/pools/{pool}/funding",
+        {
+            "budget_usd": amount,
+            "expires_at": "2099-12-31T00:00:00Z",
+            "accounts": [a["identity"] for a in details.json()["accounts"]],
+            "note": "Explicit synthetic API test consent",
+        },
+    )
+    assert response.status_code == 200, response.content
+    return response.json()
+
+
 def test_settings_list_pools_and_owners_change_them(client, kitchen):
     login(client, "lee", admin=True)
+    approve(client)
     data = client.get("/api/pools").json()
     assert [p["name"] for p in data["pools"]] == ["subs", "paid"]
     assert data["active"] == "subs" and data["auto_rollover"] is False and data["editable"]
@@ -128,6 +148,7 @@ def test_config_edits_revise_the_owners_grant_without_resetting_its_spend(client
     from django_ergo.conversation import spend_guard
 
     lee = login(client, "lee")
+    approve(client)
     first = next(p for p in client.get("/api/pools").json()["pools"] if p["name"] == "paid")["grant"]
     assert first["budget_usd"] == "5.0000"
     spend_guard.reserve(
@@ -141,7 +162,7 @@ def test_config_edits_revise_the_owners_grant_without_resetting_its_spend(client
     )
     kitchen.providers = parse_providers(PROVIDERS.replace("budget_usd: 5", "budget_usd: 50"))
     raised = next(p for p in client.get("/api/pools").json()["pools"] if p["name"] == "paid")
-    assert raised["grant"]["budget_usd"] == "50.0000" and raised["grant"]["id"] != first["id"]
+    assert raised["grant"]["budget_usd"] == "5.0000" and raised["grant"]["id"] != first["id"]
     assert Decimal(raised["grant"]["reserved_usd"]) == Decimal("1.5")
     kitchen.providers = parse_providers(PROVIDERS.replace("    budget_usd: 5\n", ""))
     removed = next(p for p in client.get("/api/pools").json()["pools"] if p["name"] == "paid")
@@ -150,6 +171,7 @@ def test_config_edits_revise_the_owners_grant_without_resetting_its_spend(client
 
 def test_chat_pool_picker_switch_listing_and_refusal(client, kitchen, monkeypatch):
     login(client, "lee")
+    approve(client)
     root = send(client, "post", "/api/bots/kitchen/root", {}).json()
     view = client.get(f"/api/sessions/{root['id']}/pool").json()
     assert (view["active"], view["chat_pool"], view["refusal"]) == ("subs", "", None)
@@ -195,6 +217,7 @@ def test_chat_pool_picker_switch_listing_and_refusal(client, kitchen, monkeypatc
 
 def test_user_default_from_a_chat(client, kitchen):
     user = login(client, "lee")
+    approve(client)
     root = send(client, "post", "/api/bots/kitchen/root", {}).json()
     out = send(
         client,
@@ -216,6 +239,7 @@ def test_only_an_admin_links_a_pool_on_already_funded_accounts(client, kitchen):
     )
     kitchen.providers = parse_providers(extra)
     login(client, "lee")
+    approve(client)
     rows = {p["name"]: p for p in client.get("/api/pools").json()["pools"]}
     assert rows["paid"]["grant"] is not None
     assert rows["extra"]["grant"] is None
@@ -232,6 +256,8 @@ def test_only_an_admin_links_a_pool_on_already_funded_accounts(client, kitchen):
     assert send(client, "post", "/api/pools/extra/envelope", {}).status_code == 400
     assert send(client, "post", "/api/pools/extra/envelope", {"fund": True, "note": "own $50"}).status_code == 200
     assert client.get("/api/pools/extra/envelope").json()["problem"] == ""
+    assert client.get("/api/pools/extra/funding").json()["pending"]
+    approve(client, pool="extra", amount="50")
     # The owner gives the authority up; only an admin's explicit restore lifts it.
     lee = get_user_model().objects.get(username="lee")
     own = pools.snapshot(kitchen.providers, lee.pk).get("extra").grant

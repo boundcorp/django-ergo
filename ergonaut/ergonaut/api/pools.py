@@ -20,7 +20,7 @@ from django_ergo.bots import pools
 from django_ergo.conversation.inference_policy import PolicyError
 from ninja import Router, Schema
 from ninja.errors import HttpError
-from pydantic import ConfigDict
+from pydantic import ConfigDict, StrictBool
 
 from ergonaut.api.auth import user_auth
 from ergonaut.api.bots import get_bot, get_session, registry, session_out
@@ -58,13 +58,31 @@ class GrantIn(Schema):
     routes: list[str] | None = None  # default: the pool's metered routes
 
 
+class FundingIn(Schema):
+    model_config = ConfigDict(extra="forbid")
+
+    budget_usd: str
+    expires_at: datetime
+    valid_from: datetime | None = None
+    accounts: list[str]
+    note: str = ""
+
+
+class PaidPauseIn(Schema):
+    model_config = ConfigDict(extra="forbid")
+
+    paused: StrictBool
+
+
 class EnvelopeLinkIn(Schema):
+    model_config = ConfigDict(extra="forbid")
+
     # A pool without an envelope: the config envelope to continue, or
-    # fund=true (new money). A pool with one: fund=true approves the accounts
-    # it spends on now; restore=true lifts a person's revocation of it.
+    # fund=true prepares a separate, UNFUNDED family. Funding approval with
+    # explicit amount/window/accounts is a separate endpoint; restore only lifts revocation.
     envelope: str | None = None
-    fund: bool = False
-    restore: bool = False
+    fund: StrictBool = False
+    restore: StrictBool = False
     note: str = ""
 
 
@@ -107,7 +125,16 @@ def _settings(request) -> dict:
     admin = request.auth.is_superuser
     for row in view["pools"]:
         row["manageable"] = pools.may_manage(providers, row["name"], request.auth.pk, admin=admin)
-    return {**view, "editable": admin, "admin": admin}
+    from django_ergo.conversation.models import PaidDispatchState
+
+    state = PaidDispatchState.objects.filter(pk=1).first()
+    return {
+        **view,
+        "editable": admin,
+        "admin": admin,
+        "paid_paused": bool(state and state.paused),
+        "enforcement_activated": bool(state and state.activated_at),
+    }
 
 
 @router.get("/pools")
@@ -115,6 +142,81 @@ def pools_settings(request):
     """The pools this user may see, with status, what is selectable now,
     their own grant (owners: the grants they issued), provider switches and
     the user's own choices (order, active pool, auto-rollover)."""
+    return _settings(request)
+
+
+def _funding_view(name: str):
+    from django_ergo.conversation.models import SpendEnvelope
+    from django_ergo.conversation.spend_guard import family_spent_and_reserved
+
+    providers = pools.fresh_providers(registry().providers)
+    config = providers.pools.get(name)
+    if config is None or config.legacy:
+        raise ValueError("No such configured pool")
+    pools.sync_authority(providers)
+    owner = pools.owner_ids(providers).get(config.owner)
+    envelope = SpendEnvelope.objects.filter(key=pools.config_envelope_key(name, owner)).first()
+    approval = envelope.funding.order_by("-pk").first() if envelope else None
+    spent, held = family_spent_and_reserved(envelope.pk) if envelope else (0, 0)
+    choices = []
+    for ref in pools.pool_refs(providers, config, metered=True):
+        provider, model = providers.find(ref)
+        choices.append(
+            {
+                "identity": pools.transport_identity(provider, model.name),
+                "label": f"{ref} · {provider.account or provider.api_key_env or 'SDK default account'}",
+            }
+        )
+    return {
+        "pool": name,
+        "owner": config.owner,
+        "pending": approval is None,
+        "envelope_id": str(envelope.pk) if envelope else None,
+        "configured_ceiling_usd": str(config.budget_usd) if config.budget_usd is not None else None,
+        "configured_expires_at": config.expires_at.isoformat() if config.expires_at else None,
+        "accounts": choices,
+        "spent_usd": str(spent),
+        "reserved_usd": str(held),
+        "approval": {
+            "id": approval.pk,
+            "budget_usd": str(approval.budget_usd),
+            "valid_from": approval.valid_from.isoformat(),
+            "expires_at": approval.expires_at.isoformat(),
+            "accounts": approval.accounts,
+            "actor_id": approval.actor_id,
+        }
+        if approval
+        else None,
+    }
+
+
+@router.get("/pools/{name}/funding")
+def funding_details(request, name: str):
+    _manager(request, name)
+    return _apply(_funding_view, name)
+
+
+@router.post("/pools/{name}/funding")
+def approve_funding(request, name: str, data: FundingIn):
+    _manager(request, name)
+    _apply(
+        pools.approve_funding,
+        registry().providers,
+        name,
+        by_id=request.auth.pk,
+        budget_usd=data.budget_usd,
+        expires_at=data.expires_at,
+        valid_from=data.valid_from,
+        accounts=data.accounts,
+        note=data.note,
+    )
+    return _settings(request)
+
+
+@router.post("/pools/paid-pause")
+def paid_pause(request, data: PaidPauseIn):
+    _admin(request)
+    _apply(pools.set_paid_pause, by_id=request.auth.pk, paused=data.paused)
     return _settings(request)
 
 

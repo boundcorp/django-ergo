@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { ChatPools, PoolGrant, PoolRefusal, PoolRow, PoolSettings } from '../api'
+import type {
+  ChatPools,
+  PoolEnvelopeCandidates,
+  PoolFunding,
+  PoolGrant,
+  PoolRefusal,
+  PoolRow,
+  PoolSettings,
+} from '../api'
 import { api } from '../api'
 import { fromLocalInput, toLocalInput } from '../localTime'
 
@@ -69,7 +77,7 @@ function GrantLine({ grant, onRevoke }: { grant: PoolGrant; onRevoke?: () => voi
       </span>
       <span className="text-muted">
         {new Date(grant.valid_from).toLocaleString()} to {new Date(grant.expires_at).toLocaleString()}
-        {grant.source === 'config' ? ' · from providers.yaml' : ''}
+        {grant.source === 'config' ? ' · explicit funding, limited by configuration' : ''}
       </span>
       <span className="font-mono text-muted">{grant.routes.join(', ')}</span>
       {onRevoke && (
@@ -191,10 +199,243 @@ function resets(data: PoolSettings, pool: PoolRow): string {
   return next ? `quota resets ${new Date(next * 1000).toLocaleString()}` : ''
 }
 
+/** Consent fields intentionally start empty; config ceilings are information only. */
+export function FundingForm({
+  details,
+  busy,
+  onApprove,
+}: {
+  details: PoolFunding
+  busy: boolean
+  onApprove: (body: { budget_usd: string; expires_at: string; accounts: string[]; note: string }) => Promise<void>
+}) {
+  const [amount, setAmount] = useState('')
+  const [expiry, setExpiry] = useState('')
+  const [accounts, setAccounts] = useState<string[]>([])
+  const [note, setNote] = useState('')
+  const [error, setError] = useState('')
+  return (
+    <form
+      className="flex flex-col gap-2 text-sm"
+      onSubmit={async e => {
+        e.preventDefault()
+        try {
+          setError('')
+          await onApprove({ budget_usd: amount.trim(), expires_at: fromLocalInput(expiry), accounts, note })
+          setAmount('')
+          setExpiry('')
+          setAccounts([])
+          setNote('')
+        } catch (e) {
+          setError(message(e))
+        }
+      }}
+    >
+      <p className="font-semibold">{details.pending ? 'Pending funding' : 'Funding approval'}</p>
+      <p className="text-xs text-muted">
+        Configured ceiling: {details.configured_ceiling_usd == null ? 'missing' : money(details.configured_ceiling_usd)}
+        . Family use: {money(details.spent_usd)} spent and {money(details.reserved_usd)} reserved, including unknown
+        outcomes.
+      </p>
+      {details.approval && (
+        <p className="text-xs">
+          Approved cumulative cap {money(details.approval.budget_usd)} until{' '}
+          {new Date(details.approval.expires_at).toLocaleString()}.
+        </p>
+      )}
+      <p className="text-xs text-muted">
+        Approve only the amount, expiry and accounts you authorize. Changing this approval keeps all prior use and
+        holds.
+      </p>
+      <div className="flex flex-wrap gap-2">
+        <label className="flex flex-col text-xs">
+          Approve cumulative USD cap
+          <input
+            aria-label="Approve cumulative USD cap"
+            className="rounded-control border border-stroke bg-transparent px-2 py-1"
+            type="number"
+            min="0.0001"
+            max="99999999.9999"
+            step="0.0001"
+            required
+            value={amount}
+            onChange={e => setAmount(e.target.value)}
+          />
+        </label>
+        <label className="flex flex-col text-xs">
+          Funding expiry
+          <input
+            aria-label="Funding expiry"
+            className="rounded-control border border-stroke bg-transparent px-2 py-1"
+            type="datetime-local"
+            required
+            value={expiry}
+            onChange={e => setExpiry(e.target.value)}
+          />
+        </label>
+      </div>
+      <fieldset disabled={busy} className="flex flex-col gap-1">
+        <legend className="text-xs font-semibold">Accounts and models to approve</legend>
+        {details.accounts.map(account => (
+          <label key={account.identity} className="text-xs flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={accounts.includes(account.identity)}
+              onChange={e =>
+                setAccounts(previous =>
+                  e.target.checked ? [...previous, account.identity] : previous.filter(a => a !== account.identity),
+                )
+              }
+            />
+            {account.label}
+          </label>
+        ))}
+      </fieldset>
+      <label className="text-xs">
+        Approval note{' '}
+        <input
+          aria-label="Approval note"
+          maxLength={200}
+          className="rounded-control border border-stroke bg-transparent px-2 py-1"
+          value={note}
+          onChange={e => setNote(e.target.value)}
+        />
+      </label>
+      <button
+        type="submit"
+        className="self-start rounded-control border border-stroke px-3 py-1"
+        disabled={busy || !accounts.length || !amount.trim() || !expiry}
+      >
+        Approve funding
+      </button>
+      {error && (
+        <p role="alert" className="text-xs text-danger">
+          {error}
+        </p>
+      )}
+    </form>
+  )
+}
+
+function FundingControls({
+  name,
+  admin,
+  onChanged,
+}: {
+  name: string
+  admin: boolean
+  onChanged: (data: PoolSettings) => void
+}) {
+  const [details, setDetails] = useState<PoolFunding | null>(null)
+  const [candidates, setCandidates] = useState<PoolEnvelopeCandidates | null>(null)
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [note, setNote] = useState('')
+  const load = useCallback(async () => {
+    try {
+      setDetails(await api.poolFunding(name))
+      if (admin) setCandidates(await api.poolEnvelopes(name))
+      setError('')
+    } catch (e) {
+      setError(message(e))
+    }
+  }, [name, admin])
+  useEffect(() => {
+    void load()
+  }, [load])
+  async function mutate(change: () => Promise<PoolSettings>) {
+    setBusy(true)
+    try {
+      onChanged(await change())
+      await load()
+      setNote('')
+    } catch (e) {
+      setError(message(e))
+      throw e
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <div className="rounded-control border border-stroke p-3 flex flex-col gap-3">
+      {details && (
+        <FundingForm details={details} busy={busy} onApprove={body => mutate(() => api.approveFunding(name, body))} />
+      )}
+      {admin && candidates && (
+        <div className="flex flex-col gap-2 text-xs">
+          <p className="font-semibold">Admin: reconcile funding history</p>
+          {candidates.problem && <p>{candidates.problem}</p>}
+          <p>
+            Continue preserves an existing family's cap and holds. Prepare separate family creates no spend approval.
+            Restore lifts a revocation and adds no funding.
+          </p>
+          <label>
+            Admin note{' '}
+            <input
+              aria-label="Admin funding note"
+              maxLength={200}
+              value={note}
+              onChange={e => setNote(e.target.value)}
+              className="rounded-control border border-stroke bg-transparent px-2 py-1"
+            />
+          </label>
+          {candidates.envelopes.map(envelope => (
+            <div key={envelope.id} className="flex flex-wrap items-center gap-2">
+              <span>
+                {envelope.pool}: {money(envelope.spent_usd)} spent, {money(envelope.reserved_usd)} held
+                {envelope.in_use ? ' · used by a current pool' : ''}
+              </span>
+              <button
+                type="button"
+                disabled={busy || !envelope.continuable || !!details?.envelope_id}
+                className="underline"
+                onClick={() => {
+                  void mutate(() => api.linkPoolEnvelope(name, { envelope: envelope.id, note })).catch(() => {})
+                }}
+              >
+                Continue existing family
+              </button>
+            </div>
+          ))}
+          <div className="flex flex-wrap gap-3">
+            <button
+              type="button"
+              disabled={busy}
+              className="underline"
+              onClick={() => {
+                void mutate(() => api.linkPoolEnvelope(name, { fund: true, note })).catch(() => {})
+              }}
+            >
+              {details?.envelope_id ? 'Approve account linkage (no funding)' : 'Prepare separate family'}
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              className="underline"
+              onClick={() => {
+                void mutate(() => api.linkPoolEnvelope(name, { restore: true, note })).catch(() => {})
+              }}
+            >
+              Restore revoked authority
+            </button>
+          </div>
+        </div>
+      )}
+      {error && (
+        <p role="alert" className="text-xs text-danger">
+          {error}
+        </p>
+      )}
+    </div>
+  )
+}
+
 /** The Routing page's Pools section: order, toggles, budgets, the rollover gate, provider switches. */
 export function PoolsSection() {
   const [data, setData] = useState<PoolSettings | null>(null)
   const [error, setError] = useState('')
+  const [adminPool, setAdminPool] = useState('')
+  const [adminTarget, setAdminTarget] = useState('')
   const load = useCallback(() => {
     api
       .pools()
@@ -246,6 +487,46 @@ export function PoolsSection() {
         <p role="alert" className="mt-2 text-sm text-danger">
           {error}
         </p>
+      )}
+      {(data.paid_paused || data.enforcement_activated) && (
+        <p className="mt-2 text-sm">
+          {data.paid_paused
+            ? 'Paid dispatch paused. Grants and unknown holds are retained.'
+            : 'Pool enforcement is active. Removing configuration does not restore legacy paid dispatch.'}
+        </p>
+      )}
+      {data.admin && (
+        <div className="surface-card mt-4 flex flex-col gap-2 p-4 text-sm">
+          <button
+            type="button"
+            className="self-start rounded-control border border-stroke px-3 py-1"
+            onClick={() => save(api.setPaidPause(!data.paid_paused))}
+          >
+            {data.paid_paused ? 'Resume paid dispatch' : 'Pause paid dispatch'}
+          </button>
+          <form
+            className="flex gap-2"
+            onSubmit={e => {
+              e.preventDefault()
+              setAdminTarget(adminPool.trim())
+            }}
+          >
+            <label className="text-xs">
+              Manage funding for pool{' '}
+              <input
+                aria-label="Admin pool name"
+                value={adminPool}
+                onChange={e => setAdminPool(e.target.value)}
+                className="rounded-control border border-stroke bg-transparent px-2 py-1"
+                required
+              />
+            </label>
+            <button type="submit" className="underline">
+              Open funding controls
+            </button>
+          </form>
+          {adminTarget && <FundingControls key={adminTarget} name={adminTarget} admin onChanged={setData} />}
+        </div>
       )}
       {!data.legacy && (
         <div className="surface-card mt-4 flex flex-col gap-2 p-4 text-sm">
@@ -345,6 +626,12 @@ export function PoolsSection() {
                   }
                 />
               </div>
+            )}
+            {pool.funding_pending && (
+              <p className="text-xs text-warning">Pending funding: configured budgets do not authorize spending.</p>
+            )}
+            {!data.legacy && pool.metered && pool.manageable && (
+              <FundingControls name={pool.name} admin={!!data.admin} onChanged={setData} />
             )}
             {!data.legacy && (
               <Grants
