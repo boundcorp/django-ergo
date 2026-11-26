@@ -84,9 +84,11 @@ def family_of(identity):
 
     The audited admin mapping decides. An unmapped identity that shares a
     credential source and account with a mapped one belongs to the same vendor
-    (so an endpoint or alias can't open a second cap for one account). Only an
-    identity with neither falls back to the wire type's native vendor, where it
-    is denied until an admin maps it.
+    (so an endpoint or alias can't open a second cap for one account). Failing
+    both, the vendor is only what the endpoint itself proves (see
+    ``_host_vendor``); anything else is unknown (``""``), which fails closed for
+    recurring sends and counts in every vendor's history gate. There is no
+    wire-type guess for an OpenAI-compatible endpoint.
     """
     account = json.loads(account_identity(identity))
     canonical = json.dumps(account, separators=(",", ":"))
@@ -99,7 +101,17 @@ def family_of(identity):
         parts = json.loads(other)
         if parts[2] == account[2] and parts[3] == account[3]:
             return family_id
-    return FAMILIES[account[0]]
+    return _host_vendor(account)
+
+
+def _host_vendor(account):
+    """The vendor an unmapped account provably bills through, else ``""``."""
+    from urllib.parse import urlsplit
+
+    if account[0] != "openai":
+        return FAMILIES[account[0]]  # native wires only speak to their own vendor
+    host = (urlsplit(account[4]).hostname or "").lower()
+    return VENDOR_HOSTS.get(host, "")
 
 
 def _validated_family(account, family):
