@@ -8,7 +8,8 @@
   renamed (or removed and re-added) pool continues its envelope instead of
   being funded again by config sync.
 - ``linked_by``/``linked_at``/``link_note``: an admin's explicit link (or
-  approval of new accounts, or lifting a person's revocation).
+  approval of new accounts); ``restored_at``: an admin's explicit lift of a
+  person's revocation.
 - ``ProviderToggle.accounts``: a switched-off provider's account identity, so
   renaming the provider in providers.yaml doesn't switch spend back on.
 
@@ -94,6 +95,11 @@ class Migration(migrations.Migration):
             model_name="spendenvelope",
             name="link_note",
             field=models.CharField(blank=True, default="", max_length=200),
+        ),
+        migrations.AddField(
+            model_name="spendenvelope",
+            name="restored_at",
+            field=models.DateTimeField(blank=True, null=True),
         ),
         migrations.AddField(
             model_name="providertoggle",

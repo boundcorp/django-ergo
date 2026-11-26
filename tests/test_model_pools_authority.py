@@ -716,3 +716,46 @@ def test_runtime_switches_follow_a_rename():
     assert current.envelope_id == own.envelope_id
     with pytest.raises(spend_guard.SpendDenied, match="doesn't cover"):
         _hold(current, lee, "0.01", moved, ref="oai/gpt-6.1-sol")
+
+
+@pytest.mark.django_db
+def test_an_admins_link_or_approval_never_lifts_a_persons_revocation():
+    """lee revokes paid (a kill switch); paid merges with claude-api into
+    paid-api, and an admin continues paid's envelope and approves the
+    accounts: still revoked. Only restore=True lifts it."""
+    lee = User.objects.create(username="lee")
+    two = (
+        POOLS.replace("routes: [openai, anthropic]", "routes: [openai]")
+        .replace(
+            "tiers: {medium: [openai/gpt-6.1-sol, anthropic/claude-opus-5-5]}",
+            "tiers: {medium: [openai/gpt-6.1-sol]}",
+        )
+        .replace(
+            "private_pools:",
+            "  - name: claude-api\n"
+            "    owner: lee\n"
+            "    routes: [anthropic]\n"
+            "    budget_usd: 5\n"
+            "    expires: 2099-12-31\n"
+            "private_pools:",
+        )
+    )
+    providers = parse_providers(two)
+    paid = _view(providers, lee).grant
+    _view(providers, lee, "claude-api")
+    pools.revoke_grant(providers, paid.pk, by_id=lee.pk, reason="kill switch")
+    merged = parse_providers(RENAMED)
+    admin = _admin()
+    pools.link_config_envelope(
+        merged, "paid-api", by_id=admin.pk, admin=True, envelope_id=paid.envelope_id
+    )
+    assert _view(merged, lee, "paid-api").grant is None
+    pools.link_config_envelope(
+        merged, "paid-api", by_id=admin.pk, admin=True, fund=True
+    )
+    assert _view(merged, lee, "paid-api").grant is None
+    pools.link_config_envelope(
+        merged, "paid-api", by_id=admin.pk, admin=True, restore=True
+    )
+    restored = _view(merged, lee, "paid-api").grant
+    assert restored.envelope_id == paid.envelope_id

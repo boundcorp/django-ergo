@@ -638,6 +638,7 @@ def reserve(  # noqa: PLR0913, PLR0912, C901
     current: CurrentAuthority | None = None,
     output_tokens: int | None = None,
     launch: bool = False,
+    price: ExactPrice | None = None,
 ) -> object:
     """Reserve ``amount`` against the envelope of revision ``grant_id`` and
     record the attempt; SpendDenied (nothing recorded) when it can't. Under
@@ -682,6 +683,12 @@ def reserve(  # noqa: PLR0913, PLR0912, C901
                 problem = "the launch amount is over the grant's per-launch limit"
             elif provider_switched_off(provider):
                 problem = f"provider {provider!r} is switched off"
+            elif (
+                price is not None
+                and terms.prices is not None
+                and terms.prices.get(ref) != price
+            ):
+                problem = "its price changed while the request was being bounded"
             elif terms.cap_envelope is not None and (
                 envelope_lock_key(terms.cap_envelope) not in locks
                 or terms.cap_usd is None
@@ -857,6 +864,7 @@ class MeteredGuard:
             fields=fields,
             current=self.current,
             output_tokens=bound.output_tokens,
+            price=price,
         )
         try:
             response = await send()

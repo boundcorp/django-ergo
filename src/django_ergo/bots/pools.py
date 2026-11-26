@@ -596,10 +596,13 @@ def _settle(envelope, providers: Providers, owners: dict, now):
             newest is not None
             and newest.revoked_at is not None
             and not newest.revoked_reason.startswith(SYNC_REVOKED)
-            and (envelope.linked_at is None or envelope.linked_at < newest.revoked_at)
+            and (
+                envelope.restored_at is None or envelope.restored_at < newest.revoked_at
+            )
         ):
-            # A person revoked it: no config edit (even a narrowing one)
-            # issues it again; only an admin's link_config_envelope does.
+            # A person revoked it: no config edit (even a narrowing one) and
+            # no other link issues it again; only an admin's explicit
+            # link_config_envelope(restore=True) does.
             return None, "the spend grant was revoked (an admin can restore it)"
     revision = SpendGrant.objects.create(
         envelope=envelope,
@@ -845,7 +848,7 @@ def link_candidates(providers: Providers, pool: str) -> dict:
     }
 
 
-def link_config_envelope(  # noqa: PLR0913, PLR0915, C901
+def link_config_envelope(  # noqa: PLR0912, PLR0913, PLR0915, C901
     providers: Providers,
     pool: str,
     *,
@@ -853,15 +856,16 @@ def link_config_envelope(  # noqa: PLR0913, PLR0915, C901
     admin: bool,
     envelope_id=None,
     fund: bool = False,
+    restore: bool = False,
     note: str = "",
 ):
     """An admin's explicit decision for a config pool whose metered accounts
     already have spend authority (:func:`config_link_problem`): continue
     ``envelope_id`` (its cumulative ledger and any revocation carry over), or
     ``fund`` a new envelope (new money, so only by an admin). On a pool that
-    has its envelope, ``fund`` approves the accounts it now spends on and
-    lifts a person's revocation of it (its ledger carries on). Returns the
-    envelope. Runs the ORM."""
+    has its envelope, ``fund`` approves the accounts it now spends on, and
+    ``restore`` lifts a person's revocation of it (separate decisions; its
+    ledger carries on either way). Returns the envelope. Runs the ORM."""
     from django.db import transaction
 
     from django_ergo.conversation.models import SpendEnvelope
@@ -871,8 +875,8 @@ def link_config_envelope(  # noqa: PLR0913, PLR0915, C901
     if not admin or not by_id:
         msg = "Only an admin can link a pool's spend authority"
         raise PermissionError(msg)
-    if bool(envelope_id) == bool(fund):
-        msg = "Give either the envelope to continue or fund=true"
+    if envelope_id and (fund or restore):
+        msg = "Continue an envelope, or fund/restore one, not both"
         raise ValueError(msg)
     providers = fresh_providers(providers)
     config = providers.pools.get(pool)
@@ -889,22 +893,32 @@ def link_config_envelope(  # noqa: PLR0913, PLR0915, C901
     with transaction.atomic():
         lock(CONFIG_ENVELOPES_LOCK)
         existing = SpendEnvelope.objects.filter(key=key).first()
-        if existing is not None and not fund:
+        if existing is not None and not (fund or restore):
             msg = f"Pool {pool!r} already has its spend authority"
             raise ValueError(msg)
+        if existing is None and restore:
+            msg = f"Pool {pool!r} has no spend authority to restore"
+            raise ValueError(msg)
+        if existing is None and not (fund or envelope_id):
+            msg = "Give the envelope to continue, or fund=true"
+            raise ValueError(msg)
         if existing is not None:
-            # Approve: the pool's current accounts (new ones it overlaps)
-            # and lift a person's revocation of it. Its ledger carries on.
             lock(envelope_lock_key(existing.pk))
-            existing.accounts = sorted(
-                set(existing.accounts or ()) | set(pool_accounts(providers, config))
-            )
+            fields = ["linked_by", "linked_at", "link_note"]
+            if fund:  # approve the accounts it spends on now
+                existing.accounts = sorted(
+                    set(existing.accounts or ()) | set(pool_accounts(providers, config))
+                )
+                fields.append("accounts")
+            if restore:  # lift a person's revocation
+                existing.restored_at = now
+                fields.append("restored_at")
             existing.linked_by_id = by_id
             existing.linked_at = now
-            existing.link_note = (note or "approved by an admin")[:200]
-            existing.save(
-                update_fields=["accounts", "linked_by", "linked_at", "link_note"]
-            )
+            existing.link_note = (
+                note or ("restored" if restore else "approved") + " by an admin"
+            )[:200]
+            existing.save(update_fields=fields)
             envelope = existing
         elif fund:
             envelope = SpendEnvelope.objects.create(
@@ -2745,7 +2759,9 @@ def issued_grants(view: PoolView) -> list[dict]:
     if not view.is_owner:
         return []
     family = Q(pool=view.name) | Q(
-        envelope__parent__pool=view.name, envelope__parent__source=CONFIG_SOURCE
+        envelope__parent__pool=view.name,
+        envelope__parent__source=CONFIG_SOURCE,
+        envelope__parent__owner_id=view.owner_id,
     )
     rows = SpendGrant.objects.filter(
         family, revoked_at__isnull=True, superseded_at__isnull=True

@@ -1410,6 +1410,9 @@ class SpendEnvelope(models.Model):
     )
     linked_at = models.DateTimeField(null=True, blank=True)
     link_note = models.CharField(max_length=200, blank=True, default="")
+    # An admin's explicit lift of a person's revocation (only that: a link
+    # or an approval of accounts never lifts one).
+    restored_at = models.DateTimeField(null=True, blank=True)
 
     def __str__(self):
         return self.key

@@ -145,8 +145,8 @@ cumulative ledger and the lock, and every revision of it shares both.
   counts, so a config change never replenishes money. If a person revokes
   the owner's config revision (a kill switch), no config edit issues it
   again, not even a narrowing one; only an admin's
-  `pools.link_config_envelope(..., fund=True)` restores it, on the same
-  envelope.
+  `pools.link_config_envelope(..., restore=True)` restores it, on the same
+  envelope (a continuation or an approval of accounts never does).
 - **The envelope outlives the pool's name.** Each config envelope records
   the metered accounts it has funded (provider names, `api_key_env` names,
   `account` names; the list only grows). A pool with no envelope yet whose

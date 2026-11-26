@@ -682,7 +682,7 @@ def test_r12_queued_work_on_a_paid_pool_never_widens(monkeypatch):
     # envelope); the queued job doesn't pick it up.
     admin = User.objects.create(username="admin", is_superuser=True)
     pools.link_config_envelope(
-        bot.providers, "paid", by_id=admin.pk, admin=True, fund=True
+        bot.providers, "paid", by_id=admin.pk, admin=True, restore=True
     )
     with pools.policy_scope(policy), pytest.raises(pools.PoolRefusal):
         pools.select_route(bot, session, ref="auto/medium")

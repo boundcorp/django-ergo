@@ -311,7 +311,7 @@ def test_rr_a_person_revoking_config_terms_isnt_undone_by_sync():
     assert _own(parse_providers(lower), lee).grant is None
     admin = User.objects.create(username="admin", is_superuser=True)
     pools.link_config_envelope(
-        parse_providers(later), "paid", by_id=admin.pk, admin=True, fund=True
+        parse_providers(later), "paid", by_id=admin.pk, admin=True, restore=True
     )
     renewed = _own(parse_providers(later), lee).grant
     assert renewed.envelope_id == own.envelope_id
