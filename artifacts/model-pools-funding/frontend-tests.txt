@@ -1,0 +1,584 @@
+bun test v1.4.2 (744846f84)
+
+src/threadToolTranscript.test.tsx:
+(pass) messaging tool transcript > ergo_thread_send keeps model guidance in tool details [20.91ms]
+(pass) messaging tool transcript > ergo_message_up keeps model guidance in tool details [5.72ms]
+(pass) messaging tool transcript > ergo_thread_forward keeps model guidance in tool details [1.16ms]
+(pass) messaging tool transcript > ergo_thread_resolve keeps model guidance in tool details [0.96ms]
+(pass) messaging tool transcript > ergo_thread_archive keeps model guidance in tool details [0.86ms]
+(pass) messaging tool transcript > ergo_thread_stop keeps model guidance in tool details [0.69ms]
+(pass) messaging tool transcript > ergo_thread_list keeps model guidance in tool details [0.71ms]
+(pass) messaging tool transcript > uses live message state rather than a stale queue position [6.06ms]
+(pass) messaging tool transcript > clamps message and note previews with an expansion control [1.59ms]
+(pass) messaging tool transcript > ergo_thread_send shows its target and delivery [1.27ms]
+(pass) messaging tool transcript > ergo_message_up shows its target and delivery [1.13ms]
+(pass) messaging tool transcript > ergo_thread_forward shows its target and delivery [1.03ms]
+(pass) messaging tool transcript > distinguishes new threads and shows forward notes and resolution summaries [3.04ms]
+(pass) messaging tool transcript > links old send and forward results by thread_id without live cards [1.86ms]
+(pass) messaging tool transcript > lists each chat with its own link and status, including old rows [2.52ms]
+(pass) messaging tool transcript > ergo_thread_resolve supports old text and target id [1.03ms]
+(pass) messaging tool transcript > ergo_thread_archive supports old text and target id [0.90ms]
+(pass) messaging tool transcript > self-resolution links the current session and new metadata takes precedence [1.80ms]
+(pass) messaging tool transcript > stop shows the actual outcome and cancelled count [0.73ms]
+(pass) messaging tool transcript > failure and running states are not presented as success or a fabricated link [1.33ms]
+(pass) messaging tool transcript > a failed call names its target when the refusal carries it, and shortens a bare id when not [2.73ms]
+(pass) messaging tool transcript > bot listing remains readable [1.34ms]
+(pass) tool result presentation > keeps an ordinary tool collapsed even when its JSON result resembles a worker [0.79ms]
+(pass) tool result presentation > ergo_agent_start renders its returned worker as a specialized card [1.20ms]
+(pass) tool result presentation > orca_start_worker renders its returned worker as a specialized card [0.68ms]
+(pass) tool result presentation > ergo_worker_start renders its returned worker as a specialized card [0.46ms]
+
+src/toolCard.test.tsx:
+(pass) ToolCard > starts folded with a one-line summary [0.48ms]
+(pass) ToolCard > a failed call is folded too, with its status in the header [0.37ms]
+
+src/eventSummary.test.ts:
+(pass) event summaries > leaves short events whole [0.09ms]
+(pass) event summaries > shows the first paragraph of a worker result summary [0.83ms]
+(pass) event summaries > reads the summary from a result that was cut short [0.12ms]
+(pass) event summaries > clips a plain text result [0.48ms]
+(pass) event summaries > clips other long events [0.05ms]
+
+src/messageLink.test.ts:
+(pass) message links > builds a link to one message [0.05ms]
+(pass) message links > reads the line back from the hash [0.08ms]
+
+src/chatSend.test.ts:
+(pass) prepareChatSend > sends a suggestion while preserving a populated composer verbatim through a response refresh [0.18ms]
+(pass) prepareChatSend > sends a suggestion from an empty composer without creating a draft [0.04ms]
+(pass) prepareChatSend > a normal composer send still clears the composer and sends its attachments [0.61ms]
+
+src/pageBridge.test.ts:
+(pass) message validation > ignores messages from any window but the page iframe [0.56ms]
+(pass) message validation > ignores messages while the iframe does not exist [0.11ms]
+(pass) message validation > ignores data that is not an ergo message [0.21ms]
+(pass) message validation > ergoMessage keeps the fields of a well-formed message [0.03ms]
+(pass) page actions > calls the pin bot with the pin page and session, and forwards the whole result [0.74ms]
+(pass) page actions > an ergo.ask result toasts with a chat link [0.18ms]
+(pass) page actions > the page cannot choose the bot, page or session [0.11ms]
+(pass) page actions > an API error goes to the page and a toast [0.26ms]
+(pass) page actions > rejects arguments that are not an object [0.10ms]
+(pass) page actions > approval: Yes repeats the call with the token, which the page never sees [0.23ms]
+(pass) page actions > approval: No replies Cancelled and makes no second call [0.15ms]
+(pass) page actions > a second approval request after approving is an error, not another dialog [0.15ms]
+(pass) page actions > opens only http and https URLs from a result [0.63ms]
+(pass) page actions > reload:true re-renders at once, without waiting for the debounce [0.40ms]
+(pass) live changes > tables in listening go to the page, one message each, with no re-render [0.41ms]
+(pass) live changes > other tables re-render once, 1 s after the last change [0.23ms]
+(pass) live changes > a baseline event with nothing changed does nothing [0.16ms]
+(pass) live changes > is deferred while a field has focus, and runs 1 s after it blurs [0.28ms]
+(pass) live changes > blurring with nothing pending does not re-render [0.13ms]
+(pass) live changes > ergo:reload from the page re-renders at once [0.18ms]
+(pass) scroll > restores the saved position after the reloaded page is ready [0.24ms]
+(pass) scroll > reloads without restoring when the page does not answer in time [0.13ms]
+(pass) scroll > an unsolicited scroll message is ignored [0.07ms]
+(pass) scroll > a reload asked for twice while waiting reloads once [0.10ms]
+(pass) scroll > a reload from outside drops pending work and any saved position [0.12ms]
+(pass) stream tables > reports the tables to stream when ready changes them [0.12ms]
+(pass) stream tables > builds the events url [0.07ms]
+(pass) stream tables > parses stream data [0.04ms]
+
+src/voiceAudioDiagnostics.test.ts:
+(pass) route observations exclude hardware identifiers and do not request capture or select output [9.96ms]
+
+src/topbar.test.ts:
+(pass) topbarLocation > home is just the workspace, with no repeated crumb [0.31ms]
+(pass) topbarLocation > a chat names its bot and parent thread [0.25ms]
+(pass) topbarLocation > voice page keeps an explicit originating-thread breadcrumb [0.06ms]
+(pass) topbarLocation > bot pages and account pages [0.11ms]
+
+src/voiceAudioOutput.test.ts:
+(pass) unknown/no media APIs cannot expose an output selector or request capture [0.82ms]
+(pass) method presence is not support when the silent default probe rejects [0.39ms]
+(pass) a working silent sink probe exposes only output devices and never captures [1.00ms]
+(pass) setSinkId can work without enumerateDevices or selectAudioOutput [0.21ms]
+(pass) a picker without a sink API does not claim it can route playback [0.28ms]
+(pass) applied state changes only after the browser reports a completed switch [0.43ms]
+(pass) a resolved but ineffective setSinkId does not display the requested device [0.32ms]
+(pass) a partially rejected multi-track switch restores the last applied route [0.85ms]
+(pass) failed restoration reports mixed output as unknown instead of a selected wish [0.66ms]
+(pass) the output picker runs in the user gesture and applies its returned device id [0.54ms]
+(pass) picker denial leaves the applied route unchanged and explains OS control [0.35ms]
+(pass) new attachments inherit the applied output without touching microphone capture [0.36ms]
+(pass) devicechange/Bluetooth loss moves all playback elements to system default [0.83ms]
+(pass) a failed default fallback never claims that Bluetooth loss was recovered [0.53ms]
+(pass) device loss queued during a pending selection wins over its late completion [0.71ms]
+(pass) rapid selections and an attachment cannot finish in stale requested order [0.49ms]
+(pass) reconnect rechecks availability and reapplies the browser output to existing tracks [0.24ms]
+(pass) standby clears old tracks; a new room/resume inherits the confirmed output [0.30ms]
+(pass) an unsubscribed attachment pending behind a switch is never reattached [0.35ms]
+(pass) enumeration denial reports unknown availability and actual mixed output on reconnect [0.40ms]
+(pass) teardown removes listeners and prevents an outstanding selection from publishing [0.45ms]
+(pass) a fresh panel starts at system default and does not reuse a prior room selection [0.27ms]
+
+src/toolFormat.test.ts:
+(pass) mcp tool names split into server and tool; other names are left alone [4.48ms]
+(pass) short strings are inline; paths and code are monospace, prose is not [0.56ms]
+(pass) long and multiline strings are marked for clamping [0.20ms]
+(pass) scalars, short arrays and nested values [0.32ms]
+(pass) arrays that are too long, hold long strings or hold objects are not chips [0.39ms]
+(pass) a JSON string input (openai_api, codex_cli) is parsed like an object [0.14ms]
+(pass) invalid JSON, plain text and non-object input fall back to raw text [0.21ms]
+(pass) an empty object has no entries [0.07ms]
+(pass) rawArgs keeps every key and value; broken JSON is returned untouched [0.21ms]
+(pass) args preview is one line, truncated, and handles every shape [0.36ms]
+(pass) result summary counts lines and size and previews the first line [0.29ms]
+(pass) result text joins text parts and keeps other parts as JSON [0.20ms]
+
+src/contextPlacement.test.tsx:
+(pass) context placement > uses inclusive boundaries, ignores non-assistants and handles empty or missing ranges [0.75ms]
+(pass) context placement > retains first matching input-call priority, not start-order priority [0.39ms]
+(pass) context placement > does not place a context after merely the last assistant owned by an overlapping call [44.87ms]
+(pass) context placement > moves an unfinished call to the latest loaded assistant, including tool-use messages [0.26ms]
+(pass) context placement > renders the context button only under the final loaded assistant, before later user messages [5.40ms]
+(pass) context placement > matches the original algorithm across deterministic overlapping and unfinished ranges [13.46ms]
+(pass) context placement > bounds sequence reads for many fully overlapping calls without timing assertions [3.51ms]
+
+src/localTime.test.ts:
+(pass) datetime-local conversion > round-trips an instant without shifting it by the UTC offset [14.65ms]
+(pass) datetime-local conversion > shows the instant in local time, not the UTC wall clock [0.07ms]
+(pass) datetime-local conversion > empty and invalid values stay empty [0.03ms]
+
+src/quickReplyHold.test.ts:
+(pass) QuickReplyHoldController > a short pointer click does not send and clears its fill [0.40ms]
+(pass) QuickReplyHoldController > a full pointer hold sends exactly once [0.10ms]
+(pass) QuickReplyHoldController > pointer movement beyond the tolerance and leaving cancel the hold [0.10ms]
+(pass) QuickReplyHoldController > pointer cancellation clears the fill without sending [0.04ms]
+(pass) QuickReplyHoldController > keyboard needs the same hold duration and ignores repeat starts [0.11ms]
+(pass) QuickReplyHoldController > disabled or pending chat state prevents a hold [0.07ms]
+(pass) QuickReplyHoldController > does not double-fire until the enclosing chat resets it [0.13ms]
+
+src/chatLayout.test.ts:
+(pass) statusSummary > counts waiting threads and a running worker [0.60ms]
+(pass) statusSummary > uses the singular worker label and includes pins [0.13ms]
+(pass) statusSummary > shows an unfinished todo list, not a finished one [0.14ms]
+(pass) statusSummary > shows when a pending self-wake is due [5.08ms]
+(pass) statusSummary > is empty when nothing is pending [0.17ms]
+(pass) suggestionsFromMessages > reads suggestions from the latest send_reply call [0.39ms]
+(pass) suggestionsFromMessages > ignores other tool calls [0.07ms]
+(pass) lastTurn > skips side calls recorded after the turn [0.13ms]
+(pass) lastTurn > is undefined without a turn [0.06ms]
+
+src/voiceAudioInput.test.ts:
+(pass) native mute/end, SDK mute/upstream and unpublish replace optimistic enabled state [27.14ms]
+(pass) reconnect re-observes current capture; devicechange never restarts or unmutes [3.41ms]
+(pass) only explicit recovery restarts existing SDK track and errors are sanitized [2.49ms]
+(pass) explicit recovery restores an SDK-muted track without overriding intentional mute [2.04ms]
+(pass) ending recovery during SDK unmute stops the returned track [2.32ms]
+(pass) unpublication during recovery restart stops orphaned capture [2.51ms]
+(pass) unpublication during recovery unmute stops orphaned capture [2.55ms]
+(pass) disposal removes room/native/device listeners and ignores late recovery failure [2.35ms]
+(pass) explicit local probe consumes only existing-track synthetic PCM and closes without output or upload [3.28ms]
+(pass) live/enabled track does not imply nonzero input and unavailable analyser is explicit [2.09ms]
+(pass) same-participant recovery after denied initial capture requires explicit action [2.60ms]
+(pass) bridge evidence requires stage IDs and never upgrades local publication or provider-start to receipt [1.94ms]
+(pass) silent existing-track PCM reports only no nonzero observed and releases analyser resources [2.05ms]
+(pass) late existing-track recovery completion stops capture after observer disposal [1.94ms]
+(pass) late SDK recovery publication is stopped after disposal and missing track is never published evidence [1.48ms]
+
+src/chatChrome.test.tsx:
+(pass) an exited question is actionable even in the collapsed worker disclosure [1.02ms]
+(pass) MobileSessionBar > renders the truncated title and live counts with aria-expanded [0.76ms]
+(pass) SuggestionChips > renders each suggestion as a focusable hold-to-send button [0.57ms]
+(pass) PinnedDashboard > shows the selected dashboard instead of the transcript panel [0.81ms]
+(pass) structured message attribution > shows real author, forwarder, origin, original time, note and shared file separately [6.18ms]
+(pass) structured message attribution > identifies bot message and links its origin [2.03ms]
+(pass) structured message attribution > identifies bot report and links its origin [1.44ms]
+(pass) structured message attribution > identifies bot reply and links its origin [1.35ms]
+(pass) structured message attribution > separates GitHub events from Lee’s messages and keeps event bodies and attachments [3.84ms]
+(pass) structured message attribution > collapses a long worker result to its summary with the full text behind a disclosure [6.41ms]
+(pass) structured message attribution > recognizes event identity independently of its user role: {"author":{"kind":"system","ref":"github","display_name":"GitHub"}} [1.28ms]
+(pass) structured message attribution > recognizes event identity independently of its user role: {"provenance":{"kind":"event"}} [1.08ms]
+(pass) structured message attribution > recognizes event identity independently of its user role: {"author":{"kind":"django_user","ref":"lee","display_name":"Lee"},"provenance":{"kind":"event"}} [0.99ms]
+(pass) structured message attribution > keeps real Telegram messages attributed to the human, not an event [1.29ms]
+(pass) structured message attribution > keeps ordinary and legacy messages unchanged [1.78ms]
+(pass) structured message attribution > shows a legacy cross-bot report as inbound rather than the session owner [0.90ms]
+(pass) ThreadOptions > keeps the picker out of the page until opened [0.31ms]
+(pass) ThreadOptions > shows the picker in a labelled group when open [0.16ms]
+(pass) ModelLink > describes the model as a button [0.17ms]
+(pass) modelLabel > names the bot default when the chat has no model picked [0.11ms]
+(pass) modelLabel > uses the picked model label, or the raw id when it is not listed [0.03ms]
+(pass) EffortSlider > shows medium as the default when the chat has none picked [0.32ms]
+(pass) EffortSlider > places a picked effort on its step [0.19ms]
+
+src/components/UsageSparkline.test.tsx:
+(pass) UsageSparkline > labels rolling hours, newest last [54.06ms]
+(pass) UsageSparkline > labels Orca-derived agent tokens as estimates and drops the unknown wording [18.03ms]
+(pass) UsageSparkline > does not present an empty snapshot as zero agent usage [5.46ms]
+(pass) UsageSparkline > stacks thread and agent tokens, scaled to the busiest hour [8.59ms]
+
+src/components/RealtimeVoice.test.tsx:
+(pass) page loads exact thread identity and context without starting a call or requesting a token [46.09ms]
+(pass) restricted page is honest and cannot start a microphone [14.79ms]
+(pass) text assistant mode is selectable but cannot start without separate media consent [38.15ms]
+(pass) selected text mode is fixed for the created call with no native fallback [30.55ms]
+(pass) unsupported delegation reasons and closing-boundary warnings are visible without opening details [15.56ms]
+(pass) mismatched selected thread cannot start a call [14.16ms]
+(pass) saved room reconnect requires a user gesture and explicit end removes storage [25.52ms]
+(pass) route/back/page unmount preserves the logical call and blocks implicit cross-thread replacement [71.04ms]
+(pass) topbar dropdown and mobile options enter the dedicated page, never the composer [48.53ms]
+(pass) mobile options sheet navigates to voice without starting capture [33.96ms]
+(pass) standby page never resumes or requests a token until Resume [17.03ms]
+(pass) pending standby requested does not connect or resume [11.57ms]
+(pass) pending standby closing does not connect or resume [10.92ms]
+(pass) standby preserves boundary uncertainty and explicit end reports the unconfirmed boundary [14.15ms]
+(pass) resume is single flight and a refused resume remains in standby [13.43ms]
+(pass) observed SDK states stay separate from queued work and absent SDK observations remain unknown [10.74ms]
+(pass) SDK labels without an observation timestamp cannot claim speaking or thinking [8.08ms]
+(pass) disconnected transport cannot present old SDK observations as current activity [8.26ms]
+(pass) partial and final update the same bubble; manual scroll stays put until jump to latest [5.22ms]
+(pass) distinct consecutive replies in the same claim remain separate without playback warnings [2.69ms]
+(pass) replayed final segment stays one bubble without changing a distinct reply [3.13ms]
+(pass) legacy events with unknown boundaries stay separate [2.69ms]
+(pass) legacy event delivery uncertainty remains in Diagnostics [7.88ms]
+(pass) active page polling progressively replaces a draft without opening a transport [1725.57ms]
+(pass) normal approval-waiting child work stays observed after End and navigation without reopening voice [882.21ms]
+(pass) a single durable card shows the stage and transcript without claiming playback [5.25ms]
+(pass) assistant history claims without delegation records remain unverified ({}) [3.74ms]
+(pass) assistant history claims without delegation records remain unverified ({"delegations":[]}) [2.76ms]
+(pass) only an answered durable delegation exposes its result as background evidence [2.80ms]
+(pass) a delegation with status failed and an error is not result evidence [2.83ms]
+(pass) a delegation with status error and an error is not result evidence [2.93ms]
+(pass) a delegation with status answered and an error is not result evidence [2.71ms]
+(pass) unsupported/unknown browser APIs show OS guidance instead of a cosmetic output toggle [21.86ms]
+(pass) the real selector shows the applied device and preserves it after permission rejection [29.37ms]
+(pass) a denied capability probe hides the selector and remains phone-controlled [15.57ms]
+(pass) device loss updates outputs and navigation keeps the app-owned routing listeners [37.41ms]
+(pass) mocked room events reapply outputs through reconnect and new-room standby resume without capture [51.36ms]
+(pass) assistant audio plays immediately even when output routing never settles, and Enable sound stays until it plays [21.42ms]
+(pass) blocked playback keeps Enable sound, reports once, and Enable sound unlocks inside the click [19.28ms]
+(pass) a new final assistant turn without playback shows an alert and reports turn_unplayed once [1724.12ms]
+(pass) rising inbound audio energy is reported once and explains volume when playback is confirmed [3425.30ms]
+(pass) local microphone ended event clears enabled UI and reconnect observes the current live track [25.92ms]
+(pass) permission failure keeps current call and explicit recovery uses same participant without a token or telemetry [16.79ms]
+(pass) successful explicit Unmute clears a prior capture failure only after live publication returns [20.33ms]
+(pass) pending microphone recovery disables mute controls so intentional mute cannot race restart [17.00ms]
+(pass) pending intentional mute blocks duplicate microphone actions through reconnect without recapture [16.75ms]
+(pass) late Unmute capture stops after end without reviving the call [18.97ms]
+(pass) late Unmute capture stops after disconnect without reviving the call [17.60ms]
+(pass) disconnect reports the SDK reason and visibility against its connection even after End returns [19.87ms]
+(pass) stale room disconnect cannot report into a newer connection [21.39ms]
+(pass) browser lifecycle observations reserve the fortieth report for disconnect and require a live room [16.80ms]
+
+src/components/MarkdownAttachment.test.tsx:
+(pass) Markdown attachments > recognizes filename and MIME but leaves missing and media attachments unchanged [2.73ms]
+(pass) Markdown attachments > fetches only after opening and copies exact source [17.10ms]
+(pass) Markdown attachments > keeps download on fetch and clipboard failures [12.72ms]
+(pass) Markdown attachments > rejects oversized streams and leaves the original download available [8.01ms]
+(pass) Markdown attachments > aborts a delayed oversized response as soon as headers arrive [7.87ms]
+(pass) Markdown attachments > does not replace reopened content with a late response [19.92ms]
+
+src/components/AttachmentView.test.tsx:
+(pass) audio attachments > are recognised by kind or media type [0.09ms]
+(pass) audio attachments > render an inline player with a link to the file [0.47ms]
+(pass) audio attachments > without a stored file stay a chip [0.19ms]
+
+src/components/DebugShortcut.test.tsx:
+(pass) debug shortcut > gets an authorized link, preserves the draft, and consumes state across history navigation [20.82ms]
+(pass) debug shortcut > does not show another account’s devbox draft on a shared browser [16.45ms]
+(pass) debug shortcut > shows request errors and allows retry without navigating [12.40ms]
+(pass) debug shortcut > rejects invalid server links and malformed navigation state [9.65ms]
+(pass) debug shortcut > each new navigation can add its link without replacing an existing draft [11.42ms]
+
+src/components/UsageStatus.test.tsx:
+(pass) usage helpers > pace is the share of the window already gone [0.31ms]
+(pass) usage helpers > short tags and countdowns [0.26ms]
+(pass) usage helpers > tone follows the routing limit and the tightest window has least headroom [0.48ms]
+(pass) UsageTrigger > summarizes the tightest subscription window [1.31ms]
+(pass) UsageTrigger > reports when no subscription usage is available [0.24ms]
+(pass) UsagePanel > hides configured windows in account and route data while keeping weekly and other accounts [5.20ms]
+(pass) UsagePanel > shows compact, accessible Claude windows without redundant explanations [1.14ms]
+(pass) UsagePanel > includes unmapped Grok and future Google accounts and deduplicates mapped routes [1.49ms]
+(pass) UsagePanel > distinguishes missing, reset, stale and failed usage from zero [1.18ms]
+(pass) UsagePanel > reports a failed source sync without treating prior data as current [0.93ms]
+
+src/components/IllustrateDialog.test.tsx:
+(pass) IllustrateDialog > loads suggestions, toggles checkboxes, and caps selections [18.60ms]
+(pass) IllustrateDialog > submits a custom-only request [9.26ms]
+(pass) IllustrateDialog > submits selected suggestions together with a custom request [9.97ms]
+(pass) IllustrateDialog > disables the opener and reports a failed suggestion fetch [5.74ms]
+(pass) IllustrateDialog > disables controls while generation is pending and recovers from failure [9.11ms]
+(pass) IllustrateDialog > shows queued job progress and cancels the durable generation [9.76ms]
+
+src/components/ShellControls.test.tsx:
+(pass) AccountMenu > moves every former sidebar destination into the account menu [1.09ms]
+(pass) AccountMenu > uses menu keyboard order for arrows, Home, and End [0.07ms]
+(pass) WorkerStatus > distinguishes running and queued work and only shows reported progress [0.54ms]
+(pass) WorkerStatus > keeps inactive, loading, and unavailable status truthful [0.28ms]
+(pass) does not invent a subscription capacity summary without a capacity source [0.48ms]
+
+src/components/Pins.test.tsx:
+(pass) open pins and new chat messages > pages and docs reload with the chat [0.04ms]
+(pass) open pins and new chat messages > audio and video keep playing [0.04ms]
+
+src/components/TodoList.test.tsx:
+(pass) TodoList > lists each item with its status and the progress [0.38ms]
+(pass) TodoList > an empty list shows nothing [0.09ms]
+(pass) TodoButton > shows done/total and whether the list is shown [0.22ms]
+(pass) TodoButton > hides when there are no todos [0.05ms]
+
+src/components/Files.test.tsx:
+(pass) the Files panel > sorts files into images, audio and video, and docs [0.19ms]
+(pass) the Files panel > filters by type, words and archive [0.30ms]
+
+src/components/Markdown.test.tsx:
+(pass) document Markdown > renders GFM tables, task lists and strikethrough [4.51ms]
+(pass) document Markdown > never mounts images or raw HTML [4.04ms]
+(pass) document Markdown > isolates fragment links, disables paths, and opens absolute links separately [2.92ms]
+(pass) document Markdown > rejects protocol-relative and unsafe schemes [3.27ms]
+(pass) document Markdown > leaves chat mode image and link behavior intact [2.18ms]
+
+src/components/ActivityStrip.test.tsx:
+(pass) ActivityStrip > summarizes live requests and workers, and hides when there is no visible activity [3.88ms]
+(pass) ActivityStrip > discloses details through a native button and persists both choices across remounts [5.13ms]
+(pass) ActivityStrip > still toggles when storage is unavailable [3.93ms]
+
+src/components/WakeNotice.test.tsx:
+(pass) WakeNotice > shows the pending wake, how soon and its note [0.90ms]
+(pass) WakeNotice > shows nothing without a pending wake [0.18ms]
+(pass) WakeNotice > says how long until it is due [0.10ms]
+
+src/components/VoiceRecorder.test.tsx:
+(pass) chat voice composer > inserts transcription at the draft boundary: ["https://example.com/message/123","spoken words"] [46.81ms]
+(pass) chat voice composer > inserts transcription at the draft boundary: ["","spoken words"] [35.27ms]
+(pass) chat voice composer > inserts transcription at the draft boundary: ["existing ","spoken words"] [34.83ms]
+(pass) chat voice composer > inserts transcription at the draft boundary: ["existing\n","spoken words"] [34.48ms]
+(pass) chat voice composer > inserts transcription at the draft boundary: ["existing"," spoken words"] [54.22ms]
+(pass) chat voice composer > inserts transcription at the draft boundary: ["existing",""] [28.63ms]
+(pass) chat voice composer > separates repeated transcriptions [37.51ms]
+(pass) chat voice composer > Stop waits for final speech and only updates the editable draft [35.64ms]
+(pass) chat voice composer > stop preserves selected draft text changed while transcription is pending [29.18ms]
+(pass) chat voice composer > send preserves selected draft text changed while transcription is pending [34.41ms]
+(pass) chat voice composer > Send stops recording, awaits final speech and serializes duplicate click, Enter and reentrant send [32.67ms]
+(pass) chat voice composer > Send during Stop processing uses the same finalization and latest draft [31.85ms]
+(pass) chat voice composer > failed transcription retains audio and retry resumes the original Send once [50.54ms]
+(pass) chat voice composer > cancel invalidates an awaiting Send and permits a later explicit text send [35.29ms]
+(pass) chat voice composer > recording survives navigation away and can be stopped on return [43.57ms]
+(pass) chat voice composer > navigation to another conversation does not interrupt or redirect a pending voice send [53.07ms]
+(pass) chat voice composer > acknowledgment clears only the originating draft after navigation [54.54ms]
+(pass) chat voice composer > a failed background send retains the transcript and warns on return [56.97ms]
+(pass) chat voice composer > failed post-transcription identity check retains Send until the original account is restored [43.93ms]
+(pass) chat voice composer > cancelling during the delivery identity check prevents the pending Send [35.75ms]
+(pass) chat voice composer > a failed message request retains the transcript and warns of an ambiguous send [44.94ms]
+(pass) chat voice composer > ordinary text Send remains on the normal consumer handler [25.51ms]
+(pass) new-thread voice composer > inserts transcription at the draft boundary: ["https://example.com/message/123","spoken words"] [9.72ms]
+(pass) new-thread voice composer > inserts transcription at the draft boundary: ["","spoken words"] [9.63ms]
+(pass) new-thread voice composer > inserts transcription at the draft boundary: ["existing ","spoken words"] [10.17ms]
+(pass) new-thread voice composer > inserts transcription at the draft boundary: ["existing\n","spoken words"] [10.72ms]
+(pass) new-thread voice composer > inserts transcription at the draft boundary: ["existing"," spoken words"] [8.14ms]
+(pass) new-thread voice composer > inserts transcription at the draft boundary: ["existing",""] [7.59ms]
+(pass) new-thread voice composer > separates repeated transcriptions [10.72ms]
+(pass) new-thread voice composer > Stop waits for final speech and only updates the editable draft [7.71ms]
+(pass) new-thread voice composer > stop preserves selected draft text changed while transcription is pending [9.54ms]
+(pass) new-thread voice composer > send preserves selected draft text changed while transcription is pending [10.33ms]
+(pass) new-thread voice composer > Send stops recording, awaits final speech and serializes duplicate click, Enter and reentrant send [10.55ms]
+(pass) new-thread voice composer > Send during Stop processing uses the same finalization and latest draft [13.89ms]
+(pass) new-thread voice composer > failed transcription retains audio and retry resumes the original Send once [19.04ms]
+(pass) new-thread voice composer > cancel invalidates an awaiting Send and permits a later explicit text send [13.29ms]
+(pass) new-thread voice composer > recording survives navigation away and can be stopped on return [13.57ms]
+(pass) new-thread voice composer > navigation to another conversation does not interrupt or redirect a pending voice send [17.74ms]
+(pass) new-thread voice composer > a background send does not leave another bot composer busy [20.24ms]
+(pass) new-thread voice composer > acknowledgment clears only the originating draft after navigation [13.86ms]
+(pass) new-thread voice composer > a failed background send retains the transcript and warns on return [14.73ms]
+(pass) new-thread voice composer > failed post-transcription identity check retains Send until the original account is restored [11.02ms]
+(pass) new-thread voice composer > cancelling during the delivery identity check prevents the pending Send [8.28ms]
+(pass) new-thread voice composer > an ambiguous first send preserves the draft and links to the created conversation [11.96ms]
+(pass) new-thread voice composer > ordinary text Send remains on the normal consumer handler [8.39ms]
+(pass) voice recorder > new thread inserts dictated text at the selection and keeps it as a draft [8.54ms]
+(pass) voice recorder > requests permission only on click and inserts the transcription after stopping [4.30ms]
+(pass) voice recorder > prefers supported WebM over an Ogg browser default [3.93ms]
+(pass) voice recorder > falls back to supported MP4 when WebM is unavailable [4.02ms]
+(pass) voice recorder > disables recording when only Ogg is supported [2.39ms]
+(pass) voice recorder > does not upload if the recorder returns an unsupported format [4.03ms]
+(pass) voice recorder > downloads an unsupported Ogg recording with the correct extension [4.43ms]
+(pass) voice recorder > offers a new recording rather than uploading empty audio [5.03ms]
+(pass) voice recorder > escape discards recording and stops tracks without upload [20.07ms]
+(pass) voice recorder > cancel while permission is pending disposes a subsequently granted stream [5.42ms]
+(pass) voice recorder > cancel aborts processing and ignores a late response [5.33ms]
+(pass) voice recorder > retries failed upload without rerecording [5.45ms]
+(pass) voice recorder > dismisses microphone permission errors [4.36ms]
+(pass) voice recorder > continues past the configured duration and uploads all captured chunks [310.03ms]
+(pass) voice recorder > recorder errors retain final data for retry and download [10.07ms]
+(pass) voice recorder > acquires, reacquires and releases a screen wake lock [7.58ms]
+(pass) voice recorder > retries a pending wake lock rejected after returning to the tab [5.20ms]
+(pass) voice recorder > reacquires when the previous wake lock releases after the tab becomes visible [5.31ms]
+(pass) voice recorder > recording works when wake lock is rejected [5.42ms]
+(pass) voice recorder > releases a wake lock granted after cancellation [5.06ms]
+(pass) voice recorder > hides controls if configuration cannot be loaded [2.07ms]
+(pass) voice recorder > explains missing browser recording support [2.87ms]
+(pass) voice recorder > voice API uses session credentials, CSRF and multipart audio [3.07ms]
+(pass) voice recorder > pagehide does not discard captured audio [5.34ms]
+(pass) voice recorder > session changes stop active tracks and disabled configuration hides controls [4.12ms]
+
+src/components/SessionSearch.test.tsx:
+(pass) conversation search > opens by shortcut, debounces, highlights safely, navigates with keyboard and restores focus [296.66ms]
+(pass) conversation search > discards stale requests, handles empty and error states, and Escape does not reach drawer [852.49ms]
+
+src/components/PoolFunding.test.tsx:
+(pass) explicit funding consent form > configured cap and expiry never prefill authorization or select an account [0.96ms]
+(pass) explicit funding consent form > an existing approval is a summary and leaves the new consent fields blank [0.42ms]
+
+src/components/RecurringWakeNotice.test.tsx:
+(pass) RecurringWakeNotice > blocked and paused schedules offer resume rather than another pause [6.26ms]
+(pass) RecurringWakeNotice > completed and cancelled schedules cannot be resumed or cancelled again [3.14ms]
+(pass) RecurringWakeNotice > shows server errors and keeps the existing status instead of faking success [4.41ms]
+(pass) RecurringWakeNotice > disables duplicate controls while a request is pending [3.84ms]
+
+src/components/MediaGallery.test.tsx:
+(pass) files in the chat > play as images, videos or audio [0.11ms]
+(pass) files in the chat > a reply's attachments are found by id or by the newest file of that name [12.56ms]
+
+src/components/UsageHistory.test.tsx:
+(pass) UsageHistory > opens from the sparkline, loads the selected thread and shows all breakdowns [12.43ms]
+(pass) UsageHistory > chart bars expose exact values on focus and selection [9.54ms]
+(pass) UsageHistory > offers retry and displays empty history [10.01ms]
+(pass) UsageHistory > closing the history does not close its parent mobile sheet [9.28ms]
+
+src/pages/Routing.test.tsx:
+(pass) Routing pay-per-token providers > lists only API-key providers, unmetered; subscriptions belong to the capacity section [1.38ms]
+(pass) Routing pay-per-token providers > renders nothing without API-key providers [0.25ms]
+(pass) Routing tiers and rules > shows configured custom chat and coding-agent tiers without fixed tier names [2.01ms]
+(pass) Routing tiers and rules > labels Fable and arbitrary window rules accurately, preferring reported labels [2.51ms]
+
+src/pages/Costs.test.tsx:
+(pass) Costs breakdown > projects list their agents underneath, with the repo owner [0.75ms]
+(pass) Costs breakdown > agents name their project; call types nest chat replies by bot [0.55ms]
+(pass) Costs breakdown > distinguishes unknown and partial agent estimates from billed spend [4.14ms]
+(pass) Costs breakdown > renders the summary and the chosen tab [6.60ms]
+(pass) List-price estimate > shows uncached input, the cache denominator with output excluded, and each part cost [2.21ms]
+(pass) List-price estimate > unpriced rows are unknown or a lower bound, never silently zero [1.44ms]
+(pass) List-price estimate > missing usage and a zero denominator are reported, not shown as 0% [1.17ms]
+(pass) List-price estimate > missing token data cannot produce a known zero estimate [0.80ms]
+(pass) List-price estimate > agent lifetime spillover is labelled, bot window is exact [0.92ms]
+(pass) ledger panel > an empty ledger is not zero spend and coverage is explicit [0.56ms]
+(pass) ledger panel > unknown stays unknown, currencies stay apart, reservations are not spend [0.46ms]
+
+src/pages/Capacity.test.tsx:
+(pass) reset countdown > counts down in the largest two units [0.16ms]
+(pass) window rows > hides only configured account windows, including an absent placeholder [4.45ms]
+(pass) window rows > shows 5-hour and 7-day usage with reset countdown and a meter for each [0.71ms]
+(pass) window rows > a window the provider does not report is Unavailable, never 0% [0.67ms]
+(pass) window rows > a reported window without a value is unavailable, while a real 0% is still shown as 0% [0.57ms]
+(pass) window rows > an account with no data lists both windows as unavailable and says why [0.53ms]
+(pass) window rows > a window past its reset has no value until the next sync [0.56ms]
+(pass) window rows > shows every scoped window (model- or product-specific) under its own label [1.29ms]
+(pass) window rows > marks the even-use pace and never renders routing skip guidance [0.61ms]
+(pass) stale and failed data > stale values keep their number but carry a Stale badge and when they were observed [0.59ms]
+(pass) stale and failed data > a failed provider shows why and that its numbers are its last known ones [0.64ms]
+(pass) stale and failed data > sync state healthy is announced in words [0.54ms]
+(pass) stale and failed data > sync state stale is announced in words [0.46ms]
+(pass) stale and failed data > sync state partial is announced in words [0.43ms]
+(pass) stale and failed data > sync state failed is announced in words [0.47ms]
+(pass) stale and failed data > sync state empty is announced in words [0.56ms]
+(pass) stale and failed data > a failed sync shows its error, the last successful time and stays out of the healthy look [0.39ms]
+(pass) stale and failed data > no successful sync yet says so instead of inventing a time [0.19ms]
+(pass) stale and failed data > stale sync explains the threshold [0.34ms]
+(pass) refresh and states > the refresh button is a named, keyboard-operable button [0.39ms]
+(pass) refresh and states > refreshing shows progress, disables repeat clicks and still keeps the old values on screen [0.53ms]
+(pass) refresh and states > a sync already running elsewhere shows as in progress too [0.47ms]
+(pass) refresh and states > a failed refresh request is reported [0.52ms]
+(pass) refresh and states > nothing configured or synced explains how to get data [0.23ms]
+(pass) refresh and states > loading shows a busy region, not numbers [0.20ms]
+(pass) structure > headings, live region and the provider-reported note are present [0.55ms]
+(pass) structure > each status badge has text, not only a color [1.67ms]
+
+src/pages/ChatSuggestions.test.tsx:
+(pass) Chat suggestions > hides debug when the server does not permit it [17.26ms]
+(pass) Chat suggestions > shows debug beside Illustrate when the server permits it [10.84ms]
+An update to Pins inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to Chat inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to Pins inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to Chat inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to Chat inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+(pass) Chat suggestions > queued send receives live suggestions and replaces them on subsequent events [46.31ms]
+(pass) Chat suggestions > history suggestions appear on both layouts [15.53ms]
+An update to Pins inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to Pins inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to Chat inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+(pass) Chat suggestions > a later reply without suggestions and a user message clear previous pills [28.86ms]
+
+src/pages/Dashboard.test.tsx:
+(pass) dashboard session scope > keeps resolved threads but excludes closed named/main chats, without reordering results [0.18ms]
+(pass) dashboard session scope > pin placement overrides attention while the attention state remains on the row [1.59ms]
+(pass) dashboard presentation > sorts within groups by last activity, falls back to update time, and does not mutate caller data [1.88ms]
+(pass) dashboard presentation > keeps capped groups sorted and collapsed sidebar groups hidden with locally appended rows [2.24ms]
+(pass) dashboard presentation > presents actionable PR navigation, worker progress and unread/busy semantics together [0.95ms]
+(pass) dashboard presentation > pin shortcuts keep the owning chat and safely encode page names and URLs [1.46ms]
+(pass) dashboard presentation > loading and failed refreshes expose status and retry instead of empty-state claims [0.36ms]
+
+ 416 pass
+ 0 fail
+ 1704 expect() calls
+Ran 416 tests across 41 files. [12.86s]

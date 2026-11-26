@@ -1,0 +1,74 @@
+/home/dev/orca/workspaces/django-ergo/model-pools-core/ergonaut/.venv/lib/python3.12/site-packages/pytest_asyncio/plugin.py:306: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the fixture scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to "function" scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session". Set it to "fixture-scope" to keep the current behavior.
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+........................................................................ [ 26%]
+........................................................................ [ 52%]
+........................................................................ [ 78%]
+........................................s...................             [100%]
+=============================== warnings summary ===============================
+../../model-pools-core/ergonaut/.venv/lib/python3.12/site-packages/platformdirs/api.py:441
+  /home/dev/orca/workspaces/django-ergo/model-pools-core/ergonaut/.venv/lib/python3.12/site-packages/platformdirs/api.py:441: RuntimeDirWarning: XDG_RUNTIME_DIR is not set, falling back to /tmp/runtime-1000
+    return Path(self.user_runtime_dir)
+
+ergonaut/settings/project.py:350
+ergonaut/settings/project.py:350
+ergonaut/apps/bots/tests/test_settings.py::test_lifecycle_events_environment_toggle_is_opt_in
+  /home/dev/orca/workspaces/django-ergo/model-pools-funding-ui/ergonaut/ergonaut/settings/project.py:350: UserWarning: SECRET_KEY is the default; set SECRET_KEY (`ergonaut up` generates one under DATA_DIR)
+    warnings.warn(
+
+ergonaut/apps/bots/tests/test_api.py: 72 warnings
+ergonaut/apps/bots/tests/test_costs.py: 28 warnings
+ergonaut/apps/bots/tests/test_dead_turns.py: 4 warnings
+ergonaut/apps/bots/tests/test_debug_shortcut.py: 7 warnings
+ergonaut/apps/bots/tests/test_loading.py: 1 warning
+ergonaut/apps/bots/tests/test_page_performance.py: 3 warnings
+ergonaut/apps/bots/tests/test_recurring_wakes.py: 4 warnings
+ergonaut/apps/bots/tests/test_setup.py: 1 warning
+ergonaut/apps/bots/tests/test_stranded_inbox.py: 6 warnings
+ergonaut/apps/bots/tests/test_upgrades.py: 1 warning
+ergonaut/apps/bots/tests/test_wait_idle.py: 4 warnings
+ergonaut/apps/bots/tests/test_client_cli.py: 1 warning
+ergonaut/apps/bots/tests/test_page_actions.py: 9 warnings
+ergonaut/apps/bots/tests/test_page_assets.py: 4 warnings
+ergonaut/apps/bots/tests/test_page_events.py: 4 warnings
+ergonaut/apps/bots/tests/test_pool_funding.py: 12 warnings
+ergonaut/apps/bots/tests/test_pools_api.py: 6 warnings
+ergonaut/apps/bots/tests/test_pools_review.py: 8 warnings
+ergonaut/apps/bots/tests/test_stream.py: 5 warnings
+ergonaut/apps/bots/tests/test_turn_budget.py: 10 warnings
+ergonaut/apps/bots/tests/test_turn_control.py: 12 warnings
+ergonaut/apps/bots/tests/test_frontend.py: 1 warning
+  /home/dev/orca/workspaces/django-ergo/model-pools-core/ergonaut/.venv/lib/python3.12/site-packages/django/core/handlers/base.py:61: UserWarning: No directory at: /home/dev/orca/workspaces/django-ergo/model-pools-funding-ui/ergonaut/static/assets/
+    mw_instance = middleware(adapted_handler)
+
+ergonaut/apps/bots/tests/test_dead_turns.py::test_a_dead_turn_is_failed_and_a_live_one_kept
+ergonaut/apps/bots/tests/test_dead_turns.py::test_a_dead_turn_is_failed_and_a_live_one_kept
+ergonaut/apps/bots/tests/test_dead_turns.py::test_a_dead_turn_is_failed_and_a_live_one_kept
+ergonaut/apps/bots/tests/test_dead_turns.py::test_a_dead_turn_is_failed_and_a_live_one_kept
+ergonaut/apps/bots/tests/test_dead_turns.py::test_a_dead_turn_is_failed_and_a_live_one_kept
+  /home/dev/orca/workspaces/django-ergo/model-pools-core/ergonaut/.venv/lib/python3.12/site-packages/celery/app/task.py:470: CDeprecationWarning:
+      The 'queue' task attribute is deprecated and scheduled for removal in
+      version 6.0. Use the task_routes setting instead.
+
+    deprecated.warn(
+
+ergonaut/apps/bots/tests/test_admission_drain.py::test_inbox_preserved_and_sweep_requeues
+ergonaut/apps/bots/tests/test_admission_drain.py::test_approval_tasks_retry_before_consumption[approval]
+ergonaut/apps/bots/tests/test_admission_drain.py::test_approval_tasks_retry_before_consumption[revalidation]
+ergonaut/apps/bots/tests/test_admission_drain.py::test_channel_deferral_and_cleanup[False]
+ergonaut/apps/bots/tests/test_admission_drain.py::test_channel_deferral_and_cleanup[True]
+ergonaut/apps/bots/tests/test_admission_drain.py::test_idle_retains_queued_workers_but_waits_running
+ergonaut/apps/bots/tests/test_admission_drain.py::test_external_agent_watcher_is_never_treated_as_deferred_queue
+ergonaut/apps/bots/tests/test_admission_drain.py::test_existing_inbox_turn_finishes_but_next_batch_defers
+ergonaut/apps/bots/tests/test_admission_drain.py::test_telegram_durable_source_claim_waits_for_host_admission
+  /home/dev/orca/workspaces/django-ergo/model-pools-core/ergonaut/.venv/lib/python3.12/site-packages/factory/django.py:182: DeprecationWarning: UserFactory._after_postgeneration will stop saving the instance after postgeneration hooks in the next major release.
+  If the save call is extraneous, set skip_postgeneration_save=True in the UserFactory.Meta.
+  To keep saving the instance, move the save call to your postgeneration hooks or override _after_postgeneration.
+    warnings.warn(
+
+ergonaut/apps/bots/tests/test_upgrades.py::test_every_check_is_recorded_for_the_web_app
+  /home/dev/orca/workspaces/django-ergo/model-pools-funding-ui/ergonaut:0: PytestWarning: Error when trying to teardown test databases: OperationalError('database "test_postgres" is being accessed by other users\nDETAIL:  There is 1 other session using the database.')
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+275 passed, 1 skipped, 222 warnings in 155.80s (0:02:35)
