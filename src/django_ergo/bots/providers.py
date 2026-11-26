@@ -48,6 +48,8 @@ needs it, and the built-in telemetry table is never spend authority::
         models:
           - name: gemini-2.5-flash
             price: {input: 0.30, cached: 0.03, output: 2.50}
+        # Prices checked 2026-11-25 at https://aistudio.google.com/docs/pricing
+        # (see docs/bots.md for the full table and long-context tiers).
 
 ``transport: cli`` runs models on the subscription a CLI on this machine is
 logged in with: Claude models through the Claude Code CLI

@@ -2661,24 +2661,58 @@ providers:
     key_env: GEMINI_API_KEY
     config: {reasoning_effort: medium} # none|minimal|low|medium|high -> thinking config
     models:
-      - name: gemini-2.5-pro
-        price: {input: 1.25, cached: 0.125, output: 10.00, long_context: {threshold: 200000, input: 2, output: 1.5}}
+      - name: gemini-3.1-pro-preview
+        price: {input: 2.00, cached: 0.20, output: 12.00, long_context: {threshold: 200000, input: 2, output: 1.5}}
+      - name: gemini-3-flash-preview
+        price: {input: 0.50, cached: 0.05, output: 3.00}
       - name: gemini-2.5-flash
         price: {input: 0.30, cached: 0.03, output: 2.50}
-      - name: gemini-3-pro-preview # not on the pricing page when checked: fill in or leave out `price`
-        price: {input: 2.00, cached: 0.20, output: 12.00}
 ```
 
 - **Prices are configuration, not facts.** `price` is USD per million tokens
   (`output` includes thinking tokens; `cached` defaults to `input`;
   `long_context` multiplies a request's rates once its prompt passes
   `threshold`). `Providers.price("google/gemini-2.5-flash")` returns it for a
-  budget that estimates worst-case cost. Verify every number on
-  <https://ai.google.dev/gemini-api/docs/pricing> before relying on it. The
-  examples were read there on 2026-11-25 (the 2.5 rows from a page summary);
-  `gemini-3-pro-preview` was not listed, so its numbers above are copied from
-  `gemini-3.1-pro-preview`. Cost accounting of finished calls uses the built-in
-  table (`pricing.DEFAULT_PRICES`) or `DJANGO_ERGO["MODEL_PRICES"]`.
+  budget that estimates worst-case cost. Re-verify before relying on a number.
+- **Prices checked 2026-11-25** (Standard paid tier, text/image/video, USD per
+  1M tokens; the page shows no "last updated" date). Source:
+  <https://aistudio.google.com/docs/pricing> (where
+  `ai.google.dev/gemini-api/docs/pricing` redirects). Status:
+  <https://aistudio.google.com/docs/models> and `/docs/deprecations`.
+
+  | Model | Input | Output | Cached input | Notes |
+  | --- | --- | --- | --- | --- |
+  | `gemini-3.1-pro-preview` | 2.00 (4.00 over 200k) | 12.00 (18.00 over 200k) | 0.20 (0.40 over 200k) | long-context tier |
+  | `gemini-3-flash-preview` | 0.50 | 3.00 | 0.05 | preview |
+  | `gemini-3.1-flash-lite` | 0.25 | 1.50 | 0.025 | |
+  | `gemini-3.5-flash-lite` | 0.30 | 2.50 | 0.03 | |
+  | `gemini-2.5-pro` | 1.25 (2.50 over 200k) | 10.00 (15.00 over 200k) | 0.125 (0.25 over 200k) | deprecated: from 2026-12-01 requests route to `gemini-3.8-flash` and bill at its rates |
+  | `gemini-2.5-flash` | 0.30 | 2.50 | 0.03 | deprecated: from 2026-12-01 routes to `gemini-3.5-flash-lite` |
+  | `gemini-2.5-flash-lite` | 0.10 | 0.40 | 0.01 | |
+  | `gemini-4-neon` | 3.00 | 15.00 | 0.15 | |
+  | `gemini-4-hydrogen` | 1.50 | 7.50 | 0.075 | |
+
+  Not in the built-in table: `gemini-4-carbon`/`gemini-4-argon` (input 2.00 and
+  output 10.00 through 2026-11-30, double from 2026-12-01) and
+  `gemini-3.8-flash`/`gemini-3.6-flash` (0.75 / 3.75 through 2026-12-31, double
+  from 2027-01-01): a table row has one price, so put the current one in
+  `price:` yourself and update it on the date. Audio input is priced higher
+  than the text rows above and isn't modeled. `gemini-3-pro-preview` is listed
+  as shut down (2026-03-09, replaced by `gemini-3.1-pro-preview`), so it has no
+  price here; avoid it.
+- **Thought signatures.** Gemini 3 models return a `thoughtSignature` on
+  function-call parts, and the next request must send it back unchanged. It is
+  stored on the tool-use block (`MessageBlock.provider_metadata`, e.g.
+  `{"google": {"thought_signature": "..."}}`) and replayed from there. A call
+  with no stored signature (history from another engine) gets Google's
+  documented dummy value on Gemini 3 models. Other engines never read the field.
+- **Cost of a finished call.** `django_ergo.pricing.priced_usage(usage, model,
+  price=None)` returns the token usage and the USD cost of one request
+  (`cost_usd` is None for an unpriced model). Pass `price=` (for example
+  `Providers.price(ref)`) to price from YAML; otherwise the built-in table
+  (`pricing.DEFAULT_PRICES`, `DJANGO_ERGO["MODEL_PRICES"]`) is used. It is a pure
+  function: nothing records its result yet; the spend ledger on the pools branch
+  is meant to call it.
 - **Thinking.** Chat effort (or `reasoning_effort`) maps to `thinkingLevel` on
   Gemini 3 and `thinkingBudget` on 2.5, clamped to what each model accepts
   (2.5 Pro and Gemini 3 can't turn thinking off). `thinking_level`,

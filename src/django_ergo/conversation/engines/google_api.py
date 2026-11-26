@@ -85,6 +85,8 @@ class GoogleAPIEngine(OpenAIAPIEngine):
     engine_type = "google"
     transport_type = "api"
     supports_request_limits = True
+    # History carries each tool call's stored thoughtSignature back to Gemini.
+    replay_signatures = True
 
     def __init__(self, config: dict):
         config = dict(config or {})
@@ -263,7 +265,15 @@ class GoogleAPIEngine(OpenAIAPIEngine):
             if reply.text:
                 blocks.append({"block_type": "text", "text": reply.text})
             blocks += [
-                tool_use_block(c["id"], c["name"], c["input"]) for c in reply.calls
+                tool_use_block(
+                    c["id"],
+                    c["name"],
+                    c["input"],
+                    {"google": {"thought_signature": c["thought_signature"]}}
+                    if c.get("thought_signature")
+                    else None,
+                )
+                for c in reply.calls
             ]
             if blocks:
                 await add_message(

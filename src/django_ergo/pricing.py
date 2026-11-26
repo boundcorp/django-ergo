@@ -149,27 +149,41 @@ DEFAULT_PRICES: dict[str, dict[str, float]] = {
         "cache_write": 0.125,
         "cache_read": 0.01,
     },
-    # Google Gemini API, standard paid tier, checked 2026-11-25 at
-    # https://ai.google.dev/gemini-api/docs/pricing (now served from
-    # aistudio.google.com/docs/pricing). Output includes thinking tokens;
-    # cache_read is the cached-input rate. gemini-3.1-pro-preview and
-    # gemini-3-flash-preview were read from the page; the 2.5 rows came from a
-    # page summary: re-verify before relying on them for budgets.
+    # Google Gemini API, Standard paid tier, USD per 1M tokens. Every row below
+    # was read verbatim from https://aistudio.google.com/docs/pricing (the page
+    # ai.google.dev/gemini-api/docs/pricing redirects to) on 2026-11-25; the page
+    # carries no "last updated" date. Model status is from
+    # https://aistudio.google.com/docs/models and /docs/deprecations, same day.
+    # Output includes thinking tokens; cache_read is the cached-input rate
+    # (text/image/video; audio is priced higher and isn't modeled here).
+    # long_context multiplies a request's rates once its prompt passes
+    # threshold: the page lists a ">200k tokens" tier for 2.5 Pro and 3.1 Pro.
+    # Not listed because the page gives a price that changes on a date, which
+    # this table can't express: gemini-4-carbon / gemini-4-argon (doubles
+    # 2026-12-01), gemini-3.8-flash / gemini-3.6-flash (doubles 2027-01-01).
+    # gemini-3-pro-preview is not here: Google lists it as shut down
+    # (2026-03-09, replaced by gemini-3.1-pro-preview).
+    # gemini-2.5-pro and gemini-2.5-flash are deprecated: from 2026-12-01 their
+    # requests route to (and bill as) gemini-3.8-flash and gemini-3.5-flash-lite.
     "gemini-2.5-pro": {
         "long_context": {"threshold": 200_000, "input": 2, "output": 1.5},
         "input": 1.25,
         "output": 10.00,
         "cache_read": 0.125,
     },
-    "gemini-2.5-flash": {"input": 0.30, "output": 2.50, "cache_read": 0.03},
     "gemini-2.5-flash-lite": {"input": 0.10, "output": 0.40, "cache_read": 0.01},
+    "gemini-2.5-flash": {"input": 0.30, "output": 2.50, "cache_read": 0.03},
     "gemini-3.1-pro-preview": {
         "long_context": {"threshold": 200_000, "input": 2, "output": 1.5},
         "input": 2.00,
         "output": 12.00,
         "cache_read": 0.20,
     },
+    "gemini-3.1-flash-lite": {"input": 0.25, "output": 1.50, "cache_read": 0.025},
+    "gemini-3.5-flash-lite": {"input": 0.30, "output": 2.50, "cache_read": 0.03},
     "gemini-3-flash-preview": {"input": 0.50, "output": 3.00, "cache_read": 0.05},
+    "gemini-4-neon": {"input": 3.00, "output": 15.00, "cache_read": 0.15},
+    "gemini-4-hydrogen": {"input": 1.50, "output": 7.50, "cache_read": 0.075},
     "gpt-6-sol": {
         "long_context": {"threshold": 272_000, "input": 2, "output": 1.5},
         "input": 2.00,
@@ -286,6 +300,54 @@ def call_cost(call) -> float | None:
     """What a StructuredCall cost in USD, or None for an unpriced model."""
     parts = call_cost_parts(call)
     return None if parts is None else sum(parts.values())
+
+
+USAGE_FIELDS = (
+    "input_tokens",
+    "output_tokens",
+    "reasoning_tokens",
+    "cache_creation_input_tokens",
+    "cache_read_input_tokens",
+)
+
+
+def priced_usage(usage, model: str = "", *, price: Price | None = None) -> dict:
+    """Token usage and USD cost of ONE finished model request.
+
+    ``usage`` is a mapping or an object with Ergo's token fields (a Gemini
+    ``Reply.usage``, a Completion, a SessionMessage row). Pass ``price`` (for
+    example ``Providers.price("google/gemini-2.5-flash")``, which honours a
+    YAML ``price:``) to use it; otherwise ``model`` is looked up in the built-in
+    table (``DEFAULT_PRICES`` and ``DJANGO_ERGO["MODEL_PRICES"]``). Returns the
+    token fields (None counts as 0; ``reasoning_tokens`` is part of
+    ``output_tokens`` and is billed as output), ``cost_parts`` (input,
+    cache_write, cache_read, output), ``cost_usd`` and ``price_source``
+    (``"given"`` or ``"table"``). An unpriced model gives ``cost_usd`` None, never 0.
+
+    This only computes; it writes nothing. A spend ledger records its result.
+    """
+
+    def field(name: str) -> int:
+        value = usage.get(name) if isinstance(usage, dict) else getattr(usage, name, 0)
+        return int(value or 0)
+
+    tokens = {name: field(name) for name in USAGE_FIELDS}
+    source = "given" if price is not None else "table"
+    price = price or price_for(model)
+    if price is None:
+        return {**tokens, "cost_parts": None, "cost_usd": None, "price_source": None}
+    parts = price.parts(
+        tokens["input_tokens"],
+        tokens["output_tokens"],
+        tokens["cache_creation_input_tokens"],
+        tokens["cache_read_input_tokens"],
+    )
+    return {
+        **tokens,
+        "cost_parts": {k: round(v, 8) for k, v in parts.items()},
+        "cost_usd": round(sum(parts.values()), 8),
+        "price_source": source,
+    }
 
 
 def add_request_cost(call, model: str, usage) -> None:

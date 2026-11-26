@@ -151,7 +151,12 @@ def attachment_part(row, *, audio_input: bool = False) -> dict:
 
 
 def openai_message_dicts(
-    msg, attachments=(), *, audio_input: bool = False, timezone=None
+    msg,
+    attachments=(),
+    *,
+    audio_input: bool = False,
+    timezone=None,
+    signatures: bool = False,
 ) -> list:
     """Render a SessionMessage row (plus its attachments) as OpenAI message dicts.
 
@@ -159,7 +164,9 @@ def openai_message_dicts(
     prepare_messages moves into a user message), ahead of any user text. An
     assistant's tool calls become ``tool_calls``; thinking is left out, as
     OpenAI can't take another model's reasoning back. With ``timezone``, user
-    text carries the time it was sent.
+    text carries the time it was sent. With ``signatures``, a tool call stored
+    with a Gemini ``thought_signature`` carries it as ``thought_signature``
+    (only the Google engine asks; OpenAI would reject the extra key).
     """
     blocks = list(msg.content_blocks.all())
     texts = [b.text or "" for b in blocks if b.block_type == "text"]
@@ -176,6 +183,15 @@ def openai_message_dicts(
             for b in blocks
             if b.block_type == "tool_use"
         ]
+        if signatures:
+            for call, b in zip(
+                calls, (b for b in blocks if b.block_type == "tool_use"), strict=True
+            ):
+                signature = ((b.provider_metadata or {}).get("google") or {}).get(
+                    "thought_signature"
+                )
+                if signature:
+                    call["thought_signature"] = signature
         text = "\n\n".join(t for t in texts if t)
         if not (text or calls):
             return []
@@ -352,6 +368,7 @@ class OpenAIAPIEngine(StoredMessagesMixin, Engine):
                 attachments.get(msg.sequence, ()),
                 audio_input=self.audio_input,
                 timezone=self.message_timezone,
+                signatures=getattr(self, "replay_signatures", False),
             )
         ]
 

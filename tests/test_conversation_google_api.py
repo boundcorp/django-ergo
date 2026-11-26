@@ -29,9 +29,13 @@ from django_ergo.conversation.engines.google_errors import InternalServerError
 from django_ergo.conversation.engines.google_errors import OverloadedError
 from django_ergo.conversation.engines.google_errors import QuotaExhaustedError
 from django_ergo.conversation.engines.google_errors import RateLimitError
+from django_ergo.conversation.engines.openai_api import OpenAIAPIEngine
 from django_ergo.conversation.models import ConversationSession
+from django_ergo.conversation.models import EngineType
+from django_ergo.conversation.models import MessageBlock
 from django_ergo.conversation.models import SessionStatus
 from django_ergo.pricing import price_for
+from django_ergo.pricing import priced_usage
 
 User = get_user_model()
 KEY = "test-gemini-key-123"
@@ -773,6 +777,240 @@ def test_gemini_costs_are_priced_with_thinking_as_output():
     assert price.input == 0.10
     parts = price_for("gemini-2.5-pro").parts(input_tokens=250_000, output_tokens=1000)
     assert parts["input"] == pytest.approx(250_000 * 1.25 * 2 / 1e6)  # >200k surcharge
+
+
+# -- thoughtSignature persistence -----------------------------------------------------
+
+
+@pytest.fixture
+def gemini3():
+    return GoogleAPIEngine({"model": "gemini-3.1-pro-preview", "max_tokens": 1000})
+
+
+def _model_parts(rec, index=1):
+    return rec.body["contents"][index]["parts"]
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_signatures_round_trip_through_a_tool_loop(mock, gemini3, session):
+    rec = mock(
+        candidate(
+            [
+                {
+                    "functionCall": {"name": "get_weather", "args": {"city": "Oslo"}},
+                    "thoughtSignature": "SIG-A",
+                },
+                {"functionCall": {"name": "get_weather", "args": {"city": "Rome"}}},
+            ]
+        ),
+        candidate(
+            [
+                {
+                    "functionCall": {"name": "get_weather", "args": {"city": "Bern"}},
+                    "thoughtSignature": "SIG-B",
+                }
+            ]
+        ),
+        candidate([{"text": "Done."}]),
+    )
+    events = [e async for e in gemini3.send(session, "weather?", [TOOL])]
+    calls = [e.tool_use for e in events if e.event_type == "tool_use"]
+    assert len(calls) == 2
+    assert all("thought_signature" not in c for c in calls)  # not leaked to callers
+    stored = {
+        b.tool_input["city"]: b.provider_metadata
+        async for b in MessageBlock.objects.filter(block_type="tool_use")
+    }
+    assert stored == {
+        "Oslo": {"google": {"thought_signature": "SIG-A"}},
+        "Rome": None,
+    }
+    results = [(c["id"], "sunny", False) for c in calls]
+    events = [
+        e async for e in gemini3.submit_tool_results_batch(session, results, [TOOL])
+    ]
+    # the second request replayed the first reply's signature unchanged
+    first_turn = _model_parts(rec)
+    assert first_turn[0]["thoughtSignature"] == "SIG-A"
+    assert "thoughtSignature" not in first_turn[1]
+    call = next(e.tool_use for e in events if e.event_type == "tool_use")
+    [
+        e
+        async for e in gemini3.submit_tool_results_batch(
+            session, [(call["id"], "rainy", False)], [TOOL]
+        )
+    ]
+    # and the third request carries both turns' signatures, in order
+    sent = [p for c in rec.body["contents"] if c["role"] == "model" for p in c["parts"]]
+    assert [p.get("thoughtSignature") for p in sent] == ["SIG-A", None, "SIG-B"]
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_missing_signature_falls_back_to_the_documented_dummy(
+    mock, gemini3, session
+):
+    rec = mock(
+        candidate([{"functionCall": {"name": "get_weather", "args": {"city": "X"}}}]),
+        candidate([{"text": "ok"}]),
+    )
+    events = [e async for e in gemini3.send(session, "weather?", [TOOL])]
+    call = next(e.tool_use for e in events if e.event_type == "tool_use")
+    block = await MessageBlock.objects.aget(block_type="tool_use")
+    assert block.provider_metadata is None
+    [
+        e
+        async for e in gemini3.submit_tool_results_batch(
+            session, [(call["id"], "r", False)], [TOOL]
+        )
+    ]
+    assert _model_parts(rec)[0]["thoughtSignature"] == wire.DUMMY_SIGNATURE
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_a_stored_signature_is_never_replaced_by_the_dummy(
+    mock, gemini3, session
+):
+    rec = mock(
+        candidate(
+            [
+                {
+                    "functionCall": {"name": "get_weather", "args": {}},
+                    "thoughtSignature": "REAL",
+                }
+            ]
+        ),
+        candidate([{"text": "ok"}]),
+    )
+    events = [e async for e in gemini3.send(session, "x", [TOOL])]
+    call = next(e.tool_use for e in events if e.event_type == "tool_use")
+    [
+        e
+        async for e in gemini3.submit_tool_results_batch(
+            session, [(call["id"], "r", False)], [TOOL]
+        )
+    ]
+    assert _model_parts(rec)[0]["thoughtSignature"] == "REAL"
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_other_engines_ignore_a_stored_signature(session):
+    from django_ergo.conversation.engines.claude_api import claude_message_dict
+    from django_ergo.conversation.engines.openai_api import openai_message_dicts
+    from django_ergo.conversation.messages import add_message
+    from django_ergo.conversation.messages import tool_use_block
+
+    await add_message(
+        session,
+        "assistant",
+        [
+            tool_use_block(
+                "c1",
+                "get_weather",
+                {"city": "Oslo"},
+                {"google": {"thought_signature": "SIG"}},
+            )
+        ],
+        stop_reason="tool_use",
+    )
+    msg = await session.messages.prefetch_related("content_blocks").aget()
+
+    def render():
+        return (
+            openai_message_dicts(msg),
+            claude_message_dict(msg),
+            openai_message_dicts(msg, signatures=True),
+        )
+
+    from asgiref.sync import sync_to_async
+
+    openai, claude, google = await sync_to_async(render)()
+    assert "SIG" not in json.dumps([openai, claude])
+    assert "thought_signature" not in openai[0]["tool_calls"][0]
+    assert google[0]["tool_calls"][0]["thought_signature"] == "SIG"
+    assert not getattr(OpenAIAPIEngine, "replay_signatures", False)
+    assert GoogleAPIEngine.replay_signatures is True
+
+
+def test_google_is_an_engine_type():
+    assert EngineType.GOOGLE == "google"
+    assert "google" in EngineType.values
+    field = ConversationSession._meta.get_field("engine_type")
+    assert field.clean("google", None) == "google"  # the choices accept it
+
+
+# -- finished-call usage and cost ----------------------------------------------------------
+
+
+def test_priced_usage_for_a_finished_call():
+    usage = {
+        "input_tokens": 60,
+        "output_tokens": 40,
+        "reasoning_tokens": 30,
+        "cache_read_input_tokens": 40,
+        "cache_creation_input_tokens": None,
+    }
+    out = priced_usage(usage, "gemini-2.5-flash")
+    assert out["input_tokens"] == 60
+    assert out["reasoning_tokens"] == 30  # part of output_tokens, billed once
+    assert out["price_source"] == "table"
+    expected = (60 * 0.30 + 40 * 0.03 + 40 * 2.50) / 1e6
+    assert out["cost_usd"] == pytest.approx(expected)
+    assert out["cost_parts"]["output"] == pytest.approx(40 * 2.50 / 1e6)
+
+
+def test_priced_usage_takes_a_yaml_price_and_long_context():
+    providers = parse_providers(PROVIDERS)
+    given = providers.price("google/gemini-2.5-flash")
+    out = priced_usage({"input_tokens": 1_000_000}, "ignored", price=given)
+    assert out["price_source"] == "given"
+    assert out["cost_usd"] == pytest.approx(0.30)
+    long = priced_usage({"input_tokens": 250_000}, "gemini-3.1-pro-preview")
+    assert long["cost_usd"] == pytest.approx(250_000 * 2.00 * 2 / 1e6)
+
+
+def test_priced_usage_of_an_unpriced_model_is_none_not_zero():
+    out = priced_usage({"input_tokens": 5, "output_tokens": 5}, "gemini-3-pro-preview")
+    assert out["cost_usd"] is None
+    assert out["input_tokens"] == 5
+
+
+def test_priced_usage_reads_a_reply_from_the_wire():
+    reply = wire.parse_response(
+        candidate(
+            [{"text": "x"}],
+            usage={
+                "promptTokenCount": 100,
+                "cachedContentTokenCount": 40,
+                "candidatesTokenCount": 10,
+                "thoughtsTokenCount": 30,
+            },
+        )
+    )
+    out = priced_usage(reply.usage, "gemini-2.5-flash")
+    assert (out["input_tokens"], out["output_tokens"]) == (60, 40)
+    assert out["cost_usd"] == pytest.approx((60 * 0.30 + 40 * 0.03 + 40 * 2.5) / 1e6)
+
+
+def test_price_rows_match_the_pricing_page_read_on_2026_11_25():
+    rows = {
+        "gemini-2.5-pro": (1.25, 10.00, 0.125),
+        "gemini-2.5-flash": (0.30, 2.50, 0.03),
+        "gemini-2.5-flash-lite": (0.10, 0.40, 0.01),
+        "gemini-3.1-pro-preview": (2.00, 12.00, 0.20),
+        "gemini-3.1-flash-lite": (0.25, 1.50, 0.025),
+        "gemini-3-flash-preview": (0.50, 3.00, 0.05),
+    }
+    for model, (inp, out, cached) in rows.items():
+        price = price_for(model)
+        assert (price.input, price.output, price.cache_read) == (inp, out, cached)
+    # >200k-token tier: input 4.00 / output 18.00 on 3.1 Pro, 2.50 / 15.00 on 2.5 Pro
+    assert price_for("gemini-3.1-pro-preview").long_context == {
+        "threshold": 200_000,
+        "input": 2,
+        "output": 1.5,
+    }
+    # Google lists gemini-3-pro-preview as shut down (2026-03-09): no price here
+    assert price_for("gemini-3-pro-preview") is None
 
 
 @pytest.mark.skipif(

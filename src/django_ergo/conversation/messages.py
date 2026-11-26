@@ -161,13 +161,18 @@ async def add_tool_results(session, results: list[tuple[str, Any, bool]]):
     )
 
 
-def tool_use_block(call_id: str, name: str, arguments: dict) -> dict:
-    return {
+def tool_use_block(
+    call_id: str, name: str, arguments: dict, provider_metadata: dict | None = None
+) -> dict:
+    block = {
         "block_type": "tool_use",
         "tool_use_id": call_id,
         "tool_name": name,
         "tool_input": arguments,
     }
+    if provider_metadata:
+        block["provider_metadata"] = provider_metadata
+    return block
 
 
 async def text_to_tool_use(session, call_id: str, name: str, arguments: dict):

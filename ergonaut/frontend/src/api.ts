@@ -31,7 +31,7 @@ export type Session = {
   busy?: boolean // a turn is running now
   unread?: boolean // a reply came after the owner last opened it
   attention?: boolean // the latest turn waits on the user: an approval, a question, or a failure
-  engine_type?: string // openai or claude: the engine its latest turn ran on
+  engine_type?: string // openai, claude or google: the engine its latest turn ran on
   model?: string // the provider/model picked for this chat ('' = the bot's default)
   effort?: string // reasoning effort picked for this chat ('' = the default, medium)
   resolved_by?: string // the bot that resolved this thread (ergo_thread_resolve)
