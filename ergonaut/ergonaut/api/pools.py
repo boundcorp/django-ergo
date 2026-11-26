@@ -20,7 +20,7 @@ from django_ergo.bots import pools
 from django_ergo.conversation.inference_policy import PolicyError
 from ninja import Router, Schema
 from ninja.errors import HttpError
-from pydantic import ConfigDict, StrictBool
+from pydantic import ConfigDict, StrictBool, StrictStr
 
 from ergonaut.api.auth import user_auth
 from ergonaut.api.bots import get_bot, get_session, registry, session_out
@@ -72,6 +72,7 @@ class PaidPauseIn(Schema):
     model_config = ConfigDict(extra="forbid")
 
     paused: StrictBool
+    version: StrictStr
 
 
 class EnvelopeLinkIn(Schema):
@@ -133,6 +134,7 @@ def _settings(request) -> dict:
         "editable": admin,
         "admin": admin,
         "paid_paused": bool(state and state.paused),
+        "paid_pause_version": state.updated_at.isoformat() if state else "",
         "enforcement_activated": bool(state and state.activated_at),
     }
 
@@ -216,7 +218,7 @@ def approve_funding(request, name: str, data: FundingIn):
 @router.post("/pools/paid-pause")
 def paid_pause(request, data: PaidPauseIn):
     _admin(request)
-    _apply(pools.set_paid_pause, by_id=request.auth.pk, paused=data.paused)
+    _apply(pools.set_paid_pause, by_id=request.auth.pk, paused=data.paused, version=data.version)
     return _settings(request)
 
 

@@ -4,11 +4,10 @@ from decimal import Decimal
 
 import pytest
 from django.contrib.auth import get_user_model
-from django_ergo.bots import pools
 from django_ergo.conversation import spend_guard
 from django_ergo.conversation.models import SpendControlAudit, SpendFunding
 
-from ergonaut.apps.bots.tests.test_pools_api import approve, kitchen, login, send  # noqa: F401
+from ergonaut.apps.bots.tests.test_pools_api import approve, captured_authority, kitchen, login, send  # noqa: F401
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -28,7 +27,7 @@ def test_owner_sees_pending_then_explicitly_approves_and_revises_without_reset(c
         amount=Decimal("2"),
         user_id=owner.pk,
         fields={},
-        current=pools.SendAuthority(kitchen),
+        current=captured_authority(kitchen),
     )
     approve(client, amount="3")
     revised = client.get("/api/pools/paid/funding").json()
@@ -102,13 +101,20 @@ def test_other_user_and_grantee_cannot_read_funding_or_approve_it(client, kitche
 def test_pause_requires_admin_and_retains_consent(client, kitchen):  # noqa: F811 -- imported pytest fixture
     login(client, "lee")
     approve(client)
-    assert send(client, "post", "/api/pools/paid-pause", {"paused": True}).status_code == 403
+    assert send(client, "post", "/api/pools/paid-pause", {"paused": True, "version": ""}).status_code == 403
     client.logout()
     admin = login(client, "root", admin=True)
-    assert send(client, "post", "/api/pools/paid-pause", {"paused": "false"}).status_code == 422
-    paused = send(client, "post", "/api/pools/paid-pause", {"paused": True})
+    assert send(client, "post", "/api/pools/paid-pause", {"paused": "false", "version": ""}).status_code == 422
+    version = client.get("/api/pools").json()["paid_pause_version"]
+    assert send(client, "post", "/api/pools/paid-pause", {"paused": True}).status_code == 422
+    paused = send(client, "post", "/api/pools/paid-pause", {"paused": True, "version": version})
     assert paused.status_code == 200 and paused.json()["paid_paused"]
     assert SpendFunding.objects.count() == 1
     assert SpendControlAudit.objects.filter(actor=admin, action="paid_pause").exists()
-    resumed = send(client, "post", "/api/pools/paid-pause", {"paused": False})
+    assert send(client, "post", "/api/pools/paid-pause", {"paused": False, "version": version}).status_code == 409
+    assert client.get("/api/pools").json()["paid_paused"]
+    assert SpendControlAudit.objects.filter(action="paid_pause").count() == 1
+    resumed = send(
+        client, "post", "/api/pools/paid-pause", {"paused": False, "version": paused.json()["paid_pause_version"]}
+    )
     assert resumed.status_code == 200 and not resumed.json()["paid_paused"]

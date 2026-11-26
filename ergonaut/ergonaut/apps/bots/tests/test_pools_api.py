@@ -65,6 +65,20 @@ def kitchen(tmp_path, monkeypatch):
     webhooks.set_registry(load_registry)
 
 
+def captured_authority(registry):
+    from types import SimpleNamespace
+
+    bot = registry.bots["kitchen"]
+    decision = SimpleNamespace(
+        route="openai/gpt-6.1-sol",
+        transport_identity=pools.transport_identity(registry.providers.providers["openai"], "gpt-6.1-sol"),
+        privacy=pools.privacy_for(bot),
+        bot_lineage=tuple(pools.lineage(bot)),
+        origin=(),
+    )
+    return pools.SendAuthority(bot, decision=decision)
+
+
 def login(client, name, *, admin=False):
     model = get_user_model()
     user = (model.objects.create_superuser if admin else model.objects.create_user)(name, f"{name}@example.com", "pw")
@@ -158,7 +172,7 @@ def test_config_edits_revise_the_owners_grant_without_resetting_its_spend(client
         amount=Decimal("1.5"),
         user_id=lee.pk,
         fields={},
-        current=pools.SendAuthority(kitchen),
+        current=captured_authority(kitchen),
     )
     kitchen.providers = parse_providers(PROVIDERS.replace("budget_usd: 5", "budget_usd: 50"))
     raised = next(p for p in client.get("/api/pools").json()["pools"] if p["name"] == "paid")

@@ -314,6 +314,7 @@ export type PoolSettings = {
   reset_times?: Record<string, Record<string, number>>
   editable?: boolean
   paid_paused?: boolean
+  paid_pause_version?: string
   enforcement_activated?: boolean
   admin?: boolean // may switch providers
   privacy?: { restricted: boolean; policies: string[]; label: string }
@@ -1227,7 +1228,8 @@ export const api = {
     request<PoolEnvelopeCandidates>('GET', `/pools/${encodeURIComponent(pool)}/envelope`),
   linkPoolEnvelope: (pool: string, body: { envelope?: string; fund?: boolean; restore?: boolean; note: string }) =>
     request<PoolSettings>('POST', `/pools/${encodeURIComponent(pool)}/envelope`, body),
-  setPaidPause: (paused: boolean) => request<PoolSettings>('POST', '/pools/paid-pause', { paused }),
+  setPaidPause: (paused: boolean, version: string) =>
+    request<PoolSettings>('POST', '/pools/paid-pause', { paused, version }),
   updatePoolPreferences: (body: {
     version: number
     active_pool?: string

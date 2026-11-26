@@ -430,6 +430,17 @@ function FundingControls({
   )
 }
 
+export function changePaidPause(
+  data: PoolSettings,
+  confirmResume: (message: string) => boolean,
+  send = api.setPaidPause,
+): Promise<PoolSettings> | null {
+  if (data.paid_pause_version === undefined) throw new Error('Pause state is missing; refresh the page.')
+  if (data.paid_paused && !confirmResume('Resume paid dispatch? Existing funding and holds remain in effect.'))
+    return null
+  return send(!data.paid_paused, data.paid_pause_version)
+}
+
 /** The Routing page's Pools section: order, toggles, budgets, the rollover gate, provider switches. */
 export function PoolsSection() {
   const [data, setData] = useState<PoolSettings | null>(null)
@@ -454,7 +465,10 @@ export function PoolsSection() {
       setError('')
     } catch (e) {
       setError(message(e))
-      load()
+      api
+        .pools()
+        .then(setData)
+        .catch(() => {})
     }
   }
   if (!data) return error ? <p className="text-sm text-danger">{error}</p> : null
@@ -500,7 +514,11 @@ export function PoolsSection() {
           <button
             type="button"
             className="self-start rounded-control border border-stroke px-3 py-1"
-            onClick={() => save(api.setPaidPause(!data.paid_paused))}
+            disabled={data.paid_pause_version === undefined}
+            onClick={() => {
+              const change = changePaidPause(data, message => window.confirm(message))
+              if (change) save(change)
+            }}
           >
             {data.paid_paused ? 'Resume paid dispatch' : 'Pause paid dispatch'}
           </button>
