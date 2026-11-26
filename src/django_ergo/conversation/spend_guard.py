@@ -20,11 +20,19 @@ One guarded call is one HTTP attempt: engines turn their SDK's own retries
 off under a guard, so a retry is another call with its own reservation.
 
 Spend authority is one :class:`~django_ergo.conversation.models.SpendGrant`
-(``bots.pools``): its id keys the ledger and the lock. Attempts are
-``InferenceRequest`` rows with ``pool`` ``grant:<id>`` and ``billing_mode``
-``metered``. A configured API key is never authority: a
-guard with ``deny_reason`` refuses every send (used for a metered route that
-was not selected through a pool).
+revision (``bots.pools``) of a
+:class:`~django_ergo.conversation.models.SpendEnvelope`. Attempts are
+``InferenceRequest`` rows with ``pool`` ``grant:<revision id>`` and
+``billing_mode`` ``metered``; the budget is checked against the envelope's
+cumulative total over all its revisions (revoked ones included, so uncertain
+holds stay counted), under the envelope's advisory lock. Under that lock
+every send also asks the caller's :class:`CurrentAuthority` for the
+authority as it is now (current providers.yaml owner, budget, window,
+routes and ceiling) and uses the intersection with the revision it was
+built or queued with: narrowing only. A config removal or ownership change
+therefore refuses guards that were already built. A configured API key is
+never authority: a guard with ``deny_reason`` refuses every send (used for a
+metered route that was not selected through a pool).
 
 Engine adapter contract
 -----------------------
@@ -65,6 +73,7 @@ from django.utils import timezone
 from django_ergo.conversation.inference_policy import SpendCapError
 
 if TYPE_CHECKING:
+    import datetime as dt
     from collections.abc import Awaitable
     from collections.abc import Callable
 
@@ -81,18 +90,45 @@ class SpendDenied(SpendCapError):  # noqa: N818
 
 
 def ledger_key(grant_id) -> str:
-    """The ledger (``InferenceRequest.pool``) and lock key of one grant."""
+    """The ledger key (``InferenceRequest.pool``) of the attempts one grant
+    revision authorized."""
     return f"{LEDGER_PREFIX}{grant_id}"[:64]
 
 
+def envelope_lock_key(envelope_id) -> str:
+    """The advisory lock every reservation on one envelope takes."""
+    return f"envelope:{envelope_id}"
+
+
+def _envelope_of(grant_id):
+    from django_ergo.conversation.models import SpendGrant
+
+    return (
+        SpendGrant.objects.filter(pk=grant_id)
+        .values_list("envelope_id", flat=True)
+        .first()
+    )
+
+
 def spent_and_reserved(grant_id) -> tuple[Decimal, Decimal]:
-    """(priced spend, outstanding reservations) of one grant, all time. Runs the ORM."""
+    """(priced spend, outstanding reservations) of the envelope ``grant_id``
+    is a revision of: every revision's attempts, all time, revoked revisions
+    included (their uncertain holds stay counted). Runs the ORM."""
     from django_ergo.conversation.models import InferenceOutcome
     from django_ergo.conversation.models import InferenceRequest
+    from django_ergo.conversation.models import SpendGrant
 
+    envelope = _envelope_of(grant_id)
+    revisions = (
+        SpendGrant.objects.filter(envelope_id=envelope).values_list("pk", flat=True)
+        if envelope is not None
+        else [grant_id]
+    )
     spent = Decimal(0)
     reserved = Decimal(0)
-    rows = InferenceRequest.objects.filter(pool=ledger_key(grant_id))
+    rows = InferenceRequest.objects.filter(
+        pool__in=[ledger_key(pk) for pk in revisions]
+    )
     for outcome, status, cost, held in rows.values_list(
         "outcome", "cost_status", "cost_usd", "reserved_usd"
     ):
@@ -105,12 +141,111 @@ def spent_and_reserved(grant_id) -> tuple[Decimal, Decimal]:
     return spent, reserved
 
 
-def _lock(grant_id) -> None:
+def lock(key: str) -> None:
+    """Take a transaction-scoped advisory lock (PostgreSQL; a no-op elsewhere)."""
     if connection.vendor == "postgresql":
         with connection.cursor() as cursor:
-            cursor.execute(
-                "SELECT pg_advisory_xact_lock(hashtext(%s))", [ledger_key(grant_id)]
-            )
+            cursor.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", [key])
+
+
+@dataclass(frozen=True)
+class Terms:
+    """What spend authority allows: one revision's terms, or the
+    intersection of several (``narrowed``)."""
+
+    routes: frozenset[str]
+    budget_usd: Decimal
+    per_launch_usd: Decimal | None
+    max_output_tokens: int
+    valid_from: dt.datetime
+    expires_at: dt.datetime
+
+    @classmethod
+    def of(cls, grant) -> Terms:
+        return cls(
+            routes=frozenset(grant.routes or ()),
+            budget_usd=grant.budget_usd,
+            per_launch_usd=grant.per_launch_usd,
+            max_output_tokens=int(grant.max_output_tokens),
+            valid_from=grant.valid_from,
+            expires_at=grant.expires_at,
+        )
+
+    def narrowed(self, other: Terms) -> Terms:
+        """Both at once: never wider than either."""
+        per_launch = (
+            None
+            if self.per_launch_usd is None or other.per_launch_usd is None
+            else min(self.per_launch_usd, other.per_launch_usd)
+        )
+        return Terms(
+            routes=self.routes & other.routes,
+            budget_usd=min(self.budget_usd, other.budget_usd),
+            per_launch_usd=per_launch,
+            max_output_tokens=min(self.max_output_tokens, other.max_output_tokens),
+            valid_from=max(self.valid_from, other.valid_from),
+            expires_at=min(self.expires_at, other.expires_at),
+        )
+
+
+class CurrentAuthority(Protocol):
+    """Re-reads spend authority as it is now (``bots.pools`` provides it).
+
+    Called under the envelope's lock with the revision a send was built or
+    queued with; returns the current authority's :class:`Terms`, or why
+    there is none any more (and may revoke revisions, which stay revoked
+    even though the send is refused). ``refresh()``, when present, is called
+    first, outside the lock (e.g. to reload changed config files)."""
+
+    def __call__(self, grant) -> Terms | str: ...
+
+
+def _authority(grant, user_id, current) -> tuple[Terms | None, str]:  # noqa: PLR0911
+    """(the terms a send may use, "") or (None, why not). Under the lock."""
+    if grant is None or grant.revoked_at is not None:
+        return None, "the spend grant was revoked"
+    if not user_id or grant.grantee_id != user_id:
+        return None, "the spend grant belongs to another user"
+    if (
+        grant.envelope.grantee_id != user_id
+        or grant.envelope.owner_id != grant.owner_id
+    ):
+        return None, "the spend grant belongs to another user"
+    if current is None:
+        return None, "the spend grant's current authority can't be re-read"
+    found = current(grant)
+    if isinstance(found, str):
+        return None, found
+    terms = Terms.of(grant).narrowed(found)
+    now = timezone.now()  # after re-reading: a revision made just now counts
+    if now < terms.valid_from:
+        return None, f"the spend grant starts {terms.valid_from:%Y-%m-%d %H:%M} UTC"
+    if now >= terms.expires_at:
+        return None, f"the spend grant expired {terms.expires_at:%Y-%m-%d %H:%M} UTC"
+    if pool_switched_off(grant.pool):
+        return None, f"pool {grant.pool!r} is switched off"
+    return terms, ""
+
+
+def authorize(*, grant_id, user_id, current: CurrentAuthority | None) -> Terms:
+    """The terms a send on ``grant_id`` may use now (under the envelope's
+    lock; revocations it makes are kept), or SpendDenied. Runs the ORM."""
+    from django_ergo.conversation.models import SpendGrant
+
+    envelope = _envelope_of(grant_id)
+    if envelope is None:
+        msg = "the spend grant was revoked; refusing to send"
+        raise SpendDenied(msg)
+    with transaction.atomic():
+        lock(envelope_lock_key(envelope))
+        grant = (
+            SpendGrant.objects.select_related("envelope").filter(pk=grant_id).first()
+        )
+        terms, problem = _authority(grant, user_id, current)
+    if problem:
+        msg = f"{problem}; refusing to send"
+        raise SpendDenied(msg)
+    return terms
 
 
 def pool_switched_off(name: str) -> bool:
@@ -433,7 +568,7 @@ ADAPTERS = {
 }
 
 
-def reserve(  # noqa: PLR0913, C901
+def reserve(  # noqa: PLR0913, PLR0912, C901
     *,
     grant_id,
     provider: str,
@@ -441,11 +576,17 @@ def reserve(  # noqa: PLR0913, C901
     amount: Decimal | None,
     user_id,
     fields: dict,
+    current: CurrentAuthority | None = None,
+    output_tokens: int | None = None,
+    launch: bool = False,
 ) -> object:
-    """Reserve ``amount`` against one grant and record the attempt;
-    SpendDenied (nothing recorded) when it can't. Under the grant's lock it
-    re-reads the grant (revoked, window, grantee, routes, ceiling), the
-    pool's and the provider's switches. Returns the row's pk."""
+    """Reserve ``amount`` against the envelope of revision ``grant_id`` and
+    record the attempt; SpendDenied (nothing recorded) when it can't. Under
+    the envelope's lock it re-reads the revision (revoked, grantee), asks
+    ``current`` for the authority as it is now and intersects the two
+    (routes, window, budget, output ceiling, per-launch amount), checks the
+    pool's and the provider's switches, and compares ``amount`` with the
+    envelope's cumulative spend and holds. Returns the row's pk."""
     from django_ergo.conversation.models import InferenceRequest
     from django_ergo.conversation.models import SpendGrant
 
@@ -458,45 +599,51 @@ def reserve(  # noqa: PLR0913, C901
     if grant_id is None:
         msg = f"{ref} bills per token and no spend grant covers it; refusing to send"
         raise SpendDenied(msg)
+    envelope = _envelope_of(grant_id)
+    if envelope is None:
+        msg = f"{ref}: the spend grant was revoked; refusing to send"
+        raise SpendDenied(msg)
+    msg = ""
     with transaction.atomic():
-        _lock(grant_id)
-        grant = SpendGrant.objects.filter(pk=grant_id).first()
-        now = timezone.now()
-        problem = ""
-        if grant is None or grant.revoked_at is not None:
-            problem = "the spend grant was revoked"
-        elif not user_id or grant.grantee_id != user_id:
-            problem = "the spend grant belongs to another user"
-        elif ref not in (grant.routes or []):
-            problem = f"the spend grant doesn't cover {ref}"
-        elif now < grant.valid_from:
-            problem = f"the spend grant starts {grant.valid_from:%Y-%m-%d %H:%M} UTC"
-        elif now >= grant.expires_at:
-            problem = f"the spend grant expired {grant.expires_at:%Y-%m-%d %H:%M} UTC"
-        elif pool_switched_off(grant.pool):
-            problem = f"pool {grant.pool!r} is switched off"
-        elif provider_switched_off(provider):
-            problem = f"provider {provider!r} is switched off"
-        if problem:
-            msg = f"{ref}: {problem}; refusing to send"
-            raise SpendDenied(msg)
-        spent, held = spent_and_reserved(grant_id)
-        if spent + held + amount > grant.budget_usd:
-            msg = (
-                f"Pool {grant.pool!r} grant is at its budget: ${spent:.4f} spent and "
-                f"${held:.4f} reserved, this request could cost up to ${amount:.4f}, "
-                f"budget ${grant.budget_usd}; refusing to send"
-            )
-            raise SpendDenied(msg)
-        row = InferenceRequest.objects.create(
-            pool=ledger_key(grant_id),
-            provider=provider[:32],
-            model=model[:200],
-            billing_mode="metered",
-            reserved_usd=amount,
-            cost_status="pending",
-            **fields,
+        lock(envelope_lock_key(envelope))
+        grant = (
+            SpendGrant.objects.select_related("envelope").filter(pk=grant_id).first()
         )
+        terms, problem = _authority(grant, user_id, current)
+        if not problem:
+            if ref not in terms.routes:
+                problem = f"the spend grant doesn't cover {ref}"
+            elif output_tokens is not None and output_tokens > terms.max_output_tokens:
+                problem = f"the output ceiling is now {terms.max_output_tokens} tokens"
+            elif launch and (
+                terms.per_launch_usd is None or amount > terms.per_launch_usd
+            ):
+                problem = "the launch amount is over the grant's per-launch limit"
+            elif provider_switched_off(provider):
+                problem = f"provider {provider!r} is switched off"
+        if problem:
+            # Leave the block normally: revocations made while re-reading stay.
+            msg = f"{ref}: {problem}; refusing to send"
+        else:
+            spent, held = spent_and_reserved(grant_id)
+            if spent + held + amount > terms.budget_usd:
+                msg = (
+                    f"Pool {grant.pool!r} grant is at its budget: ${spent:.4f} spent "
+                    f"and ${held:.4f} reserved, this request could cost up to "
+                    f"${amount:.4f}, budget ${terms.budget_usd}; refusing to send"
+                )
+            else:
+                row = InferenceRequest.objects.create(
+                    pool=ledger_key(grant_id),
+                    provider=provider[:32],
+                    model=model[:200],
+                    billing_mode="metered",
+                    reserved_usd=amount,
+                    cost_status="pending",
+                    **fields,
+                )
+    if msg:
+        raise SpendDenied(msg)
     return row.pk
 
 
@@ -532,7 +679,8 @@ class MeteredGuard:
     pool: str
     provider: str
     model: str
-    grant_id: object = None  # the SpendGrant every send reserves against
+    grant_id: object = None  # the SpendGrant revision every send reserves under
+    current: CurrentAuthority | None = None  # re-reads authority at each send
     price: ExactPrice | None = None
     max_output_tokens: int = 16_000
     bot: str = ""
@@ -565,8 +713,22 @@ class MeteredGuard:
                 f"{sent_model or 'an unnamed model'!r}; refusing to send"
             )
             raise SpendDenied(msg)
+        if self.grant_id is None:
+            msg = (
+                f"{self.provider}/{self.model} bills per token and no spend grant "
+                "covers it; refusing to send"
+            )
+            raise SpendDenied(msg)
+        refresh = getattr(self.current, "refresh", None)
+        if callable(refresh):
+            await sync_to_async(refresh, thread_sensitive=True)()
+        # The current authority's ceiling, before bounding (reserve re-checks).
+        terms = await sync_to_async(authorize, thread_sensitive=True)(
+            grant_id=self.grant_id, user_id=self.user_id, current=self.current
+        )
+        ceiling = min(self.max_output_tokens, terms.max_output_tokens)
         try:
-            bound = adapter.bound(kwargs, self.max_output_tokens)
+            bound = adapter.bound(kwargs, ceiling)
         except UnsupportedRequest as exc:
             msg = f"Pool {self.pool!r} can't bound this request's cost: {exc}; refusing to send"
             raise SpendDenied(msg) from exc
@@ -602,6 +764,8 @@ class MeteredGuard:
             amount=amount,
             user_id=self.user_id,
             fields=fields,
+            current=self.current,
+            output_tokens=bound.output_tokens,
         )
         try:
             response = await send()
@@ -641,10 +805,11 @@ def reserve_launch(  # noqa: PLR0913
     bot: str = "",
     session_id=None,
     user_id=None,
+    current: CurrentAuthority | None = None,
 ) -> object:
     """Reserve a metered coding-agent launch's per-launch cap against its
-    grant (kept until reconciled: the agent's own usage isn't priced here).
-    Runs the ORM."""
+    grant's envelope (kept until reconciled: the agent's own usage isn't
+    priced here). Runs the ORM."""
     if amount is None:
         msg = f"Pool {pool!r} has no per_launch_usd, so a metered coding launch can't be bounded; refusing"
         raise SpendDenied(msg)
@@ -654,6 +819,8 @@ def reserve_launch(  # noqa: PLR0913
         model=model,
         amount=amount,
         user_id=user_id,
+        current=current,
+        launch=True,
         fields={
             "bot_name": bot[:100],
             "selector": f"{provider}/{model}"[:200],

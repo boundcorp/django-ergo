@@ -1362,21 +1362,59 @@ class ModelPoolState(models.Model):
         return self.name
 
 
-class SpendGrant(models.Model):
-    """Spend authority on a pool's metered routes, for one user (``grantee``),
-    issued by the pool's owner (``bots.pools``). Immutable: changing the
-    amount, routes or window issues a new grant (a new identity and a new
-    ledger) and revokes the old one, whose ledger stays. Every metered send
-    reserves against exactly one grant's ``budget_usd`` under a lock keyed by
-    its id, and re-checks its grantee, routes, window and revocation.
+class SpendEnvelope(models.Model):
+    """The stable spending identity behind a line of spend authority
+    (``bots.pools``): one cumulative ledger and one lock for every revision
+    (:class:`SpendGrant`) of that authority. Spend and reservations (held
+    and uncertain ones included) are summed over all its revisions, revoked
+    ones too, and every reservation takes the advisory lock ``lock_key``.
 
-    ``source`` is ``config`` for the owner's own grant derived from the pool's
-    providers.yaml ``budget_usd``/``expires`` (``config_key`` fingerprints
-    it), or ``issued`` for one made at runtime."""
-
-    IMMUTABLE_AFTER_CREATE = frozenset({"revoked_at", "revoked_reason"})
+    ``key`` is ``config:<pool>:<owner id>`` for the owner's own authority
+    derived from providers.yaml: editing, removing and restoring the config
+    revise and revoke revisions of the same envelope, so its money is never
+    replenished by a config change. A runtime-issued grant is its own
+    envelope (``issued:<grant id>``): a new funded grant needs that explicit,
+    authenticated issue."""
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    key = models.CharField(max_length=160, unique=True)
+    pool = models.CharField(max_length=64, db_index=True)
+    source = models.CharField(max_length=16, default="issued")
+    owner = models.ForeignKey(User, on_delete=models.CASCADE, related_name="+")
+    grantee = models.ForeignKey(User, on_delete=models.CASCADE, related_name="+")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return self.key
+
+    @property
+    def lock_key(self) -> str:
+        return f"envelope:{self.pk}"
+
+
+class SpendGrant(models.Model):
+    """One immutable revision of spend authority on a pool's metered routes,
+    for one user (``grantee``), issued by the pool's owner (``bots.pools``).
+    Changing the amount, routes or window makes a new revision. Revisions of
+    the same authority share a :class:`SpendEnvelope`: its cumulative ledger
+    and its lock. A superseded revision (``superseded_at``) still bounds
+    queued work that captured it, intersected with the current revision; a
+    revoked one authorizes nothing. Every metered send reserves against the
+    envelope under its lock and re-checks the grantee, the current config,
+    routes, window, ceiling and revocation.
+
+    ``source`` is ``config`` for the owner's own revision derived from the
+    pool's providers.yaml ``budget_usd``/``expires`` (``config_key``
+    fingerprints it), or ``issued`` for one made at runtime."""
+
+    IMMUTABLE_AFTER_CREATE = frozenset(
+        {"revoked_at", "revoked_reason", "superseded_at"}
+    )
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    envelope = models.ForeignKey(
+        SpendEnvelope, on_delete=models.CASCADE, related_name="revisions"
+    )
     pool = models.CharField(max_length=64, db_index=True)
     owner = models.ForeignKey(
         User, on_delete=models.CASCADE, related_name="issued_spend_grants"
@@ -1404,16 +1442,10 @@ class SpendGrant(models.Model):
     )
     revoked_at = models.DateTimeField(null=True, blank=True)
     revoked_reason = models.CharField(max_length=200, blank=True, default="")
+    superseded_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         ordering = ["-created_at"]
-        constraints = [
-            models.UniqueConstraint(
-                fields=["config_key"],
-                condition=~models.Q(config_key=""),
-                name="spend_grant_config_key_unique",
-            ),
-        ]
 
     def __str__(self):
         return f"{self.pool} grant {self.pk} for user {self.grantee_id}"
@@ -1424,6 +1456,21 @@ class SpendGrant(models.Model):
             if fields is None or set(fields) - self.IMMUTABLE_AFTER_CREATE:
                 msg = "A spend grant is immutable; revoke it and issue a new one"
                 raise ValueError(msg)
+        elif self.envelope_id is None:
+            if self.source == "config":
+                msg = "A config grant is a revision of its pool owner's envelope"
+                raise ValueError(msg)
+            # A grant issued on its own is a new authorization: its own envelope.
+            with transaction.atomic():
+                self.envelope = SpendEnvelope.objects.create(
+                    key=f"issued:{self.pk}",
+                    pool=self.pool,
+                    source=self.source,
+                    owner_id=self.owner_id,
+                    grantee_id=self.grantee_id,
+                )
+                super().save(*args, **kwargs)
+            return
         super().save(*args, **kwargs)
 
 

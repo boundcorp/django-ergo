@@ -358,19 +358,40 @@ def current_policy() -> dict | None:
     return _job_policy.get()
 
 
-def _config_grant(pool: Pool, providers: Providers, owner_id):
-    """The owner's own grant from the pool's providers.yaml budget and expiry,
-    materialized once per distinct configuration (a changed budget, window
-    or route set is a new grant; the previous one is revoked)."""
+# -- spend authority: envelopes and their revisions --------------------------------
+#
+# A SpendEnvelope is one line of spend authority with one cumulative ledger
+# and one lock; its SpendGrant rows are immutable revisions. The owner's own
+# authority from providers.yaml is the envelope ``config:<pool>:<owner id>``:
+# editing the config adds a revision (the previous one is superseded),
+# removing the budget or the pool, or moving the pool to another owner,
+# revokes every revision, and restoring it adds a revision to the SAME
+# envelope, so no config change ever replenishes money. Only issue_grant (an
+# authenticated, explicit act) funds a new envelope.
+
+CONFIG_SOURCE = "config"
+# revoked_reason prefix of revocations made by following providers.yaml (any
+# other revocation was a person's, and config sync never undoes it).
+SYNC_REVOKED = "config sync: "
+
+
+def config_envelope_key(pool: str, owner_id) -> str:
+    return f"config:{pool}:{owner_id}"
+
+
+def _config_terms(pool: Pool, providers: Providers, owner_id) -> dict | None:
+    """The revision providers.yaml grants the pool's owner now (with its
+    ``config_key`` fingerprint), or None when it grants nothing."""
     import hashlib
     import json
 
-    from django.db import IntegrityError
-    from django.db import transaction
-
-    from django_ergo.conversation.models import SpendGrant
-
-    if pool.budget_usd is None or pool.expires_at is None or owner_id is None:
+    if (
+        pool.legacy
+        or not pool.metered
+        or pool.budget_usd is None
+        or pool.expires_at is None
+        or owner_id is None
+    ):
         return None
     routes = pool_refs(providers, pool, metered=True)
     fingerprint = json.dumps(
@@ -384,44 +405,214 @@ def _config_grant(pool: Pool, providers: Providers, owner_id):
             pool.expires_at.isoformat(),
         ]
     )
-    key = hashlib.sha256(fingerprint.encode()).hexdigest()
-    found = SpendGrant.objects.filter(config_key=key).first()
-    if found is not None:
-        return found
+    return {
+        "routes": routes,
+        "budget_usd": pool.budget_usd,
+        "per_launch_usd": pool.per_launch_usd,
+        "max_output_tokens": pool.max_output_tokens,
+        "expires_at": pool.expires_at,
+        "config_key": hashlib.sha256(fingerprint.encode()).hexdigest(),
+    }
+
+
+def _current_revision(envelope_id):
+    from django_ergo.conversation.models import SpendGrant
+
+    return (
+        SpendGrant.objects.filter(
+            envelope_id=envelope_id, revoked_at__isnull=True, superseded_at__isnull=True
+        )
+        .order_by("-created_at")
+        .first()
+    )
+
+
+def _revoke_envelope(envelope_id, reason: str, now) -> None:
+    from django_ergo.conversation.models import SpendGrant
+
+    SpendGrant.objects.filter(envelope_id=envelope_id, revoked_at__isnull=True).update(
+        revoked_at=now, revoked_reason=reason[:200]
+    )
+
+
+def _envelope_problem(envelope, providers: Providers, owners: dict) -> str:
+    """Why current providers.yaml no longer backs ``envelope``, or ""."""
+    pool = providers.pools.get(envelope.pool)
+    if pool is None or pool.legacy:
+        return f"pool {envelope.pool!r} was removed from providers.yaml"
+    owner_id = owners.get(pool.owner) if pool.owner else None
+    if owner_id is None or owner_id != envelope.owner_id:
+        return f"pool {envelope.pool!r} has another owner now"
+    if envelope.source == CONFIG_SOURCE and (
+        envelope.grantee_id != owner_id
+        or _config_terms(pool, providers, owner_id) is None
+    ):
+        return (
+            f"providers.yaml no longer sets a budget and expiry for {envelope.pool!r}"
+        )
+    return ""
+
+
+def _settle(envelope, providers: Providers, owners: dict, now):
+    """Bring one envelope in line with current providers.yaml, under its
+    lock (the caller holds it): revoke every revision when the config no
+    longer backs it, or add a revision when the owner's config terms
+    changed. (current revision or None, why none). Runs the ORM."""
+    from django_ergo.conversation.models import SpendGrant
+
+    problem = _envelope_problem(envelope, providers, owners)
+    if problem:
+        _revoke_envelope(envelope.pk, SYNC_REVOKED + problem, now)
+        return None, problem
+    current = _current_revision(envelope.pk)
+    if envelope.source != CONFIG_SOURCE:
+        return current, "" if current is not None else "the spend grant was revoked"
+    pool = providers.pools.get(envelope.pool)
+    terms = _config_terms(pool, providers, envelope.owner_id)
+    if current is not None and current.config_key == terms["config_key"]:
+        return current, ""
+    if current is None:
+        newest = (
+            SpendGrant.objects.filter(envelope_id=envelope.pk)
+            .order_by("-created_at")
+            .first()
+        )
+        if (
+            newest is not None
+            and newest.config_key == terms["config_key"]
+            and not newest.revoked_reason.startswith(SYNC_REVOKED)
+        ):
+            # A person revoked these exact terms; only a providers.yaml
+            # change (new terms) issues a revision again.
+            return None, "the spend grant was revoked"
+    revision = SpendGrant.objects.create(
+        envelope=envelope,
+        pool=envelope.pool,
+        owner_id=envelope.owner_id,
+        grantee_id=envelope.owner_id,
+        valid_from=now,
+        source=CONFIG_SOURCE,
+        **terms,
+    )
+    SpendGrant.objects.filter(
+        envelope_id=envelope.pk, revoked_at__isnull=True, superseded_at__isnull=True
+    ).exclude(pk=revision.pk).update(superseded_at=now)
+    revision.refresh_from_db()  # values as stored (time zone handling included)
+    return revision, ""
+
+
+def sync_authority(providers: Providers, owners: dict | None = None) -> None:
+    """Make stored spend authority match current providers.yaml: revoke
+    revisions whose pool is gone, has another owner, or (config) no longer
+    sets a budget; add the owner's config revision when it changed. Each
+    envelope is settled in its own transaction under its own lock (one at a
+    time). Cheap when nothing changed. Runs the ORM."""
+    from django.db import transaction
+
+    from django_ergo.conversation.models import SpendEnvelope
+    from django_ergo.conversation.models import SpendGrant
+    from django_ergo.conversation.spend_guard import envelope_lock_key
+    from django_ergo.conversation.spend_guard import lock
+
+    if providers.pools.legacy:
+        return
+    owners = owner_ids(providers) if owners is None else owners
+    live = list(
+        SpendGrant.objects.filter(revoked_at__isnull=True).select_related("envelope")
+    )
+    unsettled = {
+        g.envelope_id: g.envelope
+        for g in live
+        if _envelope_problem(g.envelope, providers, owners)
+    }
+    for pool in providers.pools.pools:
+        owner_id = owners.get(pool.owner) if pool.owner else None
+        terms = _config_terms(pool, providers, owner_id)
+        if terms is None:
+            continue
+        key = config_envelope_key(pool.name, owner_id)
+        if any(
+            g.envelope.key == key
+            and g.superseded_at is None
+            and g.config_key == terms["config_key"]
+            for g in live
+        ):
+            continue
+        envelope, _ = SpendEnvelope.objects.get_or_create(
+            key=key,
+            defaults={
+                "pool": pool.name,
+                "source": CONFIG_SOURCE,
+                "owner_id": owner_id,
+                "grantee_id": owner_id,
+            },
+        )
+        unsettled[envelope.pk] = envelope
     now = timezone.now()
-    try:
+    for envelope_id in sorted(unsettled, key=str):
         with transaction.atomic():
-            grant = SpendGrant.objects.create(
-                pool=pool.name,
-                owner_id=owner_id,
-                grantee_id=owner_id,
-                routes=routes,
-                budget_usd=pool.budget_usd,
-                per_launch_usd=pool.per_launch_usd,
-                max_output_tokens=pool.max_output_tokens,
-                valid_from=now,
-                expires_at=pool.expires_at,
-                source="config",
-                config_key=key,
-            )
-            for old in SpendGrant.objects.filter(
-                pool=pool.name, source="config", revoked_at__isnull=True
-            ).exclude(pk=grant.pk):
-                old.revoked_at = now
-                old.revoked_reason = "providers.yaml changed"
-                old.save(update_fields=["revoked_at", "revoked_reason"])
-    except IntegrityError:  # another process materialized it first
-        return SpendGrant.objects.filter(config_key=key).first()
-    return grant
+            lock(envelope_lock_key(envelope_id))
+            _settle(unsettled[envelope_id], providers, owners, now)
+
+
+def live_providers(source) -> Providers:
+    """The providers.yaml in effect now for ``source``: a ``Providers`` as
+    given, or a bot's registry as most recently reloaded in this process."""
+    if hasattr(source, "pools") and hasattr(source, "providers"):
+        return source
+    registry = getattr(source, "registry", None)
+    latest = getattr(registry, "latest", None)
+    if callable(latest):
+        registry = latest()
+    return registry.providers if registry is not None else source.providers
+
+
+class SendAuthority:
+    """``spend_guard.CurrentAuthority`` for a guard or launch built from a
+    bot (or a ``Providers``): at each send, under the envelope's lock, it
+    re-reads providers.yaml as it is now, settles the envelope (revoking it
+    if the config no longer backs it) and returns the current revision's
+    terms, narrowed to the routes and output ceiling the pool has now."""
+
+    def __init__(self, source):
+        self.source = source
+
+    def refresh(self) -> None:
+        """Let this process's reloading registry pick up changed bot files
+        (outside the lock: a reload reads files)."""
+        from django_ergo.bots import webhooks
+
+        webhooks.refresh_registry()
+
+    def __call__(self, grant):
+        from django_ergo.conversation.spend_guard import Terms
+
+        providers = live_providers(self.source)
+        if providers.pools.legacy:
+            return "providers.yaml no longer configures pools"
+        current, problem = _settle(
+            grant.envelope, providers, owner_ids(providers), timezone.now()
+        )
+        if current is None:
+            return problem
+        pool = providers.pools.get(grant.pool)
+        terms = Terms.of(current)
+        return replace(
+            terms,
+            routes=terms.routes & set(pool_refs(providers, pool, metered=True)),
+            max_output_tokens=min(terms.max_output_tokens, pool.max_output_tokens),
+        )
 
 
 def active_grant(pool: Pool, providers: Providers, user_id, owner_id=None):
-    """The newest unrevoked grant on ``pool`` for ``user_id`` (even if expired
-    or not yet valid: :meth:`PoolView.grant_problem` says why it can't be
-    used), or None. With a job policy, only the grant it captured. Runs the ORM."""
+    """This user's current revision on ``pool`` from its current owner (even
+    if expired or not yet valid: :meth:`PoolView.grant_problem` says why it
+    can't be used), or None. With a job policy, only the revision it
+    captured (sends intersect it with the current one). Runs the ORM; call
+    :func:`sync_authority` first."""
     from django_ergo.conversation.models import SpendGrant
 
-    if not user_id or pool.legacy:
+    if not user_id or pool.legacy or owner_id is None:
         return None
     policy = current_policy()
     if policy is not None:
@@ -429,12 +620,16 @@ def active_grant(pool: Pool, providers: Providers, user_id, owner_id=None):
         captured = policy.get("grant") or ""
         if policy.get("pool") != pool.name or not captured:
             return None
-        return SpendGrant.objects.filter(pk=captured, grantee_id=user_id).first()
-    if owner_id is not None and owner_id == user_id:
-        _config_grant(pool, providers, owner_id)
+        return SpendGrant.objects.filter(
+            pk=captured, grantee_id=user_id, owner_id=owner_id
+        ).first()
     return (
         SpendGrant.objects.filter(
-            pool=pool.name, grantee_id=user_id, revoked_at__isnull=True
+            pool=pool.name,
+            grantee_id=user_id,
+            owner_id=owner_id,
+            revoked_at__isnull=True,
+            superseded_at__isnull=True,
         )
         .order_by("-created_at")
         .first()
@@ -602,6 +797,7 @@ def _views(providers: Providers, user_id=None) -> list[PoolView]:
     except DatabaseError:  # pragma: no cover
         states = {}
     owners = owner_ids(providers) if not providers.pools.legacy else {}
+    sync_authority(providers, owners)
     views = []
     for index, pool in enumerate(providers.pools.pools):
         owner_id = owners.get(pool.owner) if pool.owner else None
@@ -922,6 +1118,7 @@ class Decision:
             provider=self.provider,
             model=self.model,
             grant_id=self.grant_id,
+            current=SendAuthority(bot),
             price=found.price if found else None,
             max_output_tokens=self.max_output_tokens,
             bot=bot.name,
@@ -1781,6 +1978,7 @@ def select_agent(  # noqa: C901, PLR0913, PLR0915
             bot=bot.name,
             session_id=getattr(session, "pk", None),
             user_id=user_id,
+            current=SendAuthority(bot),
         )
         decision.reserved_usd = decision.per_launch_usd
     if record:
@@ -1847,6 +2045,7 @@ def revalidate_launch(bot: Bot, session, confined: dict) -> Decision:
         bot=bot.name,
         session_id=getattr(session, "pk", None),
         user_id=getattr(session, "user_id", None),
+        current=SendAuthority(bot),
     )
     decision.reserved_usd = view.per_launch_usd
     decision.receipt_id = _record(
@@ -2028,7 +2227,9 @@ def issued_grants(view: PoolView) -> list[dict]:
 
     if not view.is_owner:
         return []
-    rows = SpendGrant.objects.filter(pool=view.name, revoked_at__isnull=True)
+    rows = SpendGrant.objects.filter(
+        pool=view.name, revoked_at__isnull=True, superseded_at__isnull=True
+    )
     return [_grant_view(g) for g in rows.order_by("-created_at")[:50]]
 
 

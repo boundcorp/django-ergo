@@ -91,7 +91,7 @@ pools:
 | `routes`            | Provider names (all their models) or `provider/model`.                                                                                                          |
 | `tiers`             | Optional. Without it a tier is the global tier's candidates that are in the pool, else the built-in catalog (`DEFAULT_TIER_MODELS`) over the pool's models.     |
 | `agents`            | Optional coding candidates, like the global `agents` but allowed to name metered providers. Without it: the global agents in the pool, else derived from tiers. |
-| `budget_usd`        | The owner's own spend grant on the pool's metered routes. Changing it (or `expires`, `per_launch_usd`, the routes) issues a new grant with its own ledger.      |
+| `budget_usd`        | The owner's own spend grant on the pool's metered routes. Changing it (or `expires`, `per_launch_usd`, the routes) adds a revision; spend stays cumulative.     |
 | `expires`           | Date or ISO date-time (UTC). Required with `budget_usd`. After it the grant can't be used and its guards refuse.                                                |
 | `per_launch_usd`    | Reserved against the grant for each metered coding launch (and each resumed run). At most `budget_usd`.                                                         |
 | `max_output_tokens` | Output ceiling: every metered request's output limit is clamped to it (and to the grant's) before reserving.                                                    |
@@ -130,11 +130,30 @@ providers.yaml stays the source of what exists.
 A grant (`SpendGrant`) is the only spend authority. It names the pool, its
 owner, the grantee, the exact `provider/model` routes, `budget_usd`,
 `per_launch_usd`, `max_output_tokens` and `valid_from`/`expires_at` (both
-required). Grants are immutable: a new grant for the same grantee and pool
-revokes the old one, and the old ledger stays. The owner's own grant comes
-from the pool's providers.yaml `budget_usd`/`expires` (materialized on first
-use, `source: config`); the owner (or an admin) issues grants to other users
-with `pools.issue_grant` (Ergonaut: the Pools page). A grantee sees the pool,
+required). Grant rows are immutable **revisions** of a **spending envelope**
+(`SpendEnvelope`): the envelope is the stable identity that holds the
+cumulative ledger and the lock, and every revision of it shares both.
+
+- **The owner's own authority** comes from the pool's providers.yaml
+  `budget_usd`/`expires` (`source: config`), in the envelope
+  `config:<pool>:<owner id>`. Editing those settings (or the pool's routes or
+  ceiling) adds a revision and supersedes the previous one. Removing the
+  budget, removing the pool, or moving the pool to another `owner` revokes
+  every revision at once, including the one a running guard holds, and
+  revokes the grants the previous owner issued. Restoring the config, or
+  lowering and then raising the budget, adds a revision to the **same**
+  envelope: what was spent or held before still counts, so a config change
+  never replenishes money. If a person revokes the owner's config revision,
+  config sync doesn't issue the same terms again; only a providers.yaml
+  change does.
+- **Issued grants**: the owner (or an admin) issues grants to other users
+  with `pools.issue_grant` (Ergonaut: the Pools page). Each is a new, funded
+  envelope: that explicit, authenticated act is the only way to start a
+  fresh ledger. A new grant for the same grantee and pool revokes the old
+  one, whose ledger stays.
+
+The current config is applied whenever pools are read (`pools.snapshot`)
+and again at every send (below). A grantee sees the pool,
 can pick it, and uses only their grant's routes, within their grant's
 budget. Their spend totals are theirs alone: listings show a user only their
 own grant (an owner also sees the grants they issued), never another user's
@@ -216,10 +235,15 @@ configured:
   adapter, is refused (`unguarded`) at selection and again when the engine
   is built, for every consumer;
 - the engine carries a spend guard (`conversation.spend_guard`) for the
-  decision's grant. For each attempt it re-reads the grant under its
-  PostgreSQL advisory lock (revoked? within its window? this user? this
-  route?) and the pool and provider switches, clamps the output limit to the
-  pool's (and grant's) ceiling, asks the adapter for a bound on the request,
+  decision's grant revision. For each attempt, under its envelope's
+  PostgreSQL advisory lock, it re-reads the revision (revoked? this user?),
+  re-reads providers.yaml as it is now (the process's most recently reloaded
+  registry: pool, owner, budget, expiry, routes, ceiling; revoking the
+  envelope if the config no longer backs it), and uses the **intersection**
+  of the revision it holds with the current one (narrowing only: the lower
+  budget and ceiling, the earlier expiry, the common routes). It checks the
+  pool and provider switches, clamps the output limit to that ceiling, asks
+  the adapter for a bound on the request,
   reserves the worst case at the exact tariff (the dearest input rate that
   can apply: cache writes, the long-context tier), and refuses (no HTTP)
   when it can't;
@@ -234,10 +258,12 @@ configured:
   non-text input (images, audio, files, remote URLs), server-side tools (web
   search), several choices, audio output and other billing-changing options.
 
-Attempts are `InferenceRequest` rows with `pool` `grant:<id>` and
-`billing_mode` `metered`, so the existing cost ledger and Costs page see
-them. Spend counts toward the grant's `budget_usd` for all time; a new
-grant starts a new ledger.
+Attempts are `InferenceRequest` rows with `pool` `grant:<revision id>`
+and `billing_mode` `metered`, so the existing cost ledger and Costs page
+see them. Spend and holds count toward the envelope for all time, summed
+over all its revisions (revoked ones too): an uncertain hold stays counted
+after revocation, and a request already sent keeps its hold. Only a newly
+issued grant starts a new ledger.
 
 ### The spend adapter contract (for new engines)
 
@@ -276,8 +302,10 @@ Background tasks (`ctx.tasks`) and durable workers capture, when they are
 queued, the pool new work would use, the user's grant on it and the
 revision (`pools.capture_policy`), and run under it (`pools.policy_scope`)
 in whichever process picks them up. That can only narrow: a revoked grant,
-a switched-off pool or provider refuses; a later, wider user choice or a new
-grant is never picked up, and queued work never rolls over.
+a switched-off pool or provider refuses; each send intersects the captured
+revision with the current config (a later, smaller budget applies, a larger
+one doesn't); a later, wider user choice or a new grant is never picked up,
+and queued work never rolls over.
 
 ## Coding agents
 

@@ -77,6 +77,21 @@ def test_a_broken_providers_reload_keeps_private_membership_but_disables_pools(b
     assert "providers.yaml" in registry.failed
 
 
+def test_a_bot_from_before_a_reload_reads_the_current_providers(bots_dir):
+    """A running turn's spend guard holds a bot of the old registry; at each send it
+    re-reads providers.yaml through the registry that replaced it."""
+    from django_ergo.bots import pools
+
+    providers = bots_dir / "providers.yaml"
+    providers.write_text("providers:\n  openai:\n    type: openai\n    models: [gpt-6-sol]\n")
+    registry = ReloadingRegistry(check_every=0)
+    old = registry.get("boundcorp")
+    providers.write_text("providers:\n  openai:\n    type: openai\n    models: [gpt-6-luna]\n")
+    assert [m.id for m in registry.providers.models()] == ["openai/gpt-6-luna"]
+    assert old is not registry.get("boundcorp")
+    assert [m.id for m in pools.live_providers(old).models()] == ["openai/gpt-6-luna"]
+
+
 def test_unchanged_files_are_not_reloaded(bots_dir):
     loads = []
 

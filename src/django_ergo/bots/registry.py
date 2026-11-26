@@ -174,6 +174,17 @@ class BotRegistry:
         self.failed: dict[str, str] = {}
         # Engines and models chats may use (providers.yaml).
         self.providers = Providers()
+        # The registry that replaced this one when the bot files were reloaded.
+        self.successor: BotRegistry | None = None
+
+    def latest(self) -> BotRegistry:
+        """This registry, or the newest one that replaced it (a reload): a
+        bot built earlier reads current config through it (spend checks)."""
+        found, seen = self, set()
+        while found.successor is not None and id(found) not in seen:
+            seen.add(id(found))
+            found = found.successor
+        return found
 
     def add(self, bot: Bot) -> Bot:
         if bot.name in self.bots:

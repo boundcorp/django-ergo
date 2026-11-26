@@ -554,6 +554,7 @@ def test_reservations_are_serialized_under_concurrency():
                 amount=Decimal("0.40"),
                 user_id=owner.pk,
                 fields={"bot_name": "devbox", "selector": "openai/gpt-6.1-sol"},
+                current=pools.SendAuthority(providers),
             )
             results.append("ok")
         except spend_guard.SpendDenied:
@@ -585,6 +586,7 @@ def test_guard_rereads_the_grant_at_send_time(user):
             amount=Decimal("0.01"),
             user_id=who.pk,
             fields={"bot_name": "x", "selector": "x"},
+            current=pools.SendAuthority(providers),
         )
 
     small = grant(providers, user, budget="0.0001")

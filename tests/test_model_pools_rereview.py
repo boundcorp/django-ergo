@@ -6,14 +6,19 @@ network or paid inference: providers and usage are synthetic.
 
 from __future__ import annotations
 
+import threading
 from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
+from asgiref.sync import async_to_sync
 from django.contrib.auth import get_user_model
+from django.db import connection
 
 from django_ergo.bots import pools
+from django_ergo.bots.providers import parse_providers
 from django_ergo.conversation import spend_guard
+from django_ergo.conversation.models import InferenceRequest
 from django_ergo.pricing import ExactPrice
 from tests.test_model_pools import POOLS
 from tests.test_model_pools import chat
@@ -24,72 +29,318 @@ from tests.test_model_pools import registry_of
 User = get_user_model()
 
 
-def _paid_grant(text, user_id):
-    _, bots = registry_of(text)
-    return pools.snapshot(bots["devbox"].providers, user_id).get("paid").grant
+# -- N1: one spending envelope per config-derived authority --------------------
+#
+# providers.yaml edits add revisions to the owner's envelope and removals or
+# ownership moves revoke it; restoring continues the same cumulative ledger.
+# Every send re-reads the current config under the envelope's lock and uses
+# the intersection with the revision it was built or queued with.
+
+PAID_BUDGET = "    budget_usd: 10\n"
+NO_BUDGET = POOLS.replace(PAID_BUDGET, "").replace("    per_launch_usd: 2\n", "")
 
 
-# -- N1: providers.yaml changes don't narrow the owner's config grant ----------
+def _config(text):
+    """A registry on ``text`` and its devbox bot."""
+    registry, bots = registry_of(text)
+    return registry, bots["devbox"]
 
 
-@pytest.mark.xfail(strict=True, reason="N1 config grant accounting remains unresolved")
+def _own(providers, user):
+    return pools.snapshot(providers, user.pk).get("paid")
+
+
+def _hold(grant_row, user, amount, providers):
+    """Reserve ``amount`` on the paid OpenAI route (a held, unpriced attempt)."""
+    return spend_guard.reserve(
+        grant_id=grant_row.pk,
+        provider="openai",
+        model="gpt-6.1-sol",
+        amount=Decimal(amount),
+        user_id=user.pk,
+        fields={"bot_name": "devbox", "selector": "openai/gpt-6.1-sol"},
+        current=pools.SendAuthority(providers),
+    )
+
+
+def _guard(bot, user):
+    """A spend guard built the way a turn builds one, on the paid route."""
+    session = chat(bot, user)
+    pools.update_preference(
+        user.pk,
+        bot.providers,
+        version=getattr(pools.preference(user.pk), "version", 0),
+        active_pool="paid",
+    )
+    decision = pools.select_route(bot, session, ref="openai/gpt-6.1-sol")
+    assert decision.metered
+    return decision.guard(bot, session)
+
+
+def _send(guard):
+    async def send():
+        return SimpleNamespace(id="mock", usage=None)  # usage unknown: hold kept
+
+    return async_to_sync(guard.call)(
+        {"model": "gpt-6.1-sol", "messages": [{"role": "user", "content": "hi"}]},
+        "max_completion_tokens",
+        send,
+    )
+
+
 @pytest.mark.django_db
-def test_rr_config_revert_keeps_the_wider_intermediate_grant():
-    """A (budget 10) -> B (budget 1000) -> A again: the owner still holds B's
-    $1000 grant, because A's fingerprint finds its old (revoked) row and no
-    new grant is created, while the newest unrevoked grant is B's."""
+def test_rr_config_revert_continues_the_same_envelope():
+    """A ($10) -> B ($1000) -> A: the owner's authority is A's terms again,
+    as a new revision of the same envelope; nothing spent or held under A
+    is forgotten, and B's wider budget is gone."""
     lee = User.objects.create(username="lee")
-    a = _paid_grant(POOLS, lee.pk)
-    assert a.budget_usd == 10
+    a = _own(parse_providers(POOLS), lee).grant
+    _hold(a, lee, "6", parse_providers(POOLS))
     wide = POOLS.replace("budget_usd: 10", "budget_usd: 1000")
-    b = _paid_grant(wide, lee.pk)
-    assert b.budget_usd == 1000
+    b = _own(parse_providers(wide), lee).grant
+    assert b.budget_usd == 1000 and b.envelope_id == a.envelope_id
     a.refresh_from_db()
-    assert a.revoked_at is not None
-    reverted = _paid_grant(POOLS, lee.pk)  # config says 10 again
-    assert reverted.budget_usd == 10
-    assert reverted.pk != b.pk
+    assert a.superseded_at is not None and a.revoked_at is None
+    reverted = _own(parse_providers(POOLS), lee)
+    assert reverted.grant.budget_usd == 10
+    assert reverted.grant.pk not in (a.pk, b.pk)
+    assert reverted.grant.envelope_id == a.envelope_id
+    assert (reverted.spent_usd, reverted.reserved_usd) == (Decimal(0), Decimal(6))
+    with pytest.raises(spend_guard.SpendDenied, match="at its budget"):
+        _hold(reverted.grant, lee, "5", parse_providers(POOLS))
+    _hold(reverted.grant, lee, "4", parse_providers(POOLS))
+    # B's revision, held by a guard built under B, is held to A's terms now.
+    with pytest.raises(spend_guard.SpendDenied, match="at its budget"):
+        _hold(b, lee, "1", parse_providers(POOLS))
 
 
-@pytest.mark.xfail(strict=True, reason="N1 config grant accounting remains unresolved")
 @pytest.mark.django_db
-def test_rr_removing_the_config_budget_keeps_spend_authority():
-    """Deleting budget_usd/expires (the owner's own grant) from providers.yaml
-    leaves the old config grant active: nothing revokes it."""
+def test_rr_removing_the_config_budget_revokes_spend_authority():
+    """Deleting budget_usd from providers.yaml revokes the owner's authority:
+    selection refuses, and a guard built before the edit refuses its next
+    send. Restoring the budget continues the same envelope, with the
+    earlier hold still counted."""
+    registry, bot = _config(POOLS)
     lee = User.objects.create(username="lee")
-    old = _paid_grant(POOLS, lee.pk)
-    no_budget = POOLS.replace("    budget_usd: 10\n", "").replace(
+    old = _own(bot.providers, lee).grant
+    guard = _guard(bot, lee)
+    _send(guard)  # one attempt with unknown usage: its hold stays
+    held = spend_guard.spent_and_reserved(old.pk)[1]
+    assert held > 0
+    registry.providers = parse_providers(NO_BUDGET)  # the edit, live
+    with pytest.raises(spend_guard.SpendDenied, match="no longer sets a budget"):
+        _send(guard)  # already built: the send re-reads the config
+    old.refresh_from_db()
+    assert old.revoked_at is not None
+    view = _own(bot.providers, lee)
+    assert view.grant is None and view.grant_problem() is not None
+    with pytest.raises(pools.PoolRefusal):
+        pools.select_route(bot, chat(bot, lee), ref="openai/gpt-6.1-sol")
+    registry.providers = parse_providers(POOLS)  # restored
+    restored = _own(bot.providers, lee)
+    assert restored.grant.envelope_id == old.envelope_id
+    assert restored.grant.pk != old.pk
+    assert restored.reserved_usd == held  # the uncertain hold stays counted
+    with pytest.raises(spend_guard.SpendDenied):
+        _send(guard)  # the revoked revision never comes back
+
+
+@pytest.mark.django_db
+def test_rr_lowering_then_raising_the_budget_never_replenishes():
+    """10 -> 5 -> 10 with $4 held: the cumulative total carries across every
+    revision, so raising the budget again leaves $6, not $10."""
+    lee = User.objects.create(username="lee")
+    first = _own(parse_providers(POOLS), lee).grant
+    _hold(first, lee, "4", parse_providers(POOLS))
+    lower = POOLS.replace("budget_usd: 10", "budget_usd: 5")
+    low = _own(parse_providers(lower), lee)
+    assert low.grant.budget_usd == 5 and low.reserved_usd == 4
+    with pytest.raises(spend_guard.SpendDenied, match="at its budget"):
+        _hold(low.grant, lee, "2", parse_providers(lower))
+    again = _own(parse_providers(POOLS), lee)
+    assert again.grant.budget_usd == 10
+    assert {first.envelope_id, low.grant.envelope_id} == {again.grant.envelope_id}
+    with pytest.raises(spend_guard.SpendDenied, match="at its budget"):
+        _hold(again.grant, lee, "6.01", parse_providers(POOLS))
+    _hold(again.grant, lee, "6", parse_providers(POOLS))
+
+
+@pytest.mark.django_db
+def test_rr_ownership_move_revokes_the_previous_owners_authority():
+    """owner: lee -> bob. lee no longer sees or spends on the pool (a guard
+    built before the move refuses), the grants lee issued are revoked, and
+    bob's authority is his own envelope. Moving it back to lee continues
+    lee's envelope; the grants stay revoked."""
+    registry, bot = _config(POOLS)
+    lee = User.objects.create(username="lee")
+    bob = User.objects.create(username="bob")
+    friend = User.objects.create(username="friend")
+    old = _own(bot.providers, lee).grant
+    issued = grant(bot.providers, friend, budget="3")
+    guard = _guard(bot, lee)
+    _send(guard)
+    moved = POOLS.replace("    owner: lee\n", "    owner: bob\n")
+    registry.providers = parse_providers(moved)
+    with pytest.raises(spend_guard.SpendDenied, match="another owner"):
+        _send(guard)
+    assert _own(bot.providers, lee) is None
+    session = chat(bot, lee)
+    with pytest.raises(pools.PoolRefusal):  # lee's pick of paid is stale now
+        pools.select_route(bot, session, ref="openai/gpt-6.1-sol")
+    with pytest.raises(PermissionError):
+        pools.update_preference(lee.pk, bot.providers, version=1, active_pool="paid")
+    for row in (old, issued):
+        row.refresh_from_db()
+        assert row.revoked_at is not None
+    bobs = _own(bot.providers, bob).grant
+    assert bobs.envelope_id != old.envelope_id
+    assert spend_guard.spent_and_reserved(bobs.pk) == (Decimal(0), Decimal(0))
+    registry.providers = parse_providers(POOLS)
+    back = _own(bot.providers, lee)
+    assert back.grant.envelope_id == old.envelope_id and back.reserved_usd > 0
+    issued.refresh_from_db()
+    assert issued.revoked_at is not None
+    assert _own(bot.providers, friend) is None
+
+
+@pytest.mark.django_db
+def test_rr_revoked_issued_grant_refuses_an_already_built_guard():
+    registry, bot = _config(POOLS)
+    lee = User.objects.create(username="lee")
+    friend = User.objects.create(username="friend")
+    issued = grant(bot.providers, friend, budget="3")
+    guard = _guard(bot, friend)
+    assert guard.grant_id == issued.pk
+    _send(guard)
+    pools.revoke_grant(bot.providers, issued.pk, by_id=lee.pk)
+    with pytest.raises(spend_guard.SpendDenied, match="revoked"):
+        _send(guard)
+
+
+@pytest.mark.django_db
+def test_rr_a_person_revoking_config_terms_isnt_undone_by_sync():
+    """The owner gives up their config revision: config sync doesn't mint
+    the same terms again; only a providers.yaml change does (same envelope)."""
+    lee = User.objects.create(username="lee")
+    providers = parse_providers(POOLS)
+    own = _own(providers, lee).grant
+    pools.revoke_grant(providers, own.pk, by_id=lee.pk)
+    assert _own(providers, lee).grant is None
+    later = POOLS.replace("expires: 2099-12-31", "expires: 2099-06-30")
+    renewed = _own(parse_providers(later), lee).grant
+    assert renewed.envelope_id == own.envelope_id
+
+
+@pytest.mark.django_db
+def test_rr_queued_work_intersects_its_revision_with_the_current_config():
+    """A job captured revision A ($10, 16k output). The config then narrows
+    to $5 and a 100-token ceiling: the job's sends use the narrower terms.
+    Widening the config to $1000 never widens the job past A's $10."""
+    registry, bot = _config(POOLS)
+    lee = User.objects.create(username="lee")
+    captured = _own(bot.providers, lee).grant
+    narrow = POOLS.replace("budget_usd: 10", "budget_usd: 5").replace(
+        "    per_launch_usd: 2\n", "    per_launch_usd: 2\n    max_output_tokens: 100\n"
+    )
+    registry.providers = parse_providers(narrow)
+    terms = spend_guard.authorize(
+        grant_id=captured.pk, user_id=lee.pk, current=pools.SendAuthority(bot)
+    )
+    assert (terms.budget_usd, terms.max_output_tokens) == (5, 100)
+    with pytest.raises(spend_guard.SpendDenied, match="at its budget"):
+        _hold(captured, lee, "6", registry.providers)
+    registry.providers = parse_providers(
+        POOLS.replace("budget_usd: 10", "budget_usd: 1000")
+    )
+    terms = spend_guard.authorize(
+        grant_id=captured.pk, user_id=lee.pk, current=pools.SendAuthority(bot)
+    )
+    assert terms.budget_usd == 10
+    with pytest.raises(spend_guard.SpendDenied, match="at its budget"):
+        _hold(captured, lee, "11", registry.providers)
+
+
+@pytest.mark.django_db
+def test_rr_a_guard_reads_the_config_of_the_reloaded_registry():
+    """Ergonaut reloads bot files into a new registry; a guard built from a
+    bot of the old one follows ``successor`` to the current config."""
+    registry, bot = _config(POOLS)
+    lee = User.objects.create(username="lee")
+    guard = _guard(bot, lee)
+    reloaded, _ = registry_of(NO_BUDGET)
+    registry.successor = reloaded
+    with pytest.raises(spend_guard.SpendDenied, match="no longer sets a budget"):
+        _send(guard)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_rr_concurrent_reservations_across_revisions_share_one_lock():
+    """Two revisions of one envelope (a superseded one still held by queued
+    work, and the current one), $1 each, four $0.40 attempts at once:
+    exactly two fit, because both take the envelope's lock and total."""
+    if connection.vendor != "postgresql":
+        pytest.skip("advisory locks need PostgreSQL")
+    lee = User.objects.create(username="lee")
+    one = POOLS.replace("budget_usd: 10", "budget_usd: 1").replace(
         "    per_launch_usd: 2\n", ""
     )
-    _, bots = registry_of(no_budget)
-    bot = bots["devbox"]
-    assert bot.providers.pools.get("paid").budget_usd is None
-    view = pools.snapshot(bot.providers, lee.pk).get("paid")
-    assert view.grant is None
-    assert view.grant_problem() is not None
-    session = chat(bot, lee)
-    pools.update_preference(lee.pk, bot.providers, version=0, active_pool="paid")
-    decision = pools.select_route(bot, session, ref="auto/medium")
-    assert decision.metered and decision.grant_id == old.pk
+    first = _own(parse_providers(one), lee).grant
+    tighter = one.replace("    tiers: {", "    max_output_tokens: 8000\n    tiers: {")
+    providers = parse_providers(tighter)
+    second = _own(providers, lee).grant
+    assert second.envelope_id == first.envelope_id and second.pk != first.pk
+    results = []
+    barrier = threading.Barrier(4)
+
+    def attempt(revision):
+        from django.db import connections
+
+        barrier.wait()
+        try:
+            _hold(revision, lee, "0.40", providers)
+            results.append("ok")
+        except spend_guard.SpendDenied:
+            results.append("denied")
+        finally:
+            connections.close_all()
+
+    threads = [
+        threading.Thread(target=attempt, args=(r,))
+        for r in (first, second, first, second)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert sorted(results) == ["denied", "denied", "ok", "ok"]
+    assert spend_guard.spent_and_reserved(first.pk) == (Decimal(0), Decimal("0.80"))
 
 
-@pytest.mark.xfail(strict=True, reason="N1 config grant accounting remains unresolved")
 @pytest.mark.django_db
-def test_rr_previous_owner_keeps_the_pool_after_ownership_moves():
-    """owner: lee -> owner: bob. lee's config grant (spending what is now
-    bob's authority) stays active, so lee still sees and spends on the pool."""
+def test_rr_uncertain_holds_stay_counted_after_revocation():
+    """A send that timed out keeps its hold through revocation, ownership
+    moves and restoration: every later revision of the envelope counts it."""
+    registry, bot = _config(POOLS)
     lee = User.objects.create(username="lee")
-    User.objects.create(username="bob")
-    old = _paid_grant(POOLS, lee.pk)
-    moved = POOLS.replace("    owner: lee\n", "    owner: bob\n")
-    _, bots = registry_of(moved)
-    bot = bots["devbox"]
-    view = pools.snapshot(bot.providers, lee.pk).get("paid")
-    assert view is None
-    session = chat(bot, lee)
-    pools.update_preference(lee.pk, bot.providers, version=0, active_pool="paid")
-    decision = pools.select_route(bot, session, ref="auto/medium")
-    assert decision.metered and decision.grant_id == old.pk
+    guard = _guard(bot, lee)
+
+    async def timeout():
+        msg = "mock uncertain send"
+        raise TimeoutError(msg)
+
+    with pytest.raises(TimeoutError):
+        async_to_sync(guard.call)(
+            {"model": "gpt-6.1-sol", "messages": []}, "max_completion_tokens", timeout
+        )
+    row = InferenceRequest.objects.get(billing_mode="metered")
+    assert row.cost_status == "unknown" and row.reserved_usd > 0
+    registry.providers = parse_providers(NO_BUDGET)
+    assert _own(bot.providers, lee).grant is None
+    row.refresh_from_db()
+    assert row.cost_status == "unknown"  # revocation never releases a hold
+    registry.providers = parse_providers(POOLS)
+    restored = _own(bot.providers, lee)
+    assert restored.reserved_usd == row.reserved_usd
 
 
 # -- N2: the first pool in order is entered without its entry approval -------
@@ -254,50 +505,146 @@ def test_rr_reorder_keeps_hidden_pools_in_place():
     assert pools.preference(friend.pk).order == ["paid", "subs"]
 
 
-# -- Positive control: the 0059 migration from a main-0058 DB, and back --------
+# -- Migrations: 0059 then 0060 from a main-0058 DB, the backfill, and back -----
+
+
+def _executor():
+    from django.db.migrations.executor import MigrationExecutor
+
+    executor = MigrationExecutor(connection)
+    executor.loader.build_graph()
+    return executor
+
+
+def _to_leaves():
+    executor = _executor()
+    executor.migrate(executor.loader.graph.leaf_nodes())
+
+
+POOL_TABLES = {
+    "django_ergo_spendgrant",
+    "django_ergo_spendenvelope",
+    "django_ergo_modelpoolstate",
+    "django_ergo_modelpoolpreference",
+    "django_ergo_routedecision",
+}
+LEAF = ("django_ergo", "0060_spend_envelopes")
 
 
 @pytest.mark.django_db(transaction=True)
-def test_rr_migration_0059_upgrades_from_main_0058_and_reverses():
-    from django.db import connection
-    from django.db.migrations.executor import MigrationExecutor
-
+def test_rr_migrations_upgrade_from_main_0058_and_reverse():
     from django_ergo.conversation.models import AgentLaunch
 
-    tables = {
-        "django_ergo_spendgrant",
-        "django_ergo_modelpoolstate",
-        "django_ergo_modelpoolpreference",
-        "django_ergo_routedecision",
-    }
-
     def present():
-        return tables & set(connection.introspection.table_names())
+        return POOL_TABLES & set(connection.introspection.table_names())
 
-    executor = MigrationExecutor(connection)
-    leaf = ("django_ergo", "0059_model_pools")
-    main = ("django_ergo", "0058_agent_launch_intent")
-    expected = {
-        m._meta.db_table
-        for m in __import__("django.apps")
-        .apps.apps.get_app_config("django_ergo")
-        .get_models()
-        if m.__module__.endswith("conversation.models")
-        and m.__name__
-        in ("SpendGrant", "ModelPoolState", "ModelPoolPreference", "RouteDecision")
-    }
-    tables.clear()
-    tables.update(expected)
-    assert len(tables) == 4 and present() == tables
+    assert present() == POOL_TABLES
     try:
-        executor.migrate([main])  # reverse 0059 to main's leaf
+        _executor().migrate([("django_ergo", "0058_agent_launch_intent")])
         assert present() == set()
         assert AgentLaunch._meta.db_table in connection.introspection.table_names()
-        executor = MigrationExecutor(connection)
-        assert executor.migration_plan([leaf])  # 0059 pending on a main DB
-        executor.migrate([leaf])
-        assert present() == tables
+        executor = _executor()
+        plan = [m.name for m, _ in executor.migration_plan([LEAF])]
+        assert plan == ["0059_model_pools", "0060_spend_envelopes"]
+        executor.migrate([LEAF])
+        assert present() == POOL_TABLES
     finally:
-        executor = MigrationExecutor(connection)
-        executor.loader.build_graph()
-        executor.migrate(executor.loader.graph.leaf_nodes())
+        _to_leaves()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_rr_0060_backfills_envelopes_conservatively_and_reverses():
+    """Config grants of one pool and owner join one envelope (their spend
+    and holds all count); an issued grant is its own; no ledger row changes.
+    Reversing revokes superseded revisions and clears repeated config keys
+    so 0059's unique constraint comes back."""
+    import datetime as dt
+
+    from django.utils import timezone
+
+    before = ("django_ergo", "0059_model_pools")
+    try:
+        executor = _executor()
+        executor.migrate([before])
+        apps = executor.loader.project_state([before]).apps
+        user = apps.get_model(*settings_user().split("."))
+        grant_model = apps.get_model("django_ergo", "SpendGrant")
+        request_model = apps.get_model("django_ergo", "InferenceRequest")
+        lee = user.objects.create(username="lee")
+        friend = user.objects.create(username="friend")
+        now = timezone.now()
+        common = {
+            "pool": "paid",
+            "owner_id": lee.pk,
+            "routes": ["openai/gpt-6.1-sol"],
+            "max_output_tokens": 100,
+            "valid_from": now,
+            "expires_at": now + dt.timedelta(days=7),
+        }
+        old = grant_model.objects.create(
+            grantee_id=lee.pk,
+            budget_usd=10,
+            source="config",
+            config_key="a",
+            revoked_at=now,
+            **common,
+        )
+        new = grant_model.objects.create(
+            grantee_id=lee.pk,
+            budget_usd=1000,
+            source="config",
+            config_key="b",
+            **common,
+        )
+        issued = grant_model.objects.create(
+            grantee_id=friend.pk, budget_usd=3, **common
+        )
+        for row, amount in ((old, 4), (new, 1), (issued, 2)):
+            request_model.objects.create(
+                pool=spend_guard.ledger_key(row.pk),
+                provider="openai",
+                model="gpt-6.1-sol",
+                billing_mode="metered",
+                reserved_usd=Decimal(amount),
+                cost_status="unknown",
+            )
+        executor = _executor()
+        executor.migrate([LEAF])
+        from django_ergo.conversation.models import SpendGrant
+
+        rows = {g.pk: g for g in SpendGrant.objects.select_related("envelope")}
+        assert rows[old.pk].envelope_id == rows[new.pk].envelope_id
+        assert rows[old.pk].envelope.key == f"config:paid:{lee.pk}"
+        assert rows[issued.pk].envelope.key == f"issued:{issued.pk}"
+        assert rows[old.pk].revoked_at is not None  # nothing un-revoked
+        assert spend_guard.spent_and_reserved(new.pk) == (Decimal(0), Decimal(5))
+        assert spend_guard.spent_and_reserved(issued.pk) == (Decimal(0), Decimal(2))
+        # A later revision with a repeated fingerprint, superseding "b".
+        SpendGrant.objects.filter(pk=new.pk).update(superseded_at=now)
+        SpendGrant.objects.create(
+            envelope_id=rows[new.pk].envelope_id,
+            grantee_id=lee.pk,
+            budget_usd=10,
+            source="config",
+            config_key="a",
+            **common,
+        )
+        executor = _executor()
+        executor.migrate([before])
+        apps = executor.loader.project_state([before]).apps
+        grant_model = apps.get_model("django_ergo", "SpendGrant")
+        assert grant_model.objects.get(pk=new.pk).revoked_at is not None
+        keys = list(
+            grant_model.objects.exclude(config_key="").values_list(
+                "config_key", flat=True
+            )
+        )
+        assert sorted(keys) == ["a", "b"]
+    finally:
+        _to_leaves()
+
+
+def settings_user() -> str:
+    from django.conf import settings
+
+    return settings.AUTH_USER_MODEL
