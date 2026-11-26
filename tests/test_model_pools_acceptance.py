@@ -1095,3 +1095,24 @@ def test_r13_orca_launch_journals_its_pool_receipt_once(launch_env, monkeypatch)
     assert len(selected) == 1
     assert launch_env[2] == calls
     assert Worker.objects.count() == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_r12_tasks_queued_from_async_code_capture_their_policy(monkeypatch):
+    from django_ergo.bots import background
+
+    _, bots = registry_of()
+    bot = bots["devbox"]
+    captured = {}
+    monkeypatch.setattr(
+        background.api_settings,
+        "BOT_TASK_RUNNER",
+        lambda b, n, a, k: captured.update(kwargs=k) or SimpleNamespace(),
+    )
+    bot.tasks["probe"] = lambda: None
+
+    async def queue():
+        background.BotTasks(bot).start("probe")
+
+    async_to_sync(queue)()
+    assert captured["kwargs"][background.POLICY_KWARG]["pool"] == "subs"

@@ -136,6 +136,26 @@ def _queued_by():
     return session, getattr(call, "user_id", None) or getattr(session, "user_id", None)
 
 
+def _captured_policy(bot) -> dict:
+    """``pools.capture_policy`` for the turn queueing work. It reads the
+    database, so from async code (a coroutine tool) it runs on a worker
+    thread with this context (the current call and origin) copied."""
+    import asyncio
+    import contextvars
+
+    from django_ergo.bots import pools
+
+    def capture():
+        return pools.capture_policy(bot, *_queued_by())
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return capture()
+    context = contextvars.copy_context()
+    return _pool.submit(context.run, capture).result()
+
+
 class BotTasks:
     """``ctx.tasks``: start a bot's ``@bot_task`` functions in the background."""
 
@@ -157,7 +177,7 @@ class BotTasks:
         if origin := pools.current_origin():
             # Persisted with the job, whichever runner (Celery) executes it.
             kwargs = {**kwargs, PRIVACY_KWARG: list(origin)}
-        if policy := pools.capture_policy(self.bot, *_queued_by()):
+        if policy := _captured_policy(self.bot):
             kwargs = {**kwargs, POLICY_KWARG: policy}
         runner = api_settings.BOT_TASK_RUNNER
         if runner is None:
