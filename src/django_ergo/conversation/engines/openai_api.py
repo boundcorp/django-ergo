@@ -227,7 +227,18 @@ class OpenAIAPIEngine(StoredMessagesMixin, Engine):
         )
         self.model = config.get("model", DEFAULT_OPENAI_MODEL)
         self.api_key = config.get("api_key")
-        self.base_url = config.get("base_url")
+        self.base_url = effective_openai_base_url(
+            config.get("base_url") or config.get("api_base") or config.get("endpoint")
+        )
+        from django_ergo.conversation.transport_identity import identity
+
+        self._transport_identity = identity(
+            "openai",
+            "api",
+            config,
+            account=config.get("_pool_account", ""),
+            model=self.model,
+        )
         self.temperature = config.get("temperature", 0.7)
         self.max_tokens = config.get("max_tokens", 32000)
         # Reasoning models only; GPT-6 tool calls always use "none".
@@ -285,13 +296,25 @@ class OpenAIAPIEngine(StoredMessagesMixin, Engine):
         the pool's budget can't cover it."""
         guard = getattr(self, "spend_guard", None)
         if guard is not None:
+            guard.check_transport(self._transport_identity)
             return await guard.call(
                 kwargs, self.spend_adapter, lambda: self._send_completion(kwargs)
             )
+        from django_ergo.conversation.spend_guard import check_unguarded_dispatch
+
+        await check_unguarded_dispatch()
         return await self._send_completion(kwargs)
 
     async def _send_completion(self, kwargs: dict):
         client = self._get_client()
+        if guard := getattr(self, "spend_guard", None):
+            from django_ergo.conversation.transport_identity import with_endpoint
+
+            guard.check_transport(
+                with_endpoint(
+                    self._transport_identity, getattr(client, "base_url", self.base_url)
+                )
+            )
         assert_public_endpoint(
             getattr(client, "base_url", ""), what="The OpenAI API engine"
         )

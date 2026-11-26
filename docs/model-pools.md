@@ -74,7 +74,7 @@ pools:
     label: Paid API
     owner: lee # username; required when the pool has a metered route
     routes: [openai, anthropic/claude-opus-5-5]
-    budget_usd: 50 # the owner's own grant: its ceiling (all time, for this grant)
+    budget_usd: 50 # configured ceiling only; explicit funding is still required
     expires: 2026-12-31 # required with budget_usd; the grant ends here
     per_launch_usd: 5 # reserved per metered coding-agent launch
     max_output_tokens: 16000 # ceiling every metered request is clamped to
@@ -134,19 +134,23 @@ required). Grant rows are immutable **revisions** of a **spending envelope**
 (`SpendEnvelope`): the envelope is the stable identity that holds the
 cumulative ledger and the lock, and every revision of it shares both.
 
-- **The owner's own authority** comes from the pool's providers.yaml
-  `budget_usd`/`expires` (`source: config`), in the envelope
-  `config:<pool>:<owner id>`. Editing those settings (or the pool's routes or
-  ceiling) adds a revision and supersedes the previous one. Removing the
-  budget, removing the pool, or moving the pool to another `owner` revokes
-  every revision at once, including the one a running guard holds.
-  Restoring the config, or lowering and then raising the budget, adds a
-  revision to the **same** envelope: what was spent or held before still
-  counts, so a config change never replenishes money. If a person revokes
-  the owner's config revision (a kill switch), no config edit issues it
-  again, not even a narrowing one; only an admin's
-  `pools.link_config_envelope(..., restore=True)` restores it, on the same
-  envelope (a continuation or an approval of accounts never does).
+- **The owner's own authority requires explicit funding.** A configured
+  `budget_usd`/`expires` is only a ceiling. Config sync creates an **unfunded**
+  envelope; it cannot create consent. The owner or an authenticated admin must
+  call `approve_funding` (Ergonaut: the Funding form) with a positive cumulative
+  dollar cap, a future expiry, and a nonempty selection of exact account/model
+  identities. The amount and expiry fields start empty: the application never
+  fills in a person's authorization. Each approval stores the actor, terms and
+  audit on the same envelope. Its effective grant intersects the approved cap,
+  window and accounts with current config. Raising a config ceiling, adding a
+  route, changing accounts, or reloading never increases that approval.
+  Lowering and restoring a ceiling may return only to the independently approved
+  limit; every earlier spent, pending and unknown amount still counts.
+  Funding revisions never reset use. Human revocation survives funding changes,
+  config changes and continuation; only an admin's distinct **Restore** action
+  lifts it. Restoration alone never funds an envelope.
+  Pre-upgrade rows receive **no** inferred funding: they deny until reviewed and
+  explicitly reconciled. The migration pauses existing pool-governed installs.
 - **The envelope outlives the pool's name.** Each config envelope records
   the metered accounts it has funded (provider names, `api_key_env` names,
   `account` names; the list only grows). A pool with no envelope yet whose
@@ -166,16 +170,15 @@ cumulative ledger and the lock, and every revision of it shares both.
     envelope or to fund it separately (explicit new money, recorded with
     who did it and when).
 
-  Only accounts no envelope has ever funded get a new envelope from config
-  sync, from the pool's `budget_usd`, and a pool with no identifiable
-  metered account gets none. An account identity is the provider's name,
-  its `api_key_env` (the SDK's default variable when it names none) and its
-  `account`. A pool whose envelope later grows onto an account another
-  envelope already funds stops spending until an admin approves it (`fund`
-  on its existing envelope; an admin's continuation approves the pool's
-  accounts too). A pool switched off at runtime stays off under its new
-  name, and a provider switched off at runtime stays off for metered sends
-  under a new provider name on the same account.
+  New accounts can receive an empty envelope, never config-created money.
+  Parentless issued history blocks automatic creation because its ledger cannot
+  safely be attributed. An admin must reconcile such history through the
+  separate continuation/funding workflow. **Continue existing family** preserves
+  its funding and ledger; **Prepare separate family** records an admin decision
+  but leaves it unfunded until explicit amount/window/account approval. A
+  continuation never expands the approved account set. **Restore** only lifts
+  revocation. These are distinct operations with separate audit events.
+  Runtime switches continue to follow pool/provider renames.
 - **Issued grants**: the owner (or an admin) issues grants to other users
   with `pools.issue_grant` (Ergonaut: the Pools page). Each is a new
   envelope **drawn from the owner's config envelope** (its `parent`):
@@ -490,10 +493,30 @@ The model picker lists only what the chat may use: the active pool's models
    admin restores it.
 2. Add `pools:` (owners, prices, budgets with an end date) to providers.yaml;
    check the Routing page's Pools section; issue grants there.
-3. Rollback: remove the `pools:` section (behavior returns to legacy at the
-   next reload), or revert the deploy; the new tables can stay. Provider
-   switches set in the UI also apply in legacy mode; clear them on the
-   Routing page.
+3. Rollback is a **paid-dispatch pause**, retaining schema, pools, grants,
+   funding revisions and every unknown hold. An authenticated admin can use
+   `set_paid_pause(paused=True)` (Ergonaut: Pause paid dispatch); this is a
+   code-only control until an operator authorizes its use. Every guarded send
+   and legacy OpenAI/Claude API attempt rechecks the pause. Do not remove pools,
+   clear switches or serve pre-guard code to regain capacity. First pool
+   activation sets a durable latch; removing pools afterwards refuses new paid
+   routing and unguarded API sends. Never-activated legacy installations retain
+   legacy compatibility while the latch is verifiably unactivated. If the state
+   or schema cannot be read, paid sends deny.
+4. Migration 0062 adds explicit funding, its audit, and the durable latch after
+   0061. Existing envelopes activate the latch and start paused; no funding is
+   backfilled. Schema upgrade/reversal is a maintenance procedure under an
+   independently enforced paid-egress pause across every dispatch role. Reversing
+   the migration removes protections from older code: the in-schema pause cannot
+   protect a process running code that predates it. Keep external paid egress
+   blocked for rollback, preserve a database backup with all ledgers, and do not
+   resume before installing guard-capable code and reconciling consent/holds.
+5. Paid coding remains unsupported. Native CLI flags, the latch and this pause
+   are not certification of arbitrary subprocess/plugin egress. Google #406 must
+   be rebased with its signature migration renamed to 0063 after the core 0062;
+   its adapter must call the shared `MeteredGuard.check_transport` hook using
+   immutable non-secret identity before each attempt. No activation is authorized
+   by this implementation or its local test results.
 
 ## Example for boundcorp/ergo-bots
 

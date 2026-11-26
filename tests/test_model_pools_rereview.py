@@ -22,6 +22,7 @@ from django_ergo.bots.providers import parse_providers
 from django_ergo.conversation import spend_guard
 from django_ergo.conversation.models import InferenceRequest
 from django_ergo.pricing import ExactPrice
+from tests.pool_funding import fund
 from tests.test_model_pools import POOLS
 from tests.test_model_pools import chat
 from tests.test_model_pools import environment  # noqa: F401 -- fake keys and CLIs
@@ -96,11 +97,12 @@ def test_rr_config_revert_continues_the_same_envelope():
     as a new revision of the same envelope; nothing spent or held under A
     is forgotten, and B's wider budget is gone."""
     lee = User.objects.create(username="lee")
+    fund(parse_providers(POOLS), lee)
     a = _own(parse_providers(POOLS), lee).grant
     _hold(a, lee, "6", parse_providers(POOLS))
     wide = POOLS.replace("budget_usd: 10", "budget_usd: 1000")
     b = _own(parse_providers(wide), lee).grant
-    assert b.budget_usd == 1000 and b.envelope_id == a.envelope_id
+    assert b.budget_usd == 10 and b.envelope_id == a.envelope_id
     a.refresh_from_db()
     assert a.superseded_at is not None and a.revoked_at is None
     reverted = _own(parse_providers(POOLS), lee)
@@ -124,6 +126,7 @@ def test_rr_removing_the_config_budget_revokes_spend_authority():
     earlier hold still counted."""
     registry, bot = _config(POOLS)
     lee = User.objects.create(username="lee")
+    fund(parse_providers(POOLS), lee)
     old = _own(bot.providers, lee).grant
     guard = _guard(bot, lee)
     _send(guard)  # one attempt with unknown usage: its hold stays
@@ -152,6 +155,7 @@ def test_rr_lowering_then_raising_the_budget_never_replenishes():
     """10 -> 5 -> 10 with $4 held: the cumulative total carries across every
     revision, so raising the budget again leaves $6, not $10."""
     lee = User.objects.create(username="lee")
+    fund(parse_providers(POOLS), lee)
     first = _own(parse_providers(POOLS), lee).grant
     _hold(first, lee, "4", parse_providers(POOLS))
     lower = POOLS.replace("budget_usd: 10", "budget_usd: 5")
@@ -178,6 +182,7 @@ def test_rr_ownership_move_revokes_the_previous_owners_authority():
     the pool back to lee continues lee's envelope."""
     registry, bot = _config(POOLS)
     lee = User.objects.create(username="lee")
+    fund(parse_providers(POOLS), lee)
     bob = User.objects.create(username="bob")
     friend = User.objects.create(username="friend")
     old = _own(bot.providers, lee).grant
@@ -206,6 +211,7 @@ def test_rr_ownership_move_revokes_the_previous_owners_authority():
     pools.link_config_envelope(
         bot.providers, "paid", by_id=admin.pk, admin=True, fund=True
     )
+    fund(bot.providers, bob)
     bobs = _own(bot.providers, bob).grant
     assert bobs.envelope_id != old.envelope_id
     assert spend_guard.spent_and_reserved(bobs.pk) == (Decimal(0), Decimal(0))
@@ -224,6 +230,7 @@ def test_rr_a_stale_config_never_destroys_the_current_owners_grants():
     move to bob: it can't revoke the grants bob issued, and bob's process
     puts its own config back."""
     lee = User.objects.create(username="lee")
+    fund(parse_providers(POOLS), lee)
     bob = User.objects.create(username="bob")
     friend = User.objects.create(username="friend")
     stale = parse_providers(POOLS)
@@ -232,6 +239,7 @@ def test_rr_a_stale_config_never_destroys_the_current_owners_grants():
     assert _own(fresh, bob).grant is None  # the accounts are lee's envelope's
     admin = User.objects.create(username="admin", is_superuser=True)
     pools.link_config_envelope(fresh, "paid", by_id=admin.pk, admin=True, fund=True)
+    fund(fresh, bob)
     assert _own(fresh, bob).grant is not None
     bobs_grant = pools.issue_grant(
         fresh,
@@ -267,6 +275,7 @@ def test_rr_a_stale_config_never_destroys_the_current_owners_grants():
 def test_rr_switching_off_in_providers_yaml_stops_a_built_guard(old, new):
     registry, bot = _config(POOLS)
     lee = User.objects.create(username="lee")
+    fund(parse_providers(POOLS), lee)
     guard = _guard(bot, lee)
     registry.providers = parse_providers(POOLS.replace(old, new))
     with pytest.raises(spend_guard.SpendDenied):
@@ -278,6 +287,7 @@ def test_rr_switching_off_in_providers_yaml_stops_a_built_guard(old, new):
 def test_rr_revoked_issued_grant_refuses_an_already_built_guard():
     registry, bot = _config(POOLS)
     lee = User.objects.create(username="lee")
+    fund(parse_providers(POOLS), lee)
     friend = User.objects.create(username="friend")
     issued = grant(bot.providers, friend, budget="3")
     guard = _guard(bot, friend)
@@ -294,6 +304,7 @@ def test_rr_a_person_revoking_config_terms_isnt_undone_by_sync():
     it again, after a route edit or a money edit (even a narrowing one);
     only an admin's explicit restore does, on the same envelope."""
     lee = User.objects.create(username="lee")
+    fund(parse_providers(POOLS), lee)
     providers = parse_providers(POOLS)
     own = _own(providers, lee).grant
     pools.revoke_grant(providers, own.pk, by_id=lee.pk)
@@ -324,6 +335,7 @@ def test_rr_queued_work_intersects_its_revision_with_the_current_config():
     Widening the config to $1000 never widens the job past A's $10."""
     registry, bot = _config(POOLS)
     lee = User.objects.create(username="lee")
+    fund(parse_providers(POOLS), lee)
     captured = _own(bot.providers, lee).grant
     narrow = POOLS.replace("budget_usd: 10", "budget_usd: 5").replace(
         "    per_launch_usd: 2\n", "    per_launch_usd: 2\n    max_output_tokens: 100\n"
@@ -352,6 +364,7 @@ def test_rr_a_guard_reads_the_config_of_the_reloaded_registry():
     bot of the old one follows ``successor`` to the current config."""
     registry, bot = _config(POOLS)
     lee = User.objects.create(username="lee")
+    fund(parse_providers(POOLS), lee)
     guard = _guard(bot, lee)
     reloaded, _ = registry_of(NO_BUDGET)
     registry.successor = reloaded
@@ -367,6 +380,7 @@ def test_rr_concurrent_reservations_across_revisions_share_one_lock():
     if connection.vendor != "postgresql":
         pytest.skip("advisory locks need PostgreSQL")
     lee = User.objects.create(username="lee")
+    fund(parse_providers(POOLS), lee)
     one = POOLS.replace("budget_usd: 10", "budget_usd: 1").replace(
         "    per_launch_usd: 2\n", ""
     )
@@ -408,6 +422,7 @@ def test_rr_uncertain_holds_stay_counted_after_revocation():
     moves and restoration: every later revision of the envelope counts it."""
     registry, bot = _config(POOLS)
     lee = User.objects.create(username="lee")
+    fund(parse_providers(POOLS), lee)
     guard = _guard(bot, lee)
 
     async def timeout():
@@ -573,6 +588,7 @@ def test_rr_reorder_keeps_hidden_pools_in_place():
     _, bots = registry_of()
     bot = bots["devbox"]
     lee = User.objects.create(username="lee")
+    fund(parse_providers(POOLS), lee)
     providers = bot.providers
     pools.update_preference(lee.pk, providers, version=0, order=["paid", "subs"])
     stored = pools.update_preference(
@@ -614,7 +630,7 @@ POOL_TABLES = {
     "django_ergo_modelpoolpreference",
     "django_ergo_routedecision",
 }
-LEAF = ("django_ergo", "0061_spend_envelope_families")
+LEAF = ("django_ergo", "0062_explicit_funding_and_paid_latch")
 
 
 @pytest.mark.django_db(transaction=True)
@@ -635,6 +651,7 @@ def test_rr_migrations_upgrade_from_main_0058_and_reverse():
             "0059_model_pools",
             "0060_spend_envelopes",
             "0061_spend_envelope_families",
+            "0062_explicit_funding_and_paid_latch",
         ]
         executor.migrate([LEAF])
         assert present() == POOL_TABLES

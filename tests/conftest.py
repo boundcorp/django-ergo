@@ -29,3 +29,10 @@ def _provider_switches_without_db(request, monkeypatch):
         DB_FIXTURES & set(request.fixturenames)
     ):
         monkeypatch.setattr("django_ergo.bots.pools.disabled_providers", set)
+        monkeypatch.setattr(
+            "django_ergo.bots.pools.paid_dispatch_problem", lambda **kwargs: ""
+        )
+        monkeypatch.setattr(
+            "django_ergo.conversation.spend_guard.paid_dispatch_problem",
+            lambda **kwargs: "",
+        )

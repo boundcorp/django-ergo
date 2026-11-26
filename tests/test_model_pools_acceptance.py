@@ -23,6 +23,7 @@ from django_ergo.conversation.inference_policy import PolicyError
 from django_ergo.conversation.models import InferenceRequest
 from django_ergo.pricing import ExactPrice
 from django_ergo.pricing import LongContextRates
+from tests.pool_funding import fund
 from tests.test_agent_launches import launch_env  # noqa: F401 -- fake Orca
 from tests.test_bot_workers import workers  # noqa: F401 -- launch_env needs it
 from tests.test_model_pools import POOLS
@@ -49,6 +50,7 @@ def test_r1_paid_auto_route_builds_and_sends_on_the_selected_api_route(monkeypat
     _, bots = registry_of()
     bot = bots["devbox"]
     user = User.objects.create(username="lee")
+    fund(parse_providers(POOLS), user)
     session = chat(bot, user)
     set_pref(user.pk, bot.providers, active_pool="paid")
     route = bot.route(session)
@@ -92,6 +94,7 @@ def test_r1_dispatch_refuses_an_engine_that_differs_from_the_decision():
     _, bots = registry_of()
     bot = bots["devbox"]
     user = User.objects.create(username="lee")
+    fund(parse_providers(POOLS), user)
     session = chat(bot, user)
     set_pref(user.pk, bot.providers, active_pool="paid")
     bot.route(session)
@@ -213,7 +216,7 @@ def test_r9_guarded_sends_turn_sdk_retries_off(monkeypatch, engine_name):
         engine = ClaudeAPIEngine({"model": "claude-opus-5-5"})
         send = lambda: engine._send_message(model="claude-opus-5-5")  # noqa: E731
     client.with_options = lambda **kw: configured.append(kw) or client
-    engine.spend_guard = SimpleNamespace()
+    engine.spend_guard = SimpleNamespace(check_transport=lambda identity: None)
     monkeypatch.setattr(engine, "_get_client", lambda: client)
     token = automatic_request_retries.set(True)
     try:
@@ -477,6 +480,7 @@ def test_r2_another_user_cannot_select_or_spend_on_an_owned_pool():
     _, bots = registry_of()
     bot = bots["devbox"]
     lee = User.objects.create(username="lee")
+    fund(parse_providers(POOLS), lee)
     stranger = User.objects.create(username="not-the-sponsor")
     session = chat(bot, stranger)
     with pytest.raises(PermissionError):
@@ -518,6 +522,7 @@ def test_r2_an_explicit_shared_grant_is_scoped_and_private():
     bot = bots["devbox"]
     providers = bot.providers
     lee = User.objects.create(username="lee")
+    fund(parse_providers(POOLS), lee)
     friend = User.objects.create(username="friend")
     other = User.objects.create(username="other")
     # Only the owner (or an admin) issues; a grant needs an end date.
@@ -595,6 +600,7 @@ def test_r3_disabling_the_first_pool_stops_at_the_paid_boundary():
     _, bots = registry_of()
     bot = bots["devbox"]
     user = User.objects.create(username="lee")
+    fund(parse_providers(POOLS), user)
     session = chat(bot, user)
     set_state("subs", bot.providers, enabled=False)
     snap = pools.snapshot(bot.providers, user.pk, session)
@@ -672,6 +678,7 @@ def test_r12_queued_work_on_a_paid_pool_never_widens(monkeypatch):
     _, bots = registry_of()
     bot = bots["devbox"]
     user = User.objects.create(username="lee")
+    fund(parse_providers(POOLS), user)
     session = chat(bot, user)
     set_pref(user.pk, bot.providers, active_pool="paid")
     policy = pools.capture_policy(bot, session)
@@ -767,6 +774,7 @@ def test_r15_cross_scope_switch_is_one_transaction(monkeypatch):
     _, bots = registry_of()
     bot = bots["devbox"]
     user = User.objects.create(username="lee")
+    fund(parse_providers(POOLS), user)
     session = chat(bot, user)
     set_chat(session, "subs", bot.providers)
     stale = pools.chat_revision(session) - 1
@@ -812,6 +820,7 @@ def test_r16_rollover_stays_until_the_person_returns(monkeypatch):
     _, bots = registry_of()
     bot = bots["devbox"]
     user = User.objects.create(username="lee")
+    fund(parse_providers(POOLS), user)
     session = chat(bot, user)
     set_pref(user.pk, bot.providers, auto_rollover=True)
     set_state("paid", bot.providers, allow_auto_entry=True)

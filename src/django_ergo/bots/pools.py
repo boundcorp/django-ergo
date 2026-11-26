@@ -57,6 +57,7 @@ from django_ergo.bots.routing import AgentChoice
 from django_ergo.bots.routing import is_auto
 from django_ergo.bots.routing import tier_of
 from django_ergo.conversation.inference_policy import PolicyError
+from django_ergo.conversation.spend_guard import paid_dispatch_problem
 
 if TYPE_CHECKING:
     from django_ergo.bots.providers import Provider
@@ -240,7 +241,23 @@ def privacy_for(bot: Bot, session=None, origin=()) -> Privacy:
         )
     )
     policies = tuple(configured.get(name) or PrivacyPolicy(name=name) for name in names)
-    return Privacy(policies=policies, private_pools=frozenset(providers.private_pools))
+    captured = (current_policy() or {}).get("privacy", {})
+    inherited = tuple(
+        PrivacyPolicy(
+            name=p["name"],
+            bots=frozenset(p.get("bots", [])),
+            allow=frozenset(p.get("allow", [])),
+        )
+        for p in captured.get("policies", [])
+    )
+    for name in captured.get("names", []):
+        policies += (configured.get(name) or PrivacyPolicy(name=name),)
+    for policy in configured.values():
+        if policy.bots & set(captured.get("lineage", [])):
+            policies += (policy,)
+    return Privacy(
+        policies=policies + inherited, private_pools=frozenset(providers.private_pools)
+    )
 
 
 def memory_refusal(bot: Bot, session, bank: str, *, reflect: bool = False) -> str:
@@ -382,6 +399,7 @@ def current_policy() -> dict | None:
 # ownership, switches), and the owner's current budget caps the cumulative
 # spend of the owner and every grant they issued on the pool.
 
+FUNDING_DECIMALS = 4
 CONFIG_SOURCE = "config"
 # revoked_reason prefix of revocations made by following providers.yaml (any
 # other revocation was a person's, and config sync never undoes it).
@@ -444,6 +462,169 @@ def pool_accounts(providers: Providers, pool: Pool) -> list[str]:
     for ref in pool_refs(providers, pool, metered=True):
         out.update(provider_accounts(providers.providers[ref.partition("/")[0]]))
     return sorted(out)
+
+
+def transport_identity(provider: Provider, model: str = "") -> str:
+    """Non-secret immutable account/transport identity. No credential values.
+
+    Inline keys cannot identify consent and are refused for guarded routes.
+    Effective endpoint includes SDK environment defaults at construction.
+    """
+    from django_ergo.conversation.transport_identity import identity
+
+    found = provider.models.get(model)
+    config = {**provider.config, **(found.config if found else {})}
+    if config.get("api_key"):
+        msg = "Guarded routes require a named credential source, not an inline key"
+        raise ValueError(msg)
+    return identity(
+        provider.type,
+        provider.transport,
+        config,
+        key_env=provider.api_key_env,
+        account=provider.account,
+        model=model,
+    )
+
+
+def funding_accounts(providers: Providers, pool: Pool) -> list[str]:
+    """Exact account identities available for an explicit approval."""
+    return sorted(
+        {
+            transport_identity(
+                providers.providers[r.partition("/")[0]], r.partition("/")[2]
+            )
+            for r in pool_refs(providers, pool, metered=True)
+        }
+    )
+
+
+def set_paid_pause(*, by_id, paused: bool):
+    from django.contrib.auth import get_user_model
+    from django.db import transaction
+
+    from django_ergo.conversation.models import PaidDispatchState
+    from django_ergo.conversation.models import SpendControlAudit
+
+    actor = (
+        get_user_model()
+        .objects.filter(pk=by_id, is_active=True, is_superuser=True)
+        .first()
+    )
+    if actor is None:
+        msg = "Only an authenticated admin can change the paid pause"
+        raise PermissionError(msg)
+    if type(paused) is not bool:
+        msg = "paused must be true or false"
+        raise ValueError(msg)
+    with transaction.atomic():
+        state, _ = PaidDispatchState.objects.select_for_update().get_or_create(pk=1)
+        state.paused, state.updated_by = paused, actor
+        state.save()
+        SpendControlAudit.objects.create(
+            actor=actor, action="paid_pause", details={"paused": paused}
+        )
+    return state
+
+
+def approve_funding(  # noqa: PLR0913
+    providers: Providers,
+    pool: str,
+    *,
+    by_id,
+    budget_usd,
+    expires_at,
+    accounts,
+    valid_from=None,
+    note: str = "",
+):
+    """Owner/admin consent with explicit cap, window and exact account set.
+
+    Nothing is inferred from config. Increasing an approval is an explicit
+    new audited action on the SAME cumulative ledger, never a budget reset.
+    """
+    from django.contrib.auth import get_user_model
+    from django.db import transaction
+
+    from django_ergo.conversation.models import SpendControlAudit
+    from django_ergo.conversation.models import SpendFunding
+    from django_ergo.conversation.spend_guard import envelope_lock_key
+    from django_ergo.conversation.spend_guard import lock
+
+    providers = fresh_providers(providers)
+    config = providers.pools.get(pool)
+    owners = owner_ids(providers)
+    owner_id = owners.get(config.owner) if config and config.owner else None
+    actor = get_user_model().objects.filter(pk=by_id, is_active=True).first()
+    if actor is None or (not actor.is_superuser and actor.pk != owner_id):
+        msg = "Only the authenticated owner or an admin can approve funding"
+        raise PermissionError(msg)
+    if config is None or _config_terms(config, providers, owner_id) is None:
+        msg = "Funding requires a configured owner, ceiling and expiry"
+        raise ValueError(msg)
+    amount = usd(budget_usd, "Funding cap")
+    if (
+        amount <= 0
+        or amount.normalize().as_tuple().exponent < -FUNDING_DECIMALS
+        or amount >= Decimal("1e8")
+    ):
+        msg = "Funding cap must be positive, below 100000000, with at most 4 decimal places"
+        raise ValueError(msg)
+    start = valid_from if valid_from is not None else dt.datetime.now(dt.UTC)
+    if (
+        not isinstance(start, dt.datetime)
+        or timezone.is_naive(start)
+        or not isinstance(expires_at, dt.datetime)
+        or timezone.is_naive(expires_at)
+        or expires_at <= start
+        or expires_at <= dt.datetime.now(dt.UTC)
+    ):
+        msg = "Funding requires an explicit future expiry and an aware valid window"
+        raise ValueError(msg)
+    available = set(funding_accounts(providers, config))
+    if (
+        not isinstance(accounts, list)
+        or not accounts
+        or any(not isinstance(a, str) for a in accounts)
+        or len(set(accounts)) != len(accounts)
+        or not set(accounts) <= available
+    ):
+        msg = "Select a nonempty exact set of configured accounts"
+        raise ValueError(msg)
+    with transaction.atomic():
+        lock(CONFIG_ENVELOPES_LOCK)
+        envelope = _config_envelope(config, providers, owners, timezone.now())
+        if envelope is None:
+            # An owner cannot override ambiguous history. Admin uses the
+            # distinct continuation/separate-funding workflow first.
+            raise ValueError(
+                config_link_problem(config, providers, owners)
+                or "Reconcile prior funding history first"
+            )
+        lock(envelope_lock_key(envelope.pk))
+        approval = SpendFunding.objects.create(
+            envelope=envelope,
+            actor=actor,
+            budget_usd=amount,
+            valid_from=start,
+            expires_at=expires_at,
+            accounts=sorted(accounts),
+            note=str(note)[:200],
+        )
+        SpendControlAudit.objects.create(
+            actor=actor,
+            envelope=envelope,
+            action="fund",
+            details={
+                "approval": approval.pk,
+                "budget_usd": str(amount),
+                "valid_from": start.isoformat(),
+                "expires_at": expires_at.isoformat(),
+                "accounts": sorted(accounts),
+            },
+        )
+        _settle(envelope, providers, owners, timezone.now())
+    return approval
 
 
 def _switched_off_accounts() -> set[str]:
@@ -555,7 +736,7 @@ def _growth_problem(envelope, providers: Providers, pool: Pool) -> str:
     )
 
 
-def _settle(envelope, providers: Providers, owners: dict, now):
+def _settle(envelope, providers: Providers, owners: dict, now):  # noqa: C901, PLR0911
     """Bring one envelope in line with current providers.yaml, under its
     lock (the caller holds it): revoke every revision when the config no
     longer backs it, or add a revision when the owner's config terms
@@ -572,11 +753,48 @@ def _settle(envelope, providers: Providers, owners: dict, now):
     if problem:
         _revoke_envelope(envelope.pk, SYNC_REVOKED + problem, now)
         return None, problem
+    funding = None
+    if envelope.source == CONFIG_SOURCE:
+        funding = envelope.funding.order_by("-pk").first()
+        if funding is None:
+            return (
+                None,
+                "Pending explicit owner/admin funding; config is a ceiling only",
+            )
     current = _current_revision(envelope.pk)
     if envelope.source != CONFIG_SOURCE:
         return current, "" if current is not None else "the spend grant was revoked"
     pool = providers.pools.get(envelope.pool)
     terms = _config_terms(pool, providers, envelope.owner_id)
+    from decimal import ROUND_DOWN
+
+    terms["budget_usd"] = min(terms["budget_usd"], funding.budget_usd).quantize(
+        Decimal("0.0001"), rounding=ROUND_DOWN
+    )
+    if terms["per_launch_usd"] is not None:
+        terms["per_launch_usd"] = terms["per_launch_usd"].quantize(
+            Decimal("0.0001"), rounding=ROUND_DOWN
+        )
+    terms["expires_at"] = min(
+        terms["expires_at"],
+        funding.expires_at.replace(tzinfo=dt.UTC)
+        if timezone.is_naive(funding.expires_at)
+        else funding.expires_at,
+    )
+    terms["routes"] = [
+        r
+        for r in terms["routes"]
+        if transport_identity(
+            providers.providers[r.partition("/")[0]], r.partition("/")[2]
+        )
+        in funding.accounts
+    ]
+    # Include independent approval and narrowed terms in revision identity.
+    import hashlib
+
+    terms["config_key"] = hashlib.sha256(
+        (terms["config_key"] + str(funding.pk) + repr(terms["routes"])).encode()
+    ).hexdigest()
     accounts = sorted(
         set(envelope.accounts or ()) | set(pool_accounts(providers, pool))
     )
@@ -609,7 +827,7 @@ def _settle(envelope, providers: Providers, owners: dict, now):
         pool=envelope.pool,
         owner_id=envelope.owner_id,
         grantee_id=envelope.owner_id,
-        valid_from=now,
+        valid_from=funding.valid_from,
         source=CONFIG_SOURCE,
         **terms,
     )
@@ -666,6 +884,20 @@ def _continuable(pool: Pool, providers: Providers, owners: dict):
     owner_id = owners.get(pool.owner) if pool.owner else None
     overlap = _overlapping(pool_accounts(providers, pool))
     if not overlap:
+        # A pre-family issued envelope can have no parent and therefore no
+        # recorded account identity. Its prior spend cannot safely be matched
+        # to a new config envelope, even after a provider or pool rename.
+        from django_ergo.conversation.models import SpendEnvelope
+
+        if (
+            SpendEnvelope.objects.exclude(source=CONFIG_SOURCE)
+            .filter(parent__isnull=True)
+            .exists()
+        ):
+            return None, (
+                "an issued spend envelope has no owner authority; new config "
+                "funding is refused until its history is resolved"
+            )
         return None, ""
     claimed = _claimed_keys(providers, owners) - {
         config_envelope_key(pool.name, owner_id)
@@ -773,6 +1005,12 @@ def sync_authority(providers: Providers, owners: dict | None = None) -> None:
         providers, owners = fresh, None
     if providers.pools.legacy:
         return
+    from django_ergo.conversation.models import PaidDispatchState
+
+    PaidDispatchState.objects.get_or_create(pk=1)
+    PaidDispatchState.objects.filter(pk=1, activated_at__isnull=True).update(
+        activated_at=timezone.now()
+    )
     owners = owner_ids(providers) if owners is None else owners
     live = list(
         SpendGrant.objects.filter(revoked_at__isnull=True).select_related("envelope")
@@ -783,14 +1021,6 @@ def sync_authority(providers: Providers, owners: dict | None = None) -> None:
         owner_id = owners.get(pool.owner) if pool.owner else None
         terms = _config_terms(pool, providers, owner_id)
         if terms is None:
-            continue
-        key = config_envelope_key(pool.name, owner_id)
-        if any(
-            g.envelope.key == key
-            and g.superseded_at is None
-            and g.config_key == terms["config_key"]
-            for g in live
-        ):
             continue
         envelope = _config_envelope(pool, providers, owners, now)
         if envelope is not None:
@@ -866,15 +1096,25 @@ def link_config_envelope(  # noqa: PLR0912, PLR0913, PLR0915, C901
     has its envelope, ``fund`` approves the accounts it now spends on, and
     ``restore`` lifts a person's revocation of it (separate decisions; its
     ledger carries on either way). Returns the envelope. Runs the ORM."""
+    from django.contrib.auth import get_user_model
     from django.db import transaction
 
+    from django_ergo.conversation.models import SpendControlAudit
     from django_ergo.conversation.models import SpendEnvelope
     from django_ergo.conversation.spend_guard import envelope_lock_key
     from django_ergo.conversation.spend_guard import lock
 
-    if not admin or not by_id:
+    if (
+        not admin
+        or not get_user_model()
+        .objects.filter(pk=by_id, is_active=True, is_superuser=True)
+        .exists()
+    ):
         msg = "Only an admin can link a pool's spend authority"
         raise PermissionError(msg)
+    if sum(bool(v) for v in (envelope_id, fund, restore)) != 1:
+        msg = "Choose exactly one: continue, prepare separate funding, or restore"
+        raise ValueError(msg)
     if envelope_id and (fund or restore):
         msg = "Continue an envelope, or fund/restore one, not both"
         raise ValueError(msg)
@@ -971,6 +1211,12 @@ def link_config_envelope(  # noqa: PLR0912, PLR0913, PLR0915, C901
                     "linked_at",
                 ]
             )
+        SpendControlAudit.objects.create(
+            actor_id=by_id,
+            envelope=envelope,
+            action="restore" if restore else "prepare_funding" if fund else "continue",
+            details={"note": str(note)[:200], "pool": pool},
+        )
     sync_authority(providers, owners)
     return envelope
 
@@ -997,8 +1243,22 @@ class SendAuthority:
     pool has now. A grant issued by the pool's owner is also narrowed to
     the owner's current authority, whose budget caps the family's spend."""
 
-    def __init__(self, source):
+    def __init__(self, source, *, session=None, decision=None):
         self.source = source
+        self.session = session
+        self.ref = decision.route if decision else ""
+        self.identity = decision.transport_identity if decision else ""
+        self.privacy = decision.privacy if decision else None
+        self.lineage = decision.bot_lineage if decision else ()
+        self.origin = tuple(
+            dict.fromkeys(
+                (
+                    *getattr(decision, "origin", ()),
+                    *session_origin(session),
+                    *current_origin(),
+                )
+            )
+        )
 
     def refresh(self) -> None:
         """Let this process's reloading registry pick up changed bot files
@@ -1007,15 +1267,50 @@ class SendAuthority:
 
         webhooks.refresh_registry()
 
-    def __call__(self, grant):  # noqa: PLR0911, C901
+    def __call__(self, grant):  # noqa: PLR0911, PLR0912, PLR0915, C901
         from django_ergo.conversation.spend_guard import Terms
 
         try:
             providers = fresh_providers(live_providers(self.source))
         except ConfigUnavailable as exc:
             return f"{exc}; metered sends are refused until it loads"
+        if issue := paid_dispatch_problem(legacy=providers.pools.legacy):
+            return issue
         if providers.pools.legacy:
             return "providers.yaml no longer configures pools"
+        if self.ref:
+            head, _, model = self.ref.partition("/")
+            provider = providers.providers.get(head)
+            if provider is None or model not in provider.models:
+                return "The engine's route disappeared; rebuild the engine"
+            if transport_identity(provider, model) != self.identity:
+                return "Transport/account identity changed; rebuild the engine under current authority"
+            configured = providers.pools.privacy
+            names = (
+                set(self.origin)
+                | set(self.privacy.names if self.privacy else ())
+                | set(current_origin())
+            )
+            names.update(session_origin(self.session))
+            if getattr(self.session, "pk", None):
+                from django_ergo.conversation.models import ConversationSession
+
+                row = ConversationSession.objects.filter(pk=self.session.pk).first()
+                if row is None:
+                    return "The captured session disappeared"
+                names.update(session_origin(row))
+            bot_names = set(self.lineage) | set(lineage(self.source))
+            names.update(n for n, p in configured.items() if p.bots & bot_names)
+            current = Privacy(
+                tuple(configured.get(n) or PrivacyPolicy(name=n) for n in names),
+                frozenset(providers.private_pools),
+            )
+            if (
+                (self.privacy and not self.privacy.permits(self.ref))
+                or any(n not in configured for n in names)
+                or not current.permits(self.ref)
+            ):
+                return "Captured/current privacy policy refuses this outbound route"
         owners = owner_ids(providers)
         now = timezone.now()
         envelope = grant.envelope
@@ -1092,6 +1387,13 @@ def active_grant(pool: Pool, providers: Providers, user_id, owner_id=None):
     from django_ergo.conversation.models import SpendGrant
 
     if not user_id or pool.legacy or owner_id is None:
+        return None
+    from django_ergo.conversation.models import SpendEnvelope
+
+    root = SpendEnvelope.objects.filter(
+        key=config_envelope_key(pool.name, owner_id)
+    ).first()
+    if root is None or not root.funding.exists():
         return None
     policy = current_policy()
     if policy is not None:
@@ -1324,8 +1626,12 @@ def _views(providers: Providers, user_id=None) -> list[PoolView]:
             view.spent_usd, view.reserved_usd = spent_and_reserved(grant.pk)
             _owner_authority(view, grant)
         elif view.is_owner and pool.metered:
-            if problem := config_link_problem(pool, providers, owners):
-                view.owner_problem = (BUDGET_REQUIRED, problem)
+            problem = config_link_problem(pool, providers, owners)
+            view.owner_problem = (
+                BUDGET_REQUIRED,
+                problem
+                or "Pending explicit owner/admin funding; config is a ceiling only",
+            )
         views.append(view)
     return views
 
@@ -1472,6 +1778,17 @@ def route_problem(  # noqa: C901, PLR0911, PLR0912, PLR0913
     provider = providers.providers.get(provider_name)
     if provider is None:
         return NO_ROUTE, f"{provider_name} isn't in providers.yaml"
+    if provider.metered:
+        if issue := paid_dispatch_problem(legacy=snap.legacy):
+            return NOT_AUTHORIZED, issue
+        captured = (current_policy() or {}).get("transport_identities")
+        if captured is not None and captured.get(ref) != transport_identity(
+            provider, model
+        ):
+            return (
+                NOT_AUTHORIZED,
+                "Queued transport/account identity changed; requeue with explicit current authority",
+            )
     if view is not None and not view.route_granted(
         ref if not provider.worker_only else f"{provider_name}/*"
     ):
@@ -1606,6 +1923,9 @@ class Decision:
     per_launch_usd: Decimal | None = None
     scope: str = ""  # where the active pool came from: chat, user, job or ""
     revision: dict = field(default_factory=dict)
+    transport_identity: str = ""
+    privacy: Privacy | None = None
+    bot_lineage: tuple[str, ...] = ()
 
     @property
     def metered(self) -> bool:
@@ -1628,7 +1948,11 @@ class Decision:
         self, bot: Bot, session=None, *, purpose: str = "chat"
     ) -> MeteredGuard | None:
         """The spend guard for an engine on this (metered) route."""
-        if not self.metered or self.legacy:
+        if not self.metered:
+            return None
+        if self.legacy:
+            if issue := paid_dispatch_problem(legacy=True):
+                return deny_guard(self.provider, self.model, issue)
             return None
         from django_ergo.conversation.spend_guard import MeteredGuard
 
@@ -1647,7 +1971,8 @@ class Decision:
             provider=self.provider,
             model=self.model,
             grant_id=self.grant_id,
-            current=SendAuthority(bot),
+            current=SendAuthority(bot, session=session, decision=self),
+            transport_identity=self.transport_identity,
             price=found.price if found else None,
             max_output_tokens=self.max_output_tokens,
             bot=bot.name,
@@ -2101,6 +2426,11 @@ def select_route(  # noqa: PLR0913
     finally:
         _ROUTING_HOLDER.reset(token)
     decision.origin = privacy.names
+    decision.privacy = privacy
+    decision.bot_lineage = tuple(lineage(bot))
+    provider = providers.providers.get(decision.provider)
+    if provider is not None and decision.metered:
+        decision.transport_identity = transport_identity(provider, decision.model)
     if record and decision.rollover:
         _persist_rollover(snap, decision, session, user_id)
     if record:
@@ -2203,7 +2533,7 @@ def _match_explicit(
     return out
 
 
-def select_agent(  # noqa: C901, PLR0913, PLR0915
+def select_agent(  # noqa: C901, PLR0912, PLR0913, PLR0915
     bot: Bot,
     session=None,
     *,
@@ -2244,6 +2574,8 @@ def select_agent(  # noqa: C901, PLR0913, PLR0915
             )
         raise refusal
     if bot_providers.pools.legacy:
+        if issue := paid_dispatch_problem(legacy=True):
+            raise PoolRefusal(NO_CODING_ROUTE, issue, consumer=CODING)
         if not tier:
             if model:
                 matches = _match_explicit(
@@ -2827,6 +3159,12 @@ def public_view(providers: Providers, privacy: Privacy, snap: Snapshot) -> dict:
                 "position": view.position,
                 "owner": view.pool.owner,
                 "is_owner": view.is_owner,
+                "funding_pending": bool(
+                    view.is_owner and view.pool.metered and view.grant is None
+                ),
+                "configured_ceiling_usd": str(view.pool.budget_usd)
+                if view.is_owner and view.pool.budget_usd is not None
+                else None,
                 "enabled": view.enabled,
                 "status": problem[0] if problem else "eligible",
                 "why": problem[1] if problem else "",
@@ -3156,6 +3494,11 @@ def usd(value, what: str, *, required: bool = True) -> Decimal | None:
     if not amount.is_finite() or amount < 0:
         msg = f"{what} must be a finite amount, 0 or more"
         raise ValueError(msg)
+    if amount.normalize().as_tuple().exponent < -FUNDING_DECIMALS:
+        msg = (
+            f"{what} must have at most 4 decimal places; ambiguous rounding is refused"
+        )
+        raise ValueError(msg)
     if amount >= Decimal("1e12"):
         msg = f"{what} is too large"
         raise ValueError(msg)
@@ -3379,14 +3722,35 @@ def capture_policy(bot: Bot, session=None, user_id=None) -> dict:
         return dict(existing)  # queued from queued work: the same policy
     user_id = user_id if user_id is not None else getattr(session, "user_id", None)
     privacy = privacy_for(bot, session)
+    captured_privacy = {
+        "names": list(privacy.names),
+        "lineage": lineage(bot),
+        "policies": [
+            {"name": p.name, "bots": sorted(p.bots), "allow": sorted(p.allow)}
+            for p in privacy.policies
+        ],
+    }
     snap = snapshot(providers, user_id, session)
     try:
         index, mode = _start(snap, privacy, BACKGROUND)
     except PoolRefusal:
-        return {"pool": "", "grant": "", "user": user_id, "revision": snap.revision()}
+        return {
+            "pool": "",
+            "grant": "",
+            "user": user_id,
+            "revision": snap.revision(),
+            "privacy": captured_privacy,
+        }
     view = snap.pools[index]
     return {
         "pool": view.name,
+        "privacy": captured_privacy,
+        "transport_identities": {
+            r: transport_identity(
+                providers.providers[r.partition("/")[0]], r.partition("/")[2]
+            )
+            for r in pool_refs(providers, view.pool, metered=True)
+        },
         "mode": mode,
         "grant": str(view.grant.pk) if view.grant is not None else "",
         "user": user_id,

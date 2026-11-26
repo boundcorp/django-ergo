@@ -35,6 +35,7 @@ from django_ergo.conversation import spend_guard
 from django_ergo.conversation.models import InferenceRequest
 from django_ergo.conversation.models import SpendEnvelope
 from django_ergo.conversation.models import SpendGrant
+from tests.pool_funding import fund
 from tests.test_model_pools import POOLS
 from tests.test_model_pools import chat
 from tests.test_model_pools import environment  # noqa: F401 -- fake keys and CLIs
@@ -92,6 +93,7 @@ def test_rename_continues_the_envelope_and_its_cumulative_spend():
     """paid -> paid-api with $6 held: the renamed pool's authority is a new
     revision of the SAME envelope, so only $4 of the $10 is left."""
     lee = User.objects.create(username="lee")
+    fund(parse_providers(POOLS), lee)
     before = _view(parse_providers(POOLS), lee).grant
     _hold(before, lee, "6", parse_providers(POOLS))
     renamed = parse_providers(RENAMED)
@@ -120,6 +122,7 @@ def test_rename_continues_the_envelope_and_its_cumulative_spend():
 @pytest.mark.django_db
 def test_remove_and_readd_under_a_new_name_keeps_the_cumulative_spend():
     lee = User.objects.create(username="lee")
+    fund(parse_providers(POOLS), lee)
     first = _view(parse_providers(POOLS), lee).grant
     _hold(first, lee, "7", parse_providers(POOLS))
     assert _view(parse_providers(WITHOUT_PAID), lee) is None
@@ -138,6 +141,7 @@ def test_rename_keeps_a_persons_revocation():
     """lee revoked their config authority; renaming the pool (same money
     terms) doesn't mint it again."""
     lee = User.objects.create(username="lee")
+    fund(parse_providers(POOLS), lee)
     providers = parse_providers(POOLS)
     own = _view(providers, lee).grant
     pools.revoke_grant(providers, own.pk, by_id=lee.pk)
@@ -153,6 +157,7 @@ def test_a_new_pool_on_funded_accounts_gets_no_fresh_money():
     it: continuing a funded envelope (refused while another pool uses it)
     or funding it separately (explicit new money)."""
     lee = User.objects.create(username="lee")
+    fund(parse_providers(POOLS), lee)
     providers = parse_providers(EXTRA)
     paid = _view(providers, lee)
     assert paid.grant is not None
@@ -183,6 +188,7 @@ def test_a_new_pool_on_funded_accounts_gets_no_fresh_money():
         providers, "extra", by_id=admin.pk, admin=True, fund=True, note="separate $50"
     )
     assert envelope.linked_by_id == admin.pk and envelope.link_note == "separate $50"
+    fund(providers, lee, pool="extra")
     extra = _view(providers, lee, "extra")
     assert extra.grant.envelope_id == envelope.pk != paid.grant.envelope_id
     assert extra.grant.budget_usd == 50
@@ -193,6 +199,7 @@ def test_a_renamed_provider_on_the_same_key_is_the_same_account():
     """Renaming the provider (same key env) and the pool together is still
     the same money: it continues the envelope."""
     lee = User.objects.create(username="lee")
+    fund(parse_providers(POOLS), lee)
     first = _view(parse_providers(POOLS), lee).grant
     _hold(first, lee, "9", parse_providers(POOLS))
     text = (
@@ -214,6 +221,7 @@ def test_merging_two_funded_pools_waits_for_an_admin():
     ledger carries over is ambiguous, so config sync funds nothing; an admin
     continues one."""
     lee = User.objects.create(username="lee")
+    fund(parse_providers(POOLS), lee)
     two = (
         POOLS.replace("routes: [openai, anthropic]", "routes: [openai]")
         .replace(
@@ -232,6 +240,11 @@ def test_merging_two_funded_pools_waits_for_an_admin():
     )
     providers = parse_providers(two)
     openai_env = _view(providers, lee).grant.envelope_id
+    preadmin = User.objects.create(username="preadmin", is_superuser=True)
+    pools.link_config_envelope(
+        providers, "claude-api", by_id=preadmin.pk, admin=True, fund=True
+    )
+    fund(providers, lee, pool="claude-api")
     anthropic_env = _view(providers, lee, "claude-api").grant.envelope_id
     merged = parse_providers(RENAMED)  # paid-api on both accounts
     view = _view(merged, lee, "paid-api")
@@ -263,6 +276,7 @@ def test_lowering_the_owners_budget_narrows_an_issued_grant_and_its_built_guard(
     friend built before has $1 left; to $6: nothing."""
     registry, bot = _config(POOLS)
     lee = User.objects.create(username="lee")
+    fund(parse_providers(POOLS), lee)
     friend = User.objects.create(username="friend")
     issued = grant(bot.providers, friend, budget="10")
     own = _view(bot.providers, lee).grant
@@ -296,6 +310,7 @@ def test_lowering_the_owners_budget_narrows_an_issued_grant_and_its_built_guard(
 def test_removing_or_revoking_the_owners_budget_revokes_issued_grants_at_once():
     registry, bot = _config(POOLS)
     lee = User.objects.create(username="lee")
+    fund(parse_providers(POOLS), lee)
     friend = User.objects.create(username="friend")
     issued = grant(bot.providers, friend, budget="3")
     guard = _guard(bot, friend)
@@ -396,6 +411,7 @@ def test_one_cap_for_the_owner_and_every_grantee_under_concurrency():
     )
     providers = parse_providers(one)
     lee = User.objects.create(username="lee")
+    fund(parse_providers(POOLS), lee)
     ann = User.objects.create(username="ann")
     ben = User.objects.create(username="ben")
     own = _view(providers, lee).grant
@@ -449,6 +465,7 @@ def test_a_process_with_a_stale_config_refuses_after_revocation(tmp_path):
     and its selection refuses: each re-reads the file. Narrowing (a lower
     budget) applies the same way."""
     lee = User.objects.create(username="lee")
+    fund(parse_providers(POOLS), lee)
     friend = User.objects.create(username="friend")
     path = tmp_path / "providers.yaml"
     path.write_text(POOLS)
@@ -489,6 +506,7 @@ def test_a_process_with_a_stale_config_refuses_after_revocation(tmp_path):
 )
 def test_an_unreadable_config_fails_closed_for_metered_only(tmp_path, broken):
     lee = User.objects.create(username="lee")
+    fund(parse_providers(POOLS), lee)
     path = tmp_path / "providers.yaml"
     path.write_text(POOLS)
     _registry, bot = _process(tmp_path)
@@ -520,6 +538,7 @@ def test_an_unreadable_config_fails_closed_for_metered_only(tmp_path, broken):
 @pytest.mark.django_db
 def test_link_candidates_list_the_overlapping_envelopes_for_an_admin():
     lee = User.objects.create(username="lee")
+    fund(parse_providers(POOLS), lee)
     providers = parse_providers(EXTRA)
     paid = _view(providers, lee).grant
     _hold(paid, lee, "2", providers)
@@ -559,6 +578,7 @@ def test_a_stale_process_prices_with_the_current_providers_yaml(tmp_path):
     """The price is re-read at send too: raised 100x, the stale guard
     reserves and prices at the new rate; removed, it refuses."""
     lee = User.objects.create(username="lee")
+    fund(parse_providers(POOLS), lee)
     path = tmp_path / "providers.yaml"
     path.write_text(POOLS)
     _registry, bot = _process(tmp_path)
@@ -585,6 +605,7 @@ def test_a_stale_process_prices_with_the_current_providers_yaml(tmp_path):
 @pytest.mark.django_db
 def test_a_replaced_grant_isnt_revived_by_renaming_back():
     lee = User.objects.create(username="lee")
+    fund(parse_providers(POOLS), lee)
     friend = User.objects.create(username="friend")
     old = grant(parse_providers(POOLS), friend, budget="9")
     renamed = parse_providers(RENAMED)
@@ -602,6 +623,7 @@ def test_a_replaced_grant_isnt_revived_by_renaming_back():
 @pytest.mark.django_db
 def test_the_owner_can_revoke_a_grant_issued_under_the_pools_old_name():
     lee = User.objects.create(username="lee")
+    fund(parse_providers(POOLS), lee)
     friend = User.objects.create(username="friend")
     old = grant(parse_providers(POOLS), friend, budget="9")
     renamed = parse_providers(RENAMED)
@@ -616,6 +638,7 @@ def test_a_detour_through_an_empty_account_set_funds_nothing():
     """Rename onto a metered provider with no models (no accounts), then
     back onto the funded routes: no second budget on the OpenAI key."""
     lee = User.objects.create(username="lee")
+    fund(parse_providers(POOLS), lee)
     first = _view(parse_providers(POOLS), lee).grant
     _hold(first, lee, "10", parse_providers(POOLS))
     stub = (
@@ -643,12 +666,14 @@ def test_growing_onto_another_envelopes_account_waits_for_an_admin():
     which paid's envelope funds: extra's authority stops until an admin
     approves the new account."""
     lee = User.objects.create(username="lee")
+    fund(parse_providers(POOLS), lee)
     admin = _admin()
     providers = parse_providers(EXTRA)
     _view(providers, lee)
     pools.link_config_envelope(
         providers, "extra", by_id=admin.pk, admin=True, fund=True
     )
+    fund(providers, lee, pool="extra")
     extra = _view(providers, lee, "extra").grant
     _hold(extra, lee, "1", providers, ref="openai/gpt-6-luna")
     grown = parse_providers(
@@ -670,7 +695,9 @@ def test_growing_onto_another_envelopes_account_waits_for_an_admin():
 @pytest.mark.django_db
 def test_a_provider_without_a_key_env_is_identified_by_the_sdk_default():
     lee = User.objects.create(username="lee")
+    fund(parse_providers(POOLS), lee)
     base = POOLS.replace("    api_key_env: TEST_POOL_OPENAI_KEY\n", "")
+    fund(parse_providers(base), lee)
     first = _view(parse_providers(base), lee).grant
     _hold(first, lee, "10", parse_providers(base))
     moved = (
@@ -693,6 +720,7 @@ def test_runtime_switches_follow_a_rename():
     from tests.test_model_pools import set_state
 
     lee = User.objects.create(username="lee")
+    fund(parse_providers(POOLS), lee)
     providers = parse_providers(POOLS)
     own = _view(providers, lee).grant
     set_state("paid", providers, enabled=False)
@@ -724,6 +752,7 @@ def test_an_admins_link_or_approval_never_lifts_a_persons_revocation():
     paid-api, and an admin continues paid's envelope and approves the
     accounts: still revoked. Only restore=True lifts it."""
     lee = User.objects.create(username="lee")
+    fund(parse_providers(POOLS), lee)
     two = (
         POOLS.replace("routes: [openai, anthropic]", "routes: [openai]")
         .replace(

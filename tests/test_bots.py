@@ -469,7 +469,11 @@ async def test_api_key_comes_from_env_and_is_not_stored(tmp_path, monkeypatch):
 
     monkeypatch.setenv("KEYED_BOT_KEY", "sk-secret")
     spec = bot.engine_spec()
-    assert spec.config == {"model": "m", "api_key": "sk-secret"}
+    assert spec.config == {
+        "model": "m",
+        "api_key": "sk-secret",
+        "api_key_env": "KEYED_BOT_KEY",
+    }
 
     user = await User.objects.acreate(username="keyed")
     root = await bot.root_session(user)

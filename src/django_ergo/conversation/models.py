@@ -1422,6 +1422,58 @@ class SpendEnvelope(models.Model):
         return f"envelope:{self.pk}"
 
 
+class SpendFunding(models.Model):
+    """Explicit authenticated funding revision, independent of config ceilings.
+
+    Revisions share the envelope's cumulative ledger, including uncertain holds.
+    Prior rows remain as the audit of who approved which exact terms.
+    """
+
+    envelope = models.ForeignKey(
+        SpendEnvelope, on_delete=models.PROTECT, related_name="funding"
+    )
+    actor = models.ForeignKey(User, on_delete=models.PROTECT, related_name="+")
+    created_at = models.DateTimeField(auto_now_add=True)
+    budget_usd = models.DecimalField(max_digits=16, decimal_places=4)
+    valid_from = models.DateTimeField()
+    expires_at = models.DateTimeField()
+    accounts = models.JSONField(default=list)
+    note = models.CharField(max_length=200)
+
+    def __str__(self):
+        return f"Funding {self.pk} for envelope {self.envelope_id}"
+
+
+class PaidDispatchState(models.Model):
+    """Singleton latch: activation is permanent; pause preserves all ledgers."""
+
+    id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
+    activated_at = models.DateTimeField(null=True, blank=True)
+    paused = models.BooleanField(default=False)
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by = models.ForeignKey(
+        User, on_delete=models.PROTECT, null=True, related_name="+"
+    )
+
+    def __str__(self):
+        return "Paid dispatch pause" if self.paused else "Paid dispatch state"
+
+
+class SpendControlAudit(models.Model):
+    """Audit of explicit funding, continuation, restoration and paid pause."""
+
+    actor = models.ForeignKey(User, on_delete=models.PROTECT, related_name="+")
+    created_at = models.DateTimeField(auto_now_add=True)
+    action = models.CharField(max_length=32)
+    envelope = models.ForeignKey(
+        SpendEnvelope, on_delete=models.PROTECT, null=True, related_name="control_audit"
+    )
+    details = models.JSONField(default=dict)
+
+    def __str__(self):
+        return f"{self.action} by actor {self.actor_id}"
+
+
 class SpendGrant(models.Model):
     """One immutable revision of spend authority on a pool's metered routes,
     for one user (``grantee``), issued by the pool's owner (``bots.pools``).

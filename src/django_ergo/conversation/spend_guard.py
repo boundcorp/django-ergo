@@ -759,6 +759,33 @@ def _finish(pk, **fields) -> None:
     InferenceRequest.objects.filter(pk=pk).update(finished_at=timezone.now(), **fields)
 
 
+def paid_dispatch_problem(*, legacy: bool = False) -> str:
+    """Fail closed if the persistent latch cannot be read (e.g. old schema)."""
+    from django.db import DatabaseError
+
+    from django_ergo.conversation.models import PaidDispatchState
+
+    try:
+        state = PaidDispatchState.objects.filter(pk=1).first()
+    except DatabaseError:
+        return "Paid dispatch state cannot be verified; paid dispatch is paused"
+    if state is not None:
+        if state.paused:
+            return "Paid dispatch is paused; all grants and holds are retained"
+        if legacy and state.activated_at is not None:
+            return "Pool enforcement was activated; removing pools cannot restore unguarded paid dispatch"
+    return ""
+
+
+async def check_unguarded_dispatch():
+    """Legacy SDK sends are permitted only before first pool activation."""
+    problem = await sync_to_async(paid_dispatch_problem, thread_sensitive=True)(
+        legacy=True
+    )
+    if problem:
+        raise SpendDenied(problem)
+
+
 @dataclass
 class MeteredGuard:
     """Spend authority for one engine on one metered route of one pool."""
@@ -776,6 +803,13 @@ class MeteredGuard:
     purpose: str = "chat"
     deny_reason: str = ""  # set: refuse every send with this reason
     attempts: int = 0
+    transport_identity: str = ""
+
+    def check_transport(self, identity: str) -> None:
+        """Adapters call before each attempt with their captured non-secret identity."""
+        if self.transport_identity and identity != self.transport_identity:
+            msg = "Engine transport/account differs from the selected authority; rebuild the engine"
+            raise SpendDenied(msg)
 
     async def call(  # noqa: C901
         self,

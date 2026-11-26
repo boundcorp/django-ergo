@@ -31,6 +31,7 @@ from django_ergo.conversation.inference_policy import PolicyError
 from django_ergo.conversation.models import ConversationSession
 from django_ergo.conversation.models import InferenceRequest
 from django_ergo.conversation.models import RouteDecision
+from tests.pool_funding import fund
 
 User = get_user_model()
 KIMI = "accounts/fireworks/models/kimi-k3"
@@ -182,6 +183,13 @@ def set_chat(session, pool, providers):
 def grant(providers, grantee, *, pool="paid", budget="10", days=7, **extra):
     """A grant from the pool's owner (lee) to ``grantee``."""
     owner = User.objects.get(username="lee")
+    from django_ergo.conversation.models import SpendFunding
+
+    if (
+        providers.pools.get(pool).budget_usd is not None
+        and not SpendFunding.objects.filter(envelope__owner=owner).exists()
+    ):
+        fund(providers, owner, pool=pool)
     return pools.issue_grant(
         providers,
         pool,
@@ -311,6 +319,7 @@ def test_auto_mode_uses_the_first_pool_and_records_a_receipt(user):
 
 @pytest.mark.django_db
 def test_manual_pool_user_default_chat_override_and_preferred_order(user):
+    fund(parse_providers(POOLS), user)
     _, found = registry_of()
     bot = found["devbox"]
     providers = bot.providers
@@ -333,6 +342,7 @@ def test_manual_pool_user_default_chat_override_and_preferred_order(user):
 
 @pytest.mark.django_db
 def test_preferred_order_is_per_user(user):
+    fund(parse_providers(POOLS), user)
     _, found = registry_of()
     bot = found["devbox"]
     other = User.objects.create(username="other")
@@ -356,6 +366,7 @@ GATES = [
 @pytest.mark.django_db
 @pytest.mark.parametrize(("auto", "out", "entry", "rolls"), GATES)
 def test_rollover_needs_all_three_gates(user, monkeypatch, auto, out, entry, rolls):  # noqa: PLR0913
+    fund(parse_providers(POOLS), user)
     _, found = registry_of()
     bot = found["devbox"]
     providers = bot.providers
@@ -414,6 +425,7 @@ def test_non_exhaustion_errors_never_roll_over(user, monkeypatch, cause):
 
 @pytest.mark.django_db
 def test_budget_denial_on_the_active_pool_never_rolls_back(user):
+    fund(parse_providers(POOLS), user)
     _, found = registry_of()
     bot = found["devbox"]
     providers = bot.providers
@@ -453,6 +465,7 @@ def test_a_pin_outside_the_active_pool_is_refused_not_substituted(user):
 
 @pytest.mark.django_db
 def test_unpriced_metered_model_is_not_usable(user):
+    fund(parse_providers(POOLS), user)
     _, found = registry_of()
     bot = found["devbox"]
     set_pref(user.pk, bot.providers, active_pool="paid")
@@ -464,6 +477,7 @@ def test_unpriced_metered_model_is_not_usable(user):
 
 @pytest.mark.django_db
 def test_budget_expiry_makes_the_pool_ineligible(user):
+    fund(parse_providers(POOLS), user)
     _, found = registry_of(POOLS.replace("expires: 2099-12-31", "expires: 2000-01-01"))
     bot = found["devbox"]
     providers = bot.providers
@@ -480,6 +494,7 @@ async def test_metered_engine_reserves_before_each_send_and_prices_after(monkeyp
     _, found = registry_of()
     bot = found["devbox"]
     owner = await User.objects.acreate(username="lee")
+    await sync_to_async(fund)(parse_providers(POOLS), owner)
     await sync_to_async(pools.update_preference)(
         owner.pk, bot.providers, version=0, active_pool="paid"
     )
@@ -537,6 +552,7 @@ def test_reservations_are_serialized_under_concurrency():
     if connection.vendor != "postgresql":
         pytest.skip("advisory locks need PostgreSQL")
     owner = User.objects.create(username="lee")
+    fund(parse_providers(POOLS), owner)
     providers = parse_providers(POOLS)
     held = grant(providers, owner, budget="1.00")
     results = []
@@ -574,6 +590,7 @@ def test_reservations_are_serialized_under_concurrency():
 
 @pytest.mark.django_db
 def test_guard_rereads_the_grant_at_send_time(user):
+    fund(parse_providers(POOLS), user)
     from django_ergo.conversation.models import SpendGrant
 
     providers = parse_providers(POOLS)
@@ -660,6 +677,7 @@ def test_switched_off_provider_is_excluded_everywhere(user):
 
 @pytest.mark.django_db
 def test_coding_inherits_the_active_pool(user):
+    fund(parse_providers(POOLS), user)
     _, found = registry_of()
     bot = found["devbox"]
     session = chat(bot, user)
@@ -684,6 +702,7 @@ def test_coding_inherits_the_active_pool(user):
 @pytest.mark.django_db
 def test_a_manager_with_a_real_spend_bound_would_reserve_per_launch(user):
     """The eligibility path for a future manager that can enforce both."""
+    fund(parse_providers(POOLS), user)
     _, found = registry_of()
     bot = found["devbox"]
     session = chat(bot, user, pool="paid")
@@ -712,6 +731,7 @@ def test_no_shipped_agent_manager_launches_metered_coding():
 
 @pytest.mark.django_db
 def test_agents_start_refuses_metered_coding_before_any_launch(user, monkeypatch):
+    fund(parse_providers(POOLS), user)
     from django_ergo.bots import agents
 
     _, found = registry_of()
@@ -743,6 +763,7 @@ def test_agents_start_refuses_metered_coding_before_any_launch(user, monkeypatch
 
 @pytest.mark.django_db
 def test_explicit_coding_model_must_be_in_the_pool(user):
+    fund(parse_providers(POOLS), user)
     _, found = registry_of()
     bot = found["devbox"]
     session = chat(bot, user)
@@ -758,6 +779,7 @@ def test_explicit_coding_model_must_be_in_the_pool(user):
 
 @pytest.mark.django_db
 def test_omp_is_refused_on_a_metered_route(user):
+    fund(parse_providers(POOLS), user)
     text = POOLS.replace(
         "    tiers: {medium: [openai/gpt-6.1-sol, anthropic/claude-opus-5-5]}",
         "    tiers: {medium: [openai/gpt-6.1-sol, anthropic/claude-opus-5-5]}\n"
@@ -838,6 +860,7 @@ def test_local_shell_confines_env_and_flags(tmp_path, monkeypatch):
 
 @pytest.mark.django_db
 def test_resumed_confined_launch_revalidates_and_reserves_again(user):
+    fund(parse_providers(POOLS), user)
     _, found = registry_of()
     bot = found["devbox"]
     session = chat(bot, user, pool="paid")

@@ -872,7 +872,7 @@ class Bot:
                 picked = tier[0] if tier else ""
         return self.providers.check_public(picked, where=ref) if picked else ""
 
-    def engine_spec(  # noqa: C901
+    def engine_spec(  # noqa: C901, PLR0912
         self, session: ConversationSession | None = None, model: str = ""
     ) -> EngineSpec:
         """The engine for a chat: the model picked for it (or ``model``), else the bot's."""
@@ -934,6 +934,9 @@ class Bot:
                 msg = f"Bot {self.name!r} needs the {key_env} environment variable"
                 raise RuntimeError(msg)
             config["api_key"] = key
+            config["api_key_env"] = key_env
+        if ref and self.providers.find(ref) and self.providers.find(ref)[0].account:
+            config["_pool_account"] = self.providers.find(ref)[0].account
         return EngineSpec(
             engine_type=engine_type,
             transport_type=transport,
@@ -1193,8 +1196,10 @@ class Bot:
     def _attach_spend_guard(self, engine, spec, session, decision, purpose) -> None:
         """Metered public routes send only with a pool decision's guard, on an
         engine that enforces it (``spend_adapter``); anything else refuses."""
-        if self.providers.pools.legacy or spec.engine_type in PRIVATE_ENGINE_TYPES:
+        if spec.engine_type in PRIVATE_ENGINE_TYPES:
             return
+        if self.providers.pools.legacy:
+            return  # API adapters re-read the durable latch at each unguarded send.
         provider_name = str(spec.config.get("provider") or "")
         model = str(spec.config.get("model") or "")
         provider = self.providers.providers.get(provider_name)
@@ -1224,6 +1229,18 @@ class Bot:
         decision = decision or getattr(session, "_ergo_decision", None)
         if decision is not None and decision.route == f"{provider_name}/{model}":
             engine.spend_guard = decision.guard(self, session, purpose=purpose)
+            if engine.spend_guard is not None:
+                from django_ergo.conversation.transport_identity import identity
+
+                engine.spend_guard.check_transport(
+                    identity(
+                        spec.engine_type,
+                        spec.transport_type,
+                        spec.config,
+                        account=spec.config.get("_pool_account", ""),
+                        model=model,
+                    )
+                )
             return
         engine.spend_guard = pools.deny_guard(
             provider_name,

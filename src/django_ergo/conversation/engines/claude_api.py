@@ -143,7 +143,18 @@ class ClaudeAPIEngine(StoredMessagesMixin, Engine):
         )
         self.model = config.get("model", "claude-3-5-sonnet-20241022")
         self.api_key = config.get("api_key")
-        self.base_url = config.get("base_url")
+        self.base_url = effective_anthropic_base_url(
+            config.get("base_url") or config.get("api_base") or config.get("endpoint")
+        )
+        from django_ergo.conversation.transport_identity import identity
+
+        self._transport_identity = identity(
+            "claude",
+            "api",
+            config,
+            account=config.get("_pool_account", ""),
+            model=self.model,
+        )
         self.max_tokens = config.get("max_tokens", 32000)
         self._client = None
         self._adapter = ClaudeToolAdapter()
@@ -181,13 +192,25 @@ class ClaudeAPIEngine(StoredMessagesMixin, Engine):
         worst-case cost first (``conversation.spend_guard``)."""
         guard = getattr(self, "spend_guard", None)
         if guard is not None:
+            guard.check_transport(self._transport_identity)
             return await guard.call(
                 kwargs, self.spend_adapter, lambda: self._send_message(**kwargs)
             )
+        from django_ergo.conversation.spend_guard import check_unguarded_dispatch
+
+        await check_unguarded_dispatch()
         return await self._send_message(**kwargs)
 
     async def _send_message(self, **kwargs):
         client = self._get_client()
+        if guard := getattr(self, "spend_guard", None):
+            from django_ergo.conversation.transport_identity import with_endpoint
+
+            guard.check_transport(
+                with_endpoint(
+                    self._transport_identity, getattr(client, "base_url", self.base_url)
+                )
+            )
         assert_public_endpoint(
             getattr(client, "base_url", None), what="The Claude API engine"
         )
