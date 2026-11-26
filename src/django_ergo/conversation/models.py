@@ -1427,6 +1427,110 @@ class SpendEnvelope(models.Model):
         return f"envelope:{self.pk}"
 
 
+class BudgetRecordQuerySet(models.QuerySet):
+    """Audit identities and consent revisions cannot be rewritten."""
+
+    def update(self, **kwargs):
+        msg = "Budget audit records are immutable"
+        raise TypeError(msg)
+
+    def bulk_update(self, objs, fields, batch_size=None):
+        msg = "Budget audit records are immutable"
+        raise TypeError(msg)
+
+    def bulk_create(self, objs, **kwargs):
+        if kwargs.get("update_conflicts") or kwargs.get("ignore_conflicts"):
+            msg = "Budget audit records are immutable"
+            raise TypeError(msg)
+        return super().bulk_create(objs, **kwargs)
+
+    def delete(self):
+        msg = "Budget audit records are immutable"
+        raise TypeError(msg)
+
+
+class BudgetRecord(models.Model):
+    objects = BudgetRecordQuerySet.as_manager()
+
+    class Meta:
+        abstract = True
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding:
+            msg = "Budget audit records are immutable"
+            raise TypeError(msg)
+        kwargs["force_insert"] = True
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        msg = "Budget audit records are immutable"
+        raise TypeError(msg)
+
+
+class ProviderBudgetFamily(BudgetRecord):
+    """Deployment-wide provider identity; neither config nor key aliases reset it."""
+
+    # Exactly one bucket per vendor, across every owner/account/model/bot.
+    id = models.CharField(max_length=16, primary_key=True)
+    owner = models.ForeignKey(User, on_delete=models.PROTECT, related_name="+")
+    actor = models.ForeignKey(User, on_delete=models.PROTECT, related_name="+")
+    created_at = models.DateTimeField(auto_now_add=True)
+    assertion = models.CharField(max_length=200)
+
+    def __str__(self):
+        return self.pk
+
+
+class ProviderAccountMapping(BudgetRecord):
+    """Explicit admin assertion about a non-secret transport/account identity."""
+
+    identity = models.CharField(max_length=1000, unique=True)
+    family = models.ForeignKey(
+        ProviderBudgetFamily, on_delete=models.PROTECT, related_name="accounts"
+    )
+    account_label = models.CharField(max_length=200)
+    actor = models.ForeignKey(User, on_delete=models.PROTECT, related_name="+")
+    created_at = models.DateTimeField(auto_now_add=True)
+    assertion = models.CharField(max_length=200)
+
+    def __str__(self):
+        return f"{self.family_id}: {self.account_label}"
+
+
+class ProviderMonthlyConsent(BudgetRecord):
+    """Explicit recurring authority, independently switchable and append-only."""
+
+    family = models.ForeignKey(
+        ProviderBudgetFamily, on_delete=models.PROTECT, related_name="consents"
+    )
+    actor = models.ForeignKey(User, on_delete=models.PROTECT, related_name="+")
+    created_at = models.DateTimeField(auto_now_add=True)
+    version = models.PositiveIntegerField()
+    monthly_usd = models.DecimalField(max_digits=16, decimal_places=4)
+    enabled = models.BooleanField(default=False)
+    valid_from = models.DateTimeField()
+    expires_at = models.DateTimeField()
+    timezone = models.CharField(max_length=16, default="UTC")
+    note = models.CharField(max_length=200)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["family", "version"], name="provider_consent_version"
+            ),
+            models.CheckConstraint(
+                condition=Q(monthly_usd__gte=0, monthly_usd__lte=100),
+                name="provider_monthly_max_100",
+            ),
+            models.CheckConstraint(
+                condition=Q(timezone="UTC"), name="provider_monthly_utc"
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.family_id} monthly consent v{self.version}"
+
+
 class SpendFunding(models.Model):
     """Explicit authenticated funding revision, independent of config ceilings.
 
@@ -1434,6 +1538,7 @@ class SpendFunding(models.Model):
     Prior rows remain as the audit of who approved which exact terms.
     """
 
+    budget_period = models.CharField(max_length=24, default="cumulative")
     envelope = models.ForeignKey(
         SpendEnvelope, on_delete=models.PROTECT, related_name="funding"
     )
@@ -1518,6 +1623,7 @@ class SpendGrant(models.Model):
     valid_from = models.DateTimeField()
     expires_at = models.DateTimeField()
     source = models.CharField(max_length=16, default="issued")
+    budget_period = models.CharField(max_length=24, default="cumulative")
     config_key = models.CharField(max_length=64, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
     created_by = models.ForeignKey(
@@ -1712,6 +1818,19 @@ class InferenceRequest(TimeStampedMixin):
     """
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    provider_family = models.ForeignKey(
+        ProviderBudgetFamily,
+        on_delete=models.PROTECT,
+        null=True,
+        related_name="attempts",
+    )
+    account_mapping = models.ForeignKey(
+        ProviderAccountMapping,
+        on_delete=models.PROTECT,
+        null=True,
+        related_name="attempts",
+    )
+    budget_month = models.DateField(null=True, db_index=True)
     structured_call = models.ForeignKey(
         StructuredCall,
         on_delete=models.SET_NULL,

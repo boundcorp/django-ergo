@@ -447,7 +447,7 @@ def test_migration_existing_history_starts_paused_without_consent():
     from django.utils import timezone
 
     before = ("django_ergo", "0061_spend_envelope_families")
-    leaf = ("django_ergo", "0062_explicit_funding_and_paid_latch")
+    leaf = ("django_ergo", "0064_provider_monthly_budgets")
     try:
         MigrationExecutor(connection).migrate([before])
         executor = MigrationExecutor(connection)

@@ -65,7 +65,7 @@ around each single HTTP attempt, with its client's automatic retries off.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import Decimal
+from dataclasses import field
 from typing import TYPE_CHECKING
 from typing import Protocol
 
@@ -80,6 +80,7 @@ if TYPE_CHECKING:
     import datetime as dt
     from collections.abc import Awaitable
     from collections.abc import Callable
+    from decimal import Decimal
 
     from django_ergo.pricing import ExactPrice
 
@@ -131,7 +132,7 @@ def _locks_of(envelope_id) -> list[str]:
     return [envelope_lock_key(parent), envelope_lock_key(envelope_id)]
 
 
-def spent_and_reserved(grant_id) -> tuple[Decimal, Decimal]:
+def spent_and_reserved(grant_id, *, period=None) -> tuple[Decimal, Decimal]:
     """(priced spend, outstanding reservations) of the envelope ``grant_id``
     is a revision of: every revision's attempts, all time, revoked revisions
     included (their uncertain holds stay counted). Runs the ORM."""
@@ -143,10 +144,12 @@ def spent_and_reserved(grant_id) -> tuple[Decimal, Decimal]:
         if envelope is not None
         else [grant_id]
     )
-    return _totals(revisions)
+    if period is None:
+        period = SpendGrant.objects.get(pk=grant_id).budget_period
+    return _totals(revisions, period=period)
 
 
-def family_spent_and_reserved(envelope_id) -> tuple[Decimal, Decimal]:
+def family_spent_and_reserved(envelope_id, *, period=None) -> tuple[Decimal, Decimal]:
     """(priced spend, outstanding reservations) of the owner's config
     envelope ``envelope_id`` and every envelope issued from it: what the
     owner's budget caps. Runs the ORM."""
@@ -157,28 +160,24 @@ def family_spent_and_reserved(envelope_id) -> tuple[Decimal, Decimal]:
     revisions = SpendGrant.objects.filter(
         Q(envelope_id=envelope_id) | Q(envelope__parent_id=envelope_id)
     ).values_list("pk", flat=True)
-    return _totals(revisions)
+    if period is None:
+        current = (
+            SpendGrant.objects.filter(envelope_id=envelope_id)
+            .order_by("-created_at")
+            .first()
+        )
+        period = current.budget_period if current else "cumulative"
+    return _totals(revisions, period=period)
 
 
-def _totals(revisions) -> tuple[Decimal, Decimal]:
-    from django_ergo.conversation.models import InferenceOutcome
+def _totals(revisions, *, period="cumulative") -> tuple[Decimal, Decimal]:
     from django_ergo.conversation.models import InferenceRequest
+    from django_ergo.conversation.monthly_budgets import totals
 
-    spent = Decimal(0)
-    reserved = Decimal(0)
-    rows = InferenceRequest.objects.filter(
-        pool__in=[ledger_key(pk) for pk in revisions]
+    return totals(
+        InferenceRequest.objects.filter(pool__in=[ledger_key(pk) for pk in revisions]),
+        period=period,
     )
-    for outcome, status, cost, held in rows.values_list(
-        "outcome", "cost_status", "cost_usd", "reserved_usd"
-    ):
-        if outcome == InferenceOutcome.NOT_SENT:
-            continue
-        if status == "priced" and cost is not None:
-            spent += cost
-        else:
-            reserved += held or Decimal(0)
-    return spent, reserved
 
 
 def lock(key: str) -> None:
@@ -209,6 +208,13 @@ class Terms:
     # None}); a send prices with these, not with the guard's copy from when
     # it was built. None: not re-read (the guard's price applies).
     prices: dict | None = None
+    budget_limits: dict = field(default_factory=dict)
+    cap_period: str = "cumulative"
+    account_identities: dict = field(default_factory=dict)
+
+    @property
+    def limits(self):
+        return self.budget_limits or {"cumulative": self.budget_usd}
 
     @classmethod
     def of(cls, grant) -> Terms:
@@ -219,6 +225,7 @@ class Terms:
             max_output_tokens=int(grant.max_output_tokens),
             valid_from=grant.valid_from,
             expires_at=grant.expires_at,
+            budget_limits={grant.budget_period: grant.budget_usd},
         )
 
     def narrowed(self, other: Terms) -> Terms:
@@ -233,6 +240,9 @@ class Terms:
         if len(envelopes) > 1:
             msg = "spend terms of two families can't be intersected"
             raise ValueError(msg)
+        limits = dict(self.limits)
+        for period, budget in other.limits.items():
+            limits[period] = min(limits.get(period, budget), budget)
         return Terms(
             routes=self.routes & other.routes,
             budget_usd=min(self.budget_usd, other.budget_usd),
@@ -243,6 +253,11 @@ class Terms:
             cap_envelope=next(iter(envelopes), None),
             cap_usd=min(caps) if caps else None,
             prices=other.prices if other.prices is not None else self.prices,
+            budget_limits=limits,
+            cap_period=other.cap_period
+            if other.cap_envelope is not None
+            else self.cap_period,
+            account_identities=other.account_identities or self.account_identities,
         )
 
 
@@ -627,7 +642,7 @@ ADAPTERS = {
 }
 
 
-def reserve(  # noqa: PLR0913, PLR0912, C901
+def reserve(  # noqa: PLR0913, PLR0912, PLR0915, C901
     *,
     grant_id,
     provider: str,
@@ -665,7 +680,14 @@ def reserve(  # noqa: PLR0913, PLR0912, C901
         raise SpendDenied(msg)
     msg = ""
     locks = _locks_of(envelope)
+    from django_ergo.conversation import monthly_budgets as monthly
+
+    captured_identity = getattr(current, "identity", "")
+    captured_family = (
+        monthly.family_of(captured_identity) if captured_identity else provider
+    )
     with transaction.atomic():
+        monthly.lock_family(captured_family)
         for key in locks:
             lock(key)
         grant = (
@@ -677,6 +699,10 @@ def reserve(  # noqa: PLR0913, PLR0912, C901
                 problem = f"the spend grant doesn't cover {ref}"
             elif output_tokens is not None and output_tokens > terms.max_output_tokens:
                 problem = f"the output ceiling is now {terms.max_output_tokens} tokens"
+            elif launch and "calendar_month_utc" in terms.limits:
+                problem = (
+                    "recurring API funding does not authorize paid coding launches"
+                )
             elif launch and (
                 terms.per_launch_usd is None or amount > terms.per_launch_usd
             ):
@@ -698,16 +724,39 @@ def reserve(  # noqa: PLR0913, PLR0912, C901
             # Leave the block normally: revocations made while re-reading stay.
             msg = f"{ref}: {problem}; refusing to send"
         else:
-            spent, held = spent_and_reserved(grant_id)
+            identity = terms.account_identities.get(ref, captured_identity)
+            if identity and monthly.family_of(identity) != captured_family:
+                msg = "Provider/account changed while acquiring budget locks"
+                raise SpendDenied(msg)
+            monthly_fields = monthly.reservation_context(
+                identity, amount, required=monthly.MONTHLY in terms.limits
+            )
+            limits = [
+                (period, budget, *spent_and_reserved(grant_id, period=period))
+                for period, budget in terms.limits.items()
+            ]
+            exceeded = next(
+                (
+                    (budget, spent, held)
+                    for _, budget, spent, held in limits
+                    if spent + held + amount > budget
+                ),
+                None,
+            )
+            budget, spent, held = exceeded or (
+                terms.budget_usd,
+                limits[0][2],
+                limits[0][3],
+            )
             if terms.cap_envelope is not None:
                 family_spent, family_held = family_spent_and_reserved(
-                    terms.cap_envelope
+                    terms.cap_envelope, period=terms.cap_period
                 )
-            if spent + held + amount > terms.budget_usd:
+            if exceeded:
                 msg = (
                     f"Pool {grant.pool!r} grant is at its budget: ${spent:.4f} spent "
                     f"and ${held:.4f} reserved, this request could cost up to "
-                    f"${amount:.4f}, budget ${terms.budget_usd}; refusing to send"
+                    f"${amount:.4f}, budget ${budget}; refusing to send"
                 )
             elif (
                 terms.cap_envelope is not None
@@ -728,6 +777,7 @@ def reserve(  # noqa: PLR0913, PLR0912, C901
                     reserved_usd=amount,
                     cost_status="pending",
                     **fields,
+                    **monthly_fields,
                 )
     if msg:
         raise SpendDenied(msg)
@@ -755,8 +805,30 @@ def priced(usage: Usage | None, price: ExactPrice | None) -> dict:
 
 def _finish(pk, **fields) -> None:
     from django_ergo.conversation.models import InferenceRequest
+    from django_ergo.conversation.monthly_budgets import lock_family
 
-    InferenceRequest.objects.filter(pk=pk).update(finished_at=timezone.now(), **fields)
+    family = (
+        InferenceRequest.objects.filter(pk=pk)
+        .values_list("provider_family_id", flat=True)
+        .first()
+    )
+    with transaction.atomic():
+        if family:
+            lock_family(family)
+        # Settlement serializes with reservations on the original grant family too.
+        row = InferenceRequest.objects.get(pk=pk)
+        grant_id = (
+            row.pool.removeprefix(LEDGER_PREFIX)
+            if row.pool.startswith(LEDGER_PREFIX)
+            else None
+        )
+        envelope = _envelope_of(grant_id) if grant_id else None
+        if envelope:
+            for key in _locks_of(envelope):
+                lock(key)
+        InferenceRequest.objects.filter(pk=pk).update(
+            finished_at=timezone.now(), **fields
+        )
 
 
 def paid_dispatch_problem(*, legacy: bool = False) -> str:
