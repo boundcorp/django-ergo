@@ -132,7 +132,7 @@ def _locks_of(envelope_id) -> list[str]:
     return [envelope_lock_key(parent), envelope_lock_key(envelope_id)]
 
 
-def spent_and_reserved(grant_id, *, period=None) -> tuple[Decimal, Decimal]:
+def spent_and_reserved(grant_id, *, period=None, now=None) -> tuple[Decimal, Decimal]:
     """(priced spend, outstanding reservations) of the envelope ``grant_id``
     is a revision of: every revision's attempts, all time, revoked revisions
     included (their uncertain holds stay counted). Runs the ORM."""
@@ -146,10 +146,12 @@ def spent_and_reserved(grant_id, *, period=None) -> tuple[Decimal, Decimal]:
     )
     if period is None:
         period = SpendGrant.objects.get(pk=grant_id).budget_period
-    return _totals(revisions, period=period)
+    return _totals(revisions, period=period, now=now)
 
 
-def family_spent_and_reserved(envelope_id, *, period=None) -> tuple[Decimal, Decimal]:
+def family_spent_and_reserved(
+    envelope_id, *, period=None, now=None
+) -> tuple[Decimal, Decimal]:
     """(priced spend, outstanding reservations) of the owner's config
     envelope ``envelope_id`` and every envelope issued from it: what the
     owner's budget caps. Runs the ORM."""
@@ -162,21 +164,24 @@ def family_spent_and_reserved(envelope_id, *, period=None) -> tuple[Decimal, Dec
     ).values_list("pk", flat=True)
     if period is None:
         current = (
-            SpendGrant.objects.filter(envelope_id=envelope_id)
+            SpendGrant.objects.filter(
+                envelope_id=envelope_id, superseded_at__isnull=True
+            )
             .order_by("-created_at")
             .first()
         )
         period = current.budget_period if current else "cumulative"
-    return _totals(revisions, period=period)
+    return _totals(revisions, period=period, now=now)
 
 
-def _totals(revisions, *, period="cumulative") -> tuple[Decimal, Decimal]:
+def _totals(revisions, *, period="cumulative", now=None) -> tuple[Decimal, Decimal]:
     from django_ergo.conversation.models import InferenceRequest
     from django_ergo.conversation.monthly_budgets import totals
 
     return totals(
         InferenceRequest.objects.filter(pool__in=[ledger_key(pk) for pk in revisions]),
         period=period,
+        now=now,
     )
 
 
@@ -728,11 +733,19 @@ def reserve(  # noqa: PLR0913, PLR0912, PLR0915, C901
             if identity and monthly.family_of(identity) != captured_family:
                 msg = "Provider/account changed while acquiring budget locks"
                 raise SpendDenied(msg)
+            reservation_time = timezone.now()
             monthly_fields = monthly.reservation_context(
-                identity, amount, required=monthly.MONTHLY in terms.limits
+                identity,
+                amount,
+                required=monthly.MONTHLY in terms.limits,
+                now=reservation_time,
             )
             limits = [
-                (period, budget, *spent_and_reserved(grant_id, period=period))
+                (
+                    period,
+                    budget,
+                    *spent_and_reserved(grant_id, period=period, now=reservation_time),
+                )
                 for period, budget in terms.limits.items()
             ]
             exceeded = next(
@@ -750,7 +763,7 @@ def reserve(  # noqa: PLR0913, PLR0912, PLR0915, C901
             )
             if terms.cap_envelope is not None:
                 family_spent, family_held = family_spent_and_reserved(
-                    terms.cap_envelope, period=terms.cap_period
+                    terms.cap_envelope, period=terms.cap_period, now=reservation_time
                 )
             if exceeded:
                 msg = (

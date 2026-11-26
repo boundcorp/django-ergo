@@ -289,7 +289,7 @@ def validate_pool_period(budget_period, version, accounts):
             raise ValueError(msg)
 
 
-def reservation_context(identity, amount, *, required=False):  # noqa: C901 -- fail-closed identity and consent checks
+def reservation_context(identity, amount, *, required=False, now=None):  # noqa: C901 -- fail-closed identity and consent checks
     """Under the vendor lock: verify consent and aggregate all vendor attempts."""
     from django_ergo.conversation.spend_guard import SpendDenied
 
@@ -320,7 +320,7 @@ def reservation_context(identity, amount, *, required=False):  # noqa: C901 -- f
     if mapping is None:
         msg = "Provider account requires an explicit admin mapping"
         raise SpendDenied(msg)
-    now = utc(timezone.now())
+    now = utc(now or timezone.now())
     if not consent.enabled or not (
         utc(consent.valid_from) <= now < utc(consent.expires_at)
     ):
@@ -328,14 +328,14 @@ def reservation_context(identity, amount, *, required=False):  # noqa: C901 -- f
         raise SpendDenied(msg)
     if problem := historical_problem():
         raise SpendDenied(problem)
-    spent, held = totals(family.attempts.all(), period=MONTHLY)
+    spent, held = totals(family.attempts.all(), period=MONTHLY, now=now)
     if spent + held + amount > consent.monthly_usd:
         msg = f"Provider {family_id} UTC monthly budget is used: ${spent} spent and ${held} reserved"
         raise SpendDenied(msg)
     return {
         "provider_family": family,
         "account_mapping": mapping,
-        "budget_month": month_of(),
+        "budget_month": month_of(now),
     }
 
 

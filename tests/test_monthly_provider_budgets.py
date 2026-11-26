@@ -552,3 +552,46 @@ def test_gemini_uses_same_exact_adapter_with_independent_monthly_bucket(clock):
     assert row.cost_status == "priced" and row.cost_usd > 0
     assert ProviderBudgetFamily.objects.count() == 1
     assert monthly.inspect_family("google")["reserved_usd"] == "0"
+
+
+def test_explicit_monthly_conversion_renews_new_authority_but_preserves_queued_cap(
+    clock,
+):
+    owner, _, providers, original = setup_budget(clock, recurring=False)
+    settle(reserve(owner, providers, original, "100"), "100")
+    previous = original.envelope.funding.last()
+    pools.approve_funding(
+        providers,
+        "paid",
+        by_id=owner.pk,
+        budget_usd="100",
+        expires_at=END,
+        valid_from=START,
+        accounts=pools.funding_accounts(providers, providers.pools.get("paid")),
+        budget_period=monthly.MONTHLY,
+        version=previous.pk,
+    )
+    clock[0] += dt.timedelta(seconds=1)
+    view = pools.snapshot(providers, owner.pk).get("paid")
+    assert view.grant.budget_period == monthly.MONTHLY
+    assert view.grant_problem() is None
+    assert view.family_used_usd == 0
+    reserve(owner, providers, view.grant, "1")
+    with pytest.raises(spend_guard.SpendDenied, match="grant is at its budget"):
+        reserve(owner, providers, original, "1")
+
+
+def test_midnight_during_reservation_uses_one_month_for_every_cap(clock, monkeypatch):
+    owner, _, providers, grant = setup_budget(clock, text=POOLS)
+    settle(reserve(owner, providers, grant, "10"), "10")
+    original_context = monthly.reservation_context
+
+    def cross_boundary(*args, **kwargs):
+        result = original_context(*args, **kwargs)
+        clock[0] += dt.timedelta(seconds=1)
+        return result
+
+    monkeypatch.setattr(monthly, "reservation_context", cross_boundary)
+    with pytest.raises(spend_guard.SpendDenied, match="grant is at its budget"):
+        reserve(owner, providers, grant, "1")
+    assert InferenceRequest.objects.count() == 1
