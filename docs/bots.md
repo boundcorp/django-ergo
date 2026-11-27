@@ -3009,3 +3009,7 @@ chats, named chats and channel chats start permanent; ordinary task threads do n
 separate from pinning and prevents resolving or idle archival. Existing
 archived chats are marked where applicable but stay archived, with their
 history and status unchanged.
+
+## Review briefs
+
+Enable `plugins: [{name: dev}]` for reusable review instructions. See [Review briefs](reviews.md) for kinds, orchestration, overrides and the CLI.

@@ -94,6 +94,7 @@ where = ["src"]
 # Without git metadata (the Ergonaut image build copies src/ alone) only
 # package-data is read, not MANIFEST.in, so list every non-Python file here.
 django_ergo = [
+    "plugins/dev_review_library/*.md",
     "bots/skill_library/**/*.md",
     "bots/skill_library/**/*.py",
     "templates/**/*.html",

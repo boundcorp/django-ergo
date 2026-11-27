@@ -1,6 +1,6 @@
 # Review narratives
 
-Status: design, no runtime code yet. Starter definitions are in
+Status: phase 1 implemented; see [review briefs](../reviews.md) for current usage. Starter definitions are in
 `src/django_ergo/plugins/dev_review_library/`.
 
 ## 1. Problem
