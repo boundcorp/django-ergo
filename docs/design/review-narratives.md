@@ -1,7 +1,7 @@
 # Review narratives
 
 Status: design, no runtime code yet. Starter definitions are in
-`src/django_ergo/bots/review_library/`.
+`src/django_ergo/plugins/dev_review_library/`.
 
 ## 1. Problem
 
@@ -51,27 +51,23 @@ Non-goals (for now):
 
 ## 3. Where it lives
 
-There is no merged "dev tooling library" yet. The closest pieces are:
+Lee decided on 2026-11-27 to put first-class review tooling in the official
+`dev` plugin proposed by [PR #398](https://github.com/boundcorp/django-ergo/pull/398),
+section 7. That proposal describes one plugin, `plugins/dev.py`, enabled with
+`plugins: [{name: dev}]`. Its possible future extension pack is separate from
+this decision; it does not currently bundle or enable other plugins.
 
-- the agent skill library, `src/django_ergo/bots/skill_library/`
-  (`ergo-developer`, `ergo-client`, ...), installable into Claude Code and
-  Codex by `skill_library/install.py`;
-- the proposed official `dev` plugin (`plugins/dev.py`) in the open design
-  PR #398 (`docs/design/thread-tags-and-deciders.md`, section "Form of the
-  dev pack"), which bundles `dev`, `orca`, `bash` and `kubectl`.
-
-Proposal, following the import layers (core < `bots` < `plugins`):
-
-| Piece | Path | Why there |
+| Piece | Proposed path | Role |
 | --- | --- | --- |
-| Definitions | `src/django_ergo/bots/review_library/*.md` | Sibling of `skill_library/`, same "library ships files, bot overrides by name" rule. |
-| Loader | `src/django_ergo/bots/reviews.py` | Needs `bots.providers` and `bots.routing` for tiers; no plugin imports. |
-| Tool + skill | `src/django_ergo/bots/skill_library/reviews/` (`SKILL.md`, `tools.py`) | A library skill any bot can include; `install: [claude, codex]` so external agents get it too. |
-| CLI | `ergonaut reviews brief ...` and `python -m django_ergo.bots.reviews` | For agents with no Ergo tools at all. |
+| Definitions | `src/django_ergo/plugins/dev_review_library/*.md` | Packaged data beside the single-file plugin; installation and bot overrides still apply. |
+| Loader and tool | `src/django_ergo/plugins/dev.py` | `review_brief` and `review_kinds` return data; the dev plugin exposes `ergo_review_brief`. |
+| CLI | `python -m django_ergo.plugins.dev reviews brief ...` | Proposed text entry point for callers without Ergo tools. |
 
-When the `dev` plugin lands it lists `reviews` in its default skills, so dev
-bots get it without naming it. Nothing in `reviews` depends on `dev` or
-`orca`.
+The loader uses bots' routing facilities when available but does not depend on
+Orca or launch agents. The plugin exposes the tool when enabled; a caller with
+no Ergo tool can invoke the proposed CLI or import the loader. External agents
+can use the resulting text and their own subagent tools. No standalone
+`reviews` skill or plugin is proposed.
 
 ## 4. Data format
 
@@ -108,7 +104,7 @@ Targets:
 
 Lookup order, later wins by `name`:
 
-1. `django_ergo/bots/review_library/` (built in).
+1. `src/django_ergo/plugins/dev_review_library/` (built in).
 2. Each directory in `DJANGO_ERGO["REVIEW_DIRS"]` (installation-wide, e.g.
    a shared directory in the bot config repo).
 3. The bot's own folder, `reviews/*.md`.
@@ -121,7 +117,7 @@ a load error, so the tool description is never ambiguous.
 ## 5. Loader API
 
 ```python
-from django_ergo.bots.reviews import review_brief, review_kinds
+from django_ergo.plugins.dev import review_brief, review_kinds
 
 review_brief(
     kind: str,                # name or alias
@@ -153,7 +149,7 @@ Its parts are:
 `review_kinds(bot=None)` lists kinds with aliases, summary and targets; the
 tool description is built from it.
 
-The tool, in the `reviews` skill:
+The tool, exposed by the `dev` plugin:
 
 ```
 ergo_review_brief(kind, target, target_kind?, swarmed?, n?, focus?)
@@ -176,7 +172,7 @@ Entry points:
 | Bot with Orca or local shell | `ergo_agent_start(brief=..., model=... or tier=...)` per reviewer, waits for worker reports, then synthesizes. |
 | Bot with another start-agent tool | Same steps with its own tool; the brief is plain text. |
 | Bot with no agent tool | Does a single review itself, says that the strategy was downgraded and which model ran it. |
-| Claude Code / Codex | The installed `reviews` skill runs the CLI and uses its own subagents. |
+| Claude Code / Codex | Calls the proposed CLI for text and uses its own subagents. |
 | Library code | Calls `review_brief()` directly. |
 
 ## 6. Model selection
@@ -284,10 +280,10 @@ Text cannot enforce "use a different model". We make violations visible:
 
 ## 10. Phased plan
 
-1. **Loader and skill.** `bots/reviews.py` (parse, lookup order, alias
-   check, tier resolution, `ReviewBrief`), `skill_library/reviews/` with
-   `ergo_review_brief`, the CLI, package-data for `review_library/*.md`,
-   tests, and `docs/reviews.md` plus a row in `docs/skills.md`.
+1. **Dev plugin review tooling.** Add the loader (parse, lookup order, alias
+   check, tier resolution, `ReviewBrief`), `ergo_review_brief`, and the CLI
+   to `plugins/dev.py`; package `plugins/dev_review_library/*.md`; add tests
+   and document the plugin and reviews in `docs/bots.md` and `docs/reviews.md`.
 2. **Audit.** `ergo_review_record`, the stored row, and a family-mismatch
    flag shown in the thread report.
 3. **Optional fan-out.** `run_review(...)` for bots with an
@@ -299,25 +295,23 @@ Text cannot enforce "use a different model". We make violations visible:
 
 ## 11. Open questions for Lee
 
-1. **Home.** `bots/review_library/` plus a `reviews` library skill, or wait
-   for the `dev` plugin from #398 and put everything there?
-2. **Planning review tier.** Same tier only, or allow one tier up when the
+1. **Planning review tier.** Same tier only, or allow one tier up when the
    other family has nothing at the author's tier (current proposal: allow
    up, never down)?
-3. **Cross-family on a single-family installation.** Fall back to a
+2. **Cross-family on a single-family installation.** Fall back to a
    different model of the same family with a warning, or refuse?
-4. **Who decomposes a swarm.** The calling bot (proposed), or a cheap
+3. **Who decomposes a swarm.** The calling bot (proposed), or a cheap
    planner agent whose slice plan the bot only checks?
-5. **Ponytail scope.** The source is an authoring skill; this definition
+4. **Ponytail scope.** The source is an authoring skill; this definition
    adapts it to review only. Should a "ponytail review" also allow the
    reviewer to push back on the request itself (the upstream "ultra"
    level)?
-6. **Override granularity.** Whole-file replace (proposed) or allow a bot to
+5. **Override granularity.** Whole-file replace (proposed) or allow a bot to
    append to a built-in checklist?
 
 ## Attribution
 
-`review_library/ponytail.md` is adapted, in paraphrase, from
+`src/django_ergo/plugins/dev_review_library/ponytail.md` is adapted, in paraphrase, from
 [DietrichGebert/ponytail `skills/ponytail/SKILL.md`](https://github.com/DietrichGebert/ponytail/blob/df9e89941d50419fd5bcf1de41e28097f1db49b2/skills/ponytail/SKILL.md),
 MIT License, Copyright (c) 2026 DietrichGebert. Its front matter records
 the source.
