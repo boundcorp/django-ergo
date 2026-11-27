@@ -17,7 +17,7 @@ Read `/home/dev/ENVIRONMENT.md` first. Reconciled remote draft PR 408 and branch
 - Final focused analysis + private-export regression run: 111 passed, one platformdirs warning. This includes the later source checksum, protected-copy laundering refusal, child timeout and crash-safe storage deletion regressions.
 - Combined acceptance suite: **308 passed, 8 skipped**, one platformdirs warning, in 88.58 seconds; includes the three analysis suites plus bot plugins, agent skills, conversation attachments, remote attachments and private exports.
 - Last analysis regression suite after rejecting case-ambiguous dataset/aggregate names: **80 passed**, one platformdirs warning, in 10.26 seconds. These three analysis suites cover the final query/executor change; the combined suite above preceded that final added regression.
-- Ruff check passes for all changed Python application modules and new tests; Ruff formatting applied.
+- Ruff check passes for all changed Python application modules and new tests; Ruff formatting applied. Optional runner/controller dependencies are also included in the development extra so the existing `[dev]` full-test CI job runs these regressions rather than failing with missing imports.
 - `manage.py makemigrations django_ergo --check --dry-run`: no changes detected after additive migration `0064_isolated_analysis`.
 - `manage.py check`: no issues.
 - `git diff --check`: passes.
