@@ -137,6 +137,9 @@ class ClaudeAPIEngine(StoredMessagesMixin, Engine):
     spend_adapter = AnthropicMessagesAdapter()
 
     def __init__(self, config: dict):
+        from django_ergo.provider_credentials import register_credential_config
+
+        register_credential_config(config)
         self.context_window = int(
             config.get("context_window")
             or (1_000_000 if str(config.get("model", "")).endswith("[1m]") else 200_000)

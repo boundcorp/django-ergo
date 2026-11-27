@@ -208,6 +208,13 @@ class Provider:
     enabled: bool = True  # providers.yaml; Ergonaut's runtime toggle is bots.pools
     billing: str = SUBSCRIPTION  # subscription or metered
 
+    def __post_init__(self):
+        from django_ergo.provider_credentials import register_credential_config
+
+        register_credential_config(
+            {"api_key_env": self.api_key_env, "config": self.config}
+        )
+
     @property
     def worker_only(self) -> bool:
         return self.type == "omp"
@@ -342,6 +349,9 @@ class Providers:
         if not isinstance(data, dict):
             msg = f"{PROVIDERS_FILE} must be a mapping"
             raise ProvidersError(msg)
+        from django_ergo.provider_credentials import register_credential_config
+
+        register_credential_config(data)
         providers = {}
         for name, given in (data.get("providers") or {}).items():
             spec = given or {}
@@ -802,6 +812,9 @@ def load_providers(paths: list[Path]) -> Providers:
     """The first ``providers.yaml`` found at the top of the given paths."""
     file, data = _first_providers_file(paths)
     if file:
+        from django_ergo.provider_credentials import register_credential_source
+
+        register_credential_source(file)
         providers = parse_providers(data.decode())
         text = Path(file).parent / ROUTING_FILE
         if text.is_file():

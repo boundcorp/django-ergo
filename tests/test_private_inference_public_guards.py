@@ -204,41 +204,41 @@ async def test_transcription_json_response_includes_usage():
 # -- embeddings -----------------------------------------------------------------
 
 
-def embedding_provider(*, base_url=None, module_client=None):
+def embedding_provider(*, base_url="https://api.openai.com/v1"):
     sdk = MagicMock()
-    sdk.base_url = base_url
-    sdk._client = module_client
-    sdk.embeddings.create.return_value.data = [MagicMock(embedding=[0.1] * 1536)]
+    sdk.OpenAI.return_value.base_url = base_url
+    sdk.OpenAI.return_value.embeddings.create.return_value.data = [
+        MagicMock(embedding=[0.1] * 1536)
+    ]
     with patch.dict("sys.modules", {"openai": sdk}):
         provider = OpenAIEmbeddingProvider({"api_key": "test-key"})
-    return provider, sdk
+    return provider, sdk.OpenAI.return_value
 
 
 def test_embeddings_refuse_private_openai_base_url_env(monkeypatch):
     monkeypatch.setenv("OPENAI_BASE_URL", FIREWORKS_URL)
-    provider, sdk = embedding_provider()
+    provider, sdk = embedding_provider(base_url=FIREWORKS_URL)
     with pytest.raises(PolicyError):
         provider.generate_embedding("text")
     sdk.embeddings.create.assert_not_called()
 
 
-def test_embeddings_refuse_private_module_base_url():
+def test_embeddings_refuse_private_instance_base_url():
     provider, sdk = embedding_provider(base_url="https://foo.fireworks.ai/v1")
     with pytest.raises(PolicyError):
         provider.generate_embedding("text")
     sdk.embeddings.create.assert_not_called()
 
 
-def test_embeddings_refuse_cached_private_module_client():
-    provider, sdk = embedding_provider(module_client=MagicMock(base_url=FIREWORKS_URL))
+def test_embeddings_refuse_changed_instance_endpoint():
+    provider, sdk = embedding_provider()
+    provider.client.base_url = FIREWORKS_URL
     with pytest.raises(PolicyError):
         provider.generate_embedding("text")
     sdk.embeddings.create.assert_not_called()
 
 
 def test_embeddings_public_endpoint_sends():
-    provider, sdk = embedding_provider(
-        module_client=MagicMock(base_url="https://api.openai.com/v1")
-    )
+    provider, sdk = embedding_provider()
     assert provider.generate_embedding("text") == [0.1] * 1536
     sdk.embeddings.create.assert_called_once()

@@ -84,7 +84,10 @@ def preflight():
         "invalid LiveKit route",
     )
     key, secret = os.environ.get("LIVEKIT_API_KEY", ""), os.environ.get("LIVEKIT_API_SECRET", "")
-    require(bool(key and secret and os.environ.get("OPENAI_API_KEY")), "missing credentials")
+    from django_ergo.openai_credentials import selected_openai_key
+
+    selected_openai_key(os.environ.get("VOICE_OPENAI_API_KEY_ENV", ""))
+    require(bool(key and secret), "missing credentials")
     config = os.environ.get("ERGO_VOICE_LIVEKIT_CONFIG", "")
     require(bool(config), "missing encrypted LiveKit configuration")
     result = subprocess.run(["sops", "--decrypt", config], check=True, capture_output=True, text=True)

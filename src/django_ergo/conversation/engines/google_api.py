@@ -93,6 +93,9 @@ class GoogleAPIEngine(OpenAIAPIEngine):
     spend_adapter = GoogleAdapter()
 
     def __init__(self, config: dict):
+        from django_ergo.provider_credentials import register_credential_config
+
+        register_credential_config(config)
         config = dict(config or {})
         self.config = config
         self.model = str(config.get("model") or DEFAULT_MODEL).removeprefix("models/")

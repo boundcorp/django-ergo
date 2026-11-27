@@ -4,7 +4,6 @@ import asyncio
 import json
 import logging
 import math
-import os
 import re
 import subprocess
 import time
@@ -17,6 +16,7 @@ from django.contrib.auth import get_user_model
 from django.db import DatabaseError, transaction
 from django_ergo.conversation.attachments import openai_transcription
 from django_ergo.conversation.models import StructuredCall, StructuredCallStatus
+from django_ergo.openai_credentials import voice_openai_key
 from ninja import Router
 from ninja.errors import HttpError
 
@@ -51,11 +51,11 @@ CHUNK_CONCURRENCY = 4
 
 
 def _enabled():
-    return bool(
-        settings.VOICE_TRANSCRIPTION_ENABLED
-        and settings.VOICE_TRANSCRIPTION_PROVIDER == "openai"
-        and os.environ.get("OPENAI_API_KEY")
-    )
+    try:
+        voice_openai_key()
+    except ValueError:
+        return False
+    return bool(settings.VOICE_TRANSCRIPTION_ENABLED and settings.VOICE_TRANSCRIPTION_PROVIDER == "openai")
 
 
 def _authorize(request, session_id):

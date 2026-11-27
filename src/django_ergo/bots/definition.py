@@ -265,6 +265,13 @@ class BotDefinition:
     skill_excludes: list[str] = field(default_factory=list)
     use_default_skills: bool = True
 
+    def __post_init__(self):
+        from django_ergo.provider_credentials import register_credential_config
+
+        register_credential_config(
+            {"api_key_env": self.api_key_env, "config": self.engine_config}
+        )
+
     def chat(self, name: str) -> ChatDefinition:
         return self.chats.get(name) or ChatDefinition(name=name)
 
@@ -275,6 +282,9 @@ class BotDefinition:
         if not isinstance(data, dict):
             msg = f"{CONFIG_FILE} must be a mapping"
             raise BotDefinitionError(msg)
+        from django_ergo.provider_credentials import register_credential_config
+
+        register_credential_config(data)
         name = data.get("name") or (root_dir.name if root_dir else "")
         if not name:
             msg = "Bot needs a name"
@@ -376,6 +386,9 @@ class BotDefinition:
         if not config_path.exists():
             msg = f"No {CONFIG_FILE} at {config_path}"
             raise BotDefinitionError(msg)
+        from django_ergo.provider_credentials import register_credential_source
+
+        register_credential_source(config_path)
         data = yaml.safe_load(config_path.read_text()) or {}
         return cls.from_dict(data, root_dir=config_path.parent.resolve())
 

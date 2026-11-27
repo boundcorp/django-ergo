@@ -82,6 +82,7 @@ from django_ergo.plugins._common import clip
 from django_ergo.plugins._common import is_secret
 from django_ergo.plugins._common import record_agent_usage
 from django_ergo.protected_env import is_protected_env
+from django_ergo.protected_env import scrubbed_env
 
 if TYPE_CHECKING:
     from django_ergo.bots.tools import ToolContext
@@ -564,7 +565,7 @@ class LocalShellPlugin(BotPlugin):
                 env[name] = value
         if confinement:
             return self.confined_env(env, confinement, folder)
-        return env
+        return scrubbed_env(env)
 
     @staticmethod
     def confined_env(
@@ -586,7 +587,7 @@ class LocalShellPlugin(BotPlugin):
             raise LocalShellError(msg)
         clean = {
             k: v
-            for k, v in env.items()
+            for k, v in scrubbed_env(env).items()
             if k not in NEVER_PASS
             and not is_protected_env(k)
             and not k.endswith(CREDENTIAL_SUFFIXES)
