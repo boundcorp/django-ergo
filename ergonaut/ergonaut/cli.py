@@ -6,6 +6,7 @@ ergonaut worker   # Celery worker
 ergonaut beat     # Celery beat
 ergonaut bots     # every bot's long-running plugins
 ergonaut check    # load the bots and report problems
+ergonaut bot-cost BOT   # read-only per-turn context cost report (--json, --session ID)
 ergonaut chat BOT # chat with a bot's root session in the terminal
 ergonaut upgrade  # upgrade to the newest GitHub release once idle; see ergonaut/upgrades
 ergonaut manage … # any manage.py command
@@ -73,6 +74,8 @@ def main(argv: list[str] | None = None) -> int:
         return run(sys.executable, "-m", "celery", "-A", "ergonaut", "beat", "-l", "info", *rest)
     if command == "bots":
         return manage("bots_serve", *rest)
+    if command == "bot-cost":
+        return manage("ergo_bot_cost", *rest)
     if command == "check":
         return manage("bots_check", *rest)
     if command == "chat":

@@ -22,6 +22,11 @@ Files come from three places: sent with a message, uploaded to the session
 - ``ergo_attachments_import``: with approval, copy an allowed host artifact into this chat.
 - ``ergo_attachments_update``: replace the contents of a text file in this
   session.
+- ``ergo_attachments_edit``: replace exact text in a text file of this
+  session. Needs the ``sha256`` (or ``version``) from your last read; changes
+  nothing if the file changed since, or if the text is missing or ambiguous.
+- ``ergo_attachments_append``: add text to the end of a text file, optionally
+  with an ``idempotency_key`` so a retry after a timeout adds it once.
 - ``ergo_attachments_look``: look at an image, PDF or video (or any file).
   An image comes back in the tool result, so the bot sees it itself
   (downscaled; see ``django_ergo.conversation.images``). A video goes to
@@ -63,6 +68,8 @@ from django_ergo.bots.registry import closed_to
 from django_ergo.bots.tools import BotTool
 from django_ergo.bots.tools import FunctionToolkit
 from django_ergo.bots.tools import bot_tool
+from django_ergo.conversation.attachments import append_session_text
+from django_ergo.conversation.attachments import edit_session_text
 from django_ergo.conversation.attachments import is_text
 from django_ergo.conversation.attachments import model_readable
 from django_ergo.conversation.attachments import read_text
@@ -350,6 +357,57 @@ class AttachmentsPlugin(BotPlugin):
         data = content.encode()
         self._check_size(data)
         return describe_row(replace_session_file(row, data))
+
+    def _own_text_file(self, ctx: ToolContext, attachment_id: str):
+        row = self.file_for(ctx, attachment_id)
+        if row.session_id != ctx.session.id:
+            msg = "Files in other sessions are read-only."
+            raise ValueError(msg)
+        return row
+
+    def edit(  # noqa: PLR0913
+        self,
+        ctx: ToolContext,
+        attachment_id: str,
+        old_text: str,
+        new_text: str,
+        replace_all: bool = False,
+        expected_sha256: str = "",
+        expected_version: int | None = None,
+    ) -> dict:
+        row = self._own_text_file(ctx, attachment_id)
+        return edit_session_text(
+            row.session_id,
+            row.pk,
+            old_text,
+            new_text,
+            replace_all=replace_all,
+            expected_sha256=expected_sha256,
+            expected_version=expected_version,
+            max_bytes=self.max_bytes,
+        )
+
+    def append(  # noqa: PLR0913
+        self,
+        ctx: ToolContext,
+        attachment_id: str,
+        content: str,
+        separator: str = "\n",
+        idempotency_key: str = "",
+        expected_sha256: str = "",
+        expected_version: int | None = None,
+    ) -> dict:
+        row = self._own_text_file(ctx, attachment_id)
+        return append_session_text(
+            row.session_id,
+            row.pk,
+            content,
+            separator=separator,
+            idempotency_key=idempotency_key,
+            expected_sha256=expected_sha256,
+            expected_version=expected_version,
+            max_bytes=self.max_bytes,
+        )
 
     def look(  # noqa: PLR0913
         self,
@@ -766,6 +824,100 @@ class AttachmentsPlugin(BotPlugin):
             return plugin.update(ctx, attachment_id, content)
 
         @bot_tool(
+            name="ergo_attachments_edit",
+            takes_context=True,
+            description=(
+                "Replace exact text in a text file of this chat, if it is unchanged since you "
+                "read it. Pass expected_sha256 (or expected_version) from your last read. "
+                "Fails without changing anything when the file changed, old_text is not "
+                "found, or it matches more than once (add context, or set replace_all). "
+                "Returns the new version, sha256 and the changed lines. Files over the "
+                "write limit can't be edited."
+            ),
+            parameters={
+                "attachment_id": {
+                    "type": "string",
+                    "description": "File id or filename",
+                },
+                "old_text": {"type": "string", "description": "Exact text to replace"},
+                "new_text": {"type": "string"},
+                "replace_all": {
+                    "type": "boolean",
+                    "description": "Replace every match",
+                },
+                "expected_sha256": {
+                    "type": "string",
+                    "description": "sha256 (12+ hex chars) from your last read or list",
+                },
+                "expected_version": {
+                    "type": "integer",
+                    "description": "Alternative to expected_sha256",
+                },
+            },
+            required=["attachment_id", "old_text", "new_text"],
+        )
+        def edit(  # noqa: PLR0913
+            ctx: ToolContext,
+            attachment_id: str,
+            old_text: str,
+            new_text: str,
+            replace_all: bool = False,
+            expected_sha256: str = "",
+            expected_version: int | None = None,
+        ) -> dict:
+            return plugin.edit(
+                ctx,
+                attachment_id,
+                old_text,
+                new_text,
+                replace_all,
+                expected_sha256,
+                expected_version,
+            )
+
+        @bot_tool(
+            name="ergo_attachments_append",
+            takes_context=True,
+            description=(
+                "Append text to the end of a text file of this chat. Give an idempotency_key "
+                "(unique per entry) so a retry after a timeout doesn't add it twice; the "
+                "same key with different content is refused. expected_sha256 is optional "
+                "here. The separator is added only if the file doesn't already end with it. "
+                "Returns the new version, sha256 and the changed lines."
+            ),
+            parameters={
+                "attachment_id": {
+                    "type": "string",
+                    "description": "File id or filename",
+                },
+                "content": {"type": "string"},
+                "separator": {"type": "string", "description": "Default newline"},
+                "idempotency_key": {"type": "string"},
+                "expected_sha256": {"type": "string"},
+                "expected_version": {"type": "integer"},
+            },
+            required=["attachment_id", "content"],
+        )
+        def append(  # noqa: PLR0913
+            ctx: ToolContext,
+            attachment_id: str,
+            content: str,
+            separator: str = "\n",
+            idempotency_key: str = "",
+            expected_sha256: str = "",
+            expected_version: int | None = None,
+        ) -> dict:
+            return plugin.append(
+                ctx,
+                attachment_id,
+                content,
+                separator,
+                idempotency_key,
+                expected_sha256,
+                expected_version,
+            )
+
+        @bot_tool(
             name="ergo_attachments_look",
             takes_context=True,
             description=(
@@ -916,6 +1068,8 @@ class AttachmentsPlugin(BotPlugin):
                 read,
                 create,
                 update,
+                edit,
+                append,
                 look,
                 frames,
                 archive,
