@@ -45,3 +45,5 @@ def _isolated_credential_names(monkeypatch):
 
     monkeypatch.setattr(provider_credentials, "_NAMES", set())
     monkeypatch.setattr(provider_credentials, "_SOURCES", set())
+    monkeypatch.setattr(provider_credentials, "_SOURCE_STAMPS", {})
+    monkeypatch.setattr(provider_credentials, "_BROKEN_SOURCES", set())

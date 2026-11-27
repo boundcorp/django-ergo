@@ -86,11 +86,18 @@ def preflight():
     key, secret = os.environ.get("LIVEKIT_API_KEY", ""), os.environ.get("LIVEKIT_API_SECRET", "")
     from django_ergo.openai_credentials import selected_openai_key
 
-    selected_openai_key(os.environ.get("VOICE_OPENAI_API_KEY_ENV", ""))
+    try:
+        selected_openai_key(os.environ.get("VOICE_OPENAI_API_KEY_ENV", ""))
+    except ValueError as exc:
+        require(False, str(exc))
     require(bool(key and secret), "missing credentials")
     config = os.environ.get("ERGO_VOICE_LIVEKIT_CONFIG", "")
     require(bool(config), "missing encrypted LiveKit configuration")
-    result = subprocess.run(["sops", "--decrypt", config], check=True, capture_output=True, text=True)
+    from django_ergo.protected_env import scrubbed_env
+
+    result = subprocess.run(
+        ["sops", "--decrypt", config], check=True, capture_output=True, text=True, env=scrubbed_env()
+    )
     expected = yaml.safe_load(result.stdout)
     require(
         isinstance(expected, dict)

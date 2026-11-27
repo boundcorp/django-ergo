@@ -1,0 +1,46 @@
+All test commands used run_keyless.py from this checkout. It strips provider,
+API-key, cloud and credential variables before importing Django and sets
+ERGO_TEST_ISOLATED=1 TEST_OPENAI=false DJANGO_DEBUG=true. No .env is loaded.
+Installed Claude is included on PATH for fake-upstream tests.
+
+Head library (cwd: this worktree):
+python3 artifacts/pr418-fixes/run_keyless.py /tmp/selective-openai-test-venv/bin/python -m pytest tests -q -n 6 --tb=short --disable-socket --allow-unix-socket --allow-hosts=127.0.0.1,::1,localhost -p no:cacheprovider
+Final output: library-head-verified.log
+
+Main library (cwd: /tmp/pr418-fixes-main, detached 4e292f3):
+python3 /home/dev/orca/workspaces/django-ergo/selective-openai-key/artifacts/pr418-fixes/run_keyless.py /tmp/pr418-fixes-lib-main-venv312/bin/python -m pytest tests -q -n 6 --tb=short --disable-socket --allow-unix-socket --allow-hosts=127.0.0.1,::1,localhost -p no:cacheprovider
+Output: library-main.log
+
+Head API (cwd: this worktree/ergonaut):
+python3 ../artifacts/pr418-fixes/run_keyless.py /tmp/selective-voice-test-venv/bin/python -m pytest -c pyproject.toml -q -n 6 --tb=short --disable-socket --allow-unix-socket --allow-hosts=127.0.0.1,::1,localhost -p no:cacheprovider
+Final output: api-head-complete.log
+
+Main API (cwd: /tmp/pr418-fixes-main/ergonaut):
+python3 /home/dev/orca/workspaces/django-ergo/selective-openai-key/artifacts/pr418-fixes/run_keyless.py /tmp/pr418-fixes-api-main-venv312/bin/python -m pytest -c pyproject.toml -q -n 6 --tb=short --disable-socket --allow-unix-socket --allow-hosts=127.0.0.1,::1,localhost -p no:cacheprovider
+Output: api-main.log
+
+Each venv binds the appropriate worktree's src (and ergonaut for API) through a
+.pth file so python -I child imports resolve correctly. Both library venvs use
+dependencies from /tmp/pr416-api-venv/lib/python3.12/site-packages, and both API
+venvs from /tmp/vb-voice/lib/python3.12/site-packages. Nested .pth files in these
+dependency directories are not processed; #416 source is not selected. Both
+main environments contain the same pytest_socket package as their head venvs.
+An initial Python 3.11 venv setup and initial missing pytest_socket main runs
+failed before collection; the commands above use the corrected Python 3.12
+source-bound environments. Those setup failures are not test results.
+
+Ruff 0.12.5, each revision cwd:
+/home/dev/orca/workspaces/django-ergo/model-pools-review/.venv/bin/ruff check .
+/home/dev/orca/workspaces/django-ergo/model-pools-review/.venv/bin/ruff format --check .
+
+Migrations (both library and API, each revision's cwd/venv):
+python3 <absolute-this-worktree>/artifacts/pr418-fixes/run_keyless.py <revision-venv>/bin/python manage.py makemigrations --check --dry-run
+All four: No changes detected.
+
+Independent review controls were copied byte-for-byte to
+/tmp/test_pr418_review_unchanged.py (original review files remain unchanged),
+and run against head with -c pyproject.toml -k control and the same socket flags:
+10 passed, 3 bug-reproducing tests deselected.
+
+Full outputs (*.log, ignored by git) remain in this worktree alongside this
+file; results summaries are committed in RESULTS.txt and the main report.

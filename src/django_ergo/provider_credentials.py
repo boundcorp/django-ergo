@@ -2,11 +2,13 @@
 
 Keep a conservative union across reloads, and reread registered config files at
 launch so a stale registry cannot expose a newly configured alias. No credential
-values are cached here. Unreadable existing sources block the launch; removed
-sources keep their previous names blocked, and are checked again if recreated.
+values are cached here. Unreadable sources retain known names and trigger a minimal safe environment;
+other bots remain usable. Removed sources retain their previous names.
 This is environment hygiene, not isolation from same-UID code or credential files.
 """
 
+import hashlib
+import logging
 from collections.abc import Mapping
 from pathlib import Path
 from threading import RLock
@@ -14,6 +16,9 @@ from threading import RLock
 _LOCK = RLock()
 _NAMES: set[str] = set()
 _SOURCES: set[Path] = set()
+_SOURCE_STAMPS: dict[Path, tuple] = {}
+_BROKEN_SOURCES: set[Path] = set()
+log = logging.getLogger(__name__)
 SDK_CREDENTIALS = frozenset(
     [
         "ABLITERATION_API_KEY",
@@ -135,11 +140,45 @@ def provider_credential_names() -> frozenset[str]:
 
         for path in sources:
             try:
+                stat = path.stat()
                 content = path.read_text()
+                stamp = (
+                    stat.st_dev,
+                    stat.st_ino,
+                    stat.st_mtime_ns,
+                    stat.st_ctime_ns,
+                    stat.st_size,
+                    hashlib.sha256(content.encode()).digest(),
+                )
+                with _LOCK:
+                    if _SOURCE_STAMPS.get(path) == stamp:
+                        _BROKEN_SOURCES.discard(path)
+                        continue
+                config = yaml.safe_load(content)
             except FileNotFoundError:
-                # A removed bot/provider cannot introduce new names. Retain its
-                # old names and source path, including across later recreation.
+                # Retain old aliases; a removed file cannot activate a new one.
+                with _LOCK:
+                    _BROKEN_SOURCES.discard(path)
+                    _SOURCE_STAMPS.pop(path, None)
                 continue
-            register_credential_config(yaml.safe_load(content))
+            except (OSError, UnicodeError, yaml.YAMLError):
+                with _LOCK:
+                    if path not in _BROKEN_SOURCES:
+                        log.warning(
+                            "Credential discovery failed for %s; using minimal child environment",
+                            path,
+                        )
+                    _BROKEN_SOURCES.add(path)
+                continue
+            register_credential_config(config)
+            with _LOCK:
+                _SOURCE_STAMPS[path] = stamp
+                _BROKEN_SOURCES.discard(path)
     with _LOCK:
         return SDK_CREDENTIALS | _NAMES
+
+
+def credential_discovery_incomplete() -> bool:
+    """Call after provider_credential_names; never use ambient fallback on errors."""
+    with _LOCK:
+        return bool(_BROKEN_SOURCES)

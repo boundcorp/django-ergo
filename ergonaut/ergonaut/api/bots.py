@@ -45,6 +45,7 @@ from django_ergo.conversation.models import (
     ThreadMessage,
     Worker,
 )
+from django_ergo.protected_env import scrubbed_env
 from ninja import File, Router, Schema, UploadedFile
 from ninja.errors import HttpError
 from pydantic import field_validator
@@ -2560,6 +2561,7 @@ def video_frame(row: ConversationAttachment) -> tuple[bytes, str] | None:
                 capture_output=True,
                 timeout=20,
                 check=False,
+                env=scrubbed_env(),
             )
         except (OSError, subprocess.TimeoutExpired):
             logger.warning("Attachment %s: no video frame", row.id, exc_info=True)

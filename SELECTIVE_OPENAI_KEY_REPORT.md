@@ -1,126 +1,211 @@
-# Selective OpenAI credentials — draft code and rollout proposal
+# PR #418 review fixes — draft only
 
-Base: `4e292f3d9d756815bc99dc847412886d25bc6989`. This branch finishes the predecessor's uncommitted work. It is for draft review only: no merge, deployment, restart, live configuration, credential copying/provisioning/migration, infrastructure apply, funding, or paid provider request is authorized or performed by this worker. PR #416 remains outside this change and must remain unmerged with live paid launches refused. The conditional $1 total OpenAI approval within $25/week remains unspent by this task; this draft grants no launch or spending authority.
+This report supersedes the original 39b4b2c rollout/validation report. The
+independent review and reproducers at `../model-pools-review/PR418_REVIEW.md`
+and `tests/test_pr418_review.py` were read only and remain unchanged. #416 is
+separate and unmerged. No deploy, merge, restart, live configuration, secret,
+accounting, infrastructure change or paid provider call is authorized or done.
 
-The inherited read-only audit is preserved at `docs/artifacts/ergonaut-openai-key-audit.md`. Its deployment observations are dated evidence, not a fresh assertion of live state. Read-only local checkout verification for this proposal used ergo-bots `68b24ff6ab5954a8f48ed95209cec04b2db15f81` and infra-octo `3a9d7bb19d46759b34c05896c0211fb1a063386f`; neither repository was edited. Remote Orca devbox is a separate pod/namespace, not the Ergonaut runtime. No credential stores were inspected or changed.
+## Changes and remaining media decision
 
-## Implemented consumer behavior and role matrix
+- **P1-2 / P3-2:** credential discovery caches successful YAML parses by device,
+  inode, nanosecond mtime/ctime, size and a content digest (including symlink
+  replacement and equal-metadata rewrites on coarse filesystems). Files are
+  read to detect changes; unchanged YAML is not reparsed. Known
+  aliases accumulate across edits/removal. YAML, Unicode and read errors warn
+  without printing content, retain known aliases and restrict subprocesses to
+  safe native fields. Unknown aliases cannot leak through a whole-ambient-env
+  fallback; unrelated Claude/Codex subscription chats and Bash remain usable.
+- **P2-1:** ordinary children deny provider-family components, configured aliases,
+  arbitrary prefixed API keys, JSON service accounts and credential file paths.
+  Examples covered: RYAN_MINIMAX_API_KEY, ANTHROPIC_STRUCTURED_API_KEY,
+  GOOGLE_APPLICATION_CREDENTIALS_JSON, ADS_GOOGLE_SERVICE_ACCOUNT_JSON and
+  GOOGLE_APPLICATION_CREDENTIALS. Native subscription OAuth/config survives;
+  explicit provider aliases and private prefixes take precedence over keep names.
+- **P1-1:** local_shell now raises a named startup error for denied `secrets`
+  on every start/resume, before launching a child. It no longer silently drops
+  requested media credentials or reports only their presence in the parent.
+  `pass_env` and CLI overrides cannot restore provider credentials.
+- **P2-2:** transcription mocks set explicit synthetic auth. The installed-Claude
+  integration harness injects fixed fake auth only at its test-local final
+  subprocess boundary, targeting its loopback FakeAnthropic server. No production
+  bypass, provider approval or ambient paid credential inheritance was added.
+  Local-shell offline lifecycle fixtures use OFFLINE_TOOL_TOKEN instead of a
+  real provider credential name; media denial has separate regression coverage.
+- **P3-1/3/4:** docs cover voice and embedding selectors, subprocess policy and
+  media limitation. Fixed-argv ffmpeg, bot checkout git/reloading and CLI command
+  children now receive scrubbed environments. Trusted CLI web/Celery service
+  startup explicitly retains host credentials: these are intended API consumers,
+  not coding children. `manage()` itself is in-process; generic `run()` defaults
+  to scrubbed, with explicit `application=True` only at host-service call sites.
+  A fake-only test covers that purpose boundary. GitSnapshot's merge-base already
+  used git_environment() at this head. Preflight sops is scrubbed and missing
+  selected voice keys use the existing `require()` diagnostic.
 
-| Consumer | Credential selection | Potential runtime roles (verify actual call paths before injection) |
-| --- | --- | --- |
-| OpenAI chat API | Engine `api_key_env`; explicit name overrides inline `api_key` and missing/empty value raises even with ambient `OPENAI_API_KEY`; each engine has its own AsyncOpenAI | bots, bot-tasks, web and celery where they execute normal chat/background work |
-| Attachment/audio transcription | `DJANGO_ERGO["VOICE_OPENAI_API_KEY_ENV"]`; explicit per-call AsyncOpenAI key | web composer; bots/bot-tasks/celery if attachments are transcribed there; voice-bridge for text mode |
-| Composer enablement | Same voice selector; absent configured key disables endpoint without generic fallback | web |
-| GPTLive realtime | Explicit selected voice key passed to each LiveKit GPTLiveModel | voice-bridge |
-| Text-agent speech | Explicit selected voice key passed to each LiveKit TTS; recognizer uses the same transcription helper | voice-bridge |
-| Embeddings | `DJANGO_ERGO["EMBEDDING_PROVIDER_CONFIG"]["api_key_env"]`; each provider owns an OpenAI client, timeout, public base URL; no SDK module-global mutation | usually indexing/background celery, other roles only if verified; Hindsight is a separate service, not established as an OpenAI consumer |
-| Historical local voice/preflight utilities | `VOICE_OPENAI_API_KEY_ENV`, default legacy name; local helper requires the same named Secret field, never silently copies the old field into a new alias | explicitly operator-run isolated process only; scripts not run by this task |
-| Ordinary local agent children | All configured provider selectors, known SDK provider credentials, org/generic aliases and protected prefixes removed | local_shell (initial/resume), Claude, Codex, bash, local Orca CLI including omp launch/helpers, search CLI, and other callers of scrubbed_env |
-| Remote Orca workers | Local Orca CLI env scrubbed; existing launch transport does not forward Ergonaut provider credentials | separate devbox; leave native credential stores/subscriptions untouched |
-| Beat, migration init, runpod-maintenance, standalone ficsit-drive-claude | No established need for the org OpenAI credential | propose no injection after dependency inventory; audit broad envFrom first |
+**Unresolved media policy, deployment blocker:** current ergo-bots `68b24ff`
+`ads/bot.yaml` deliberately lists ELEVENLABS_API_KEY, SUME_API_KEY,
+GEMINI_API_KEY and MINIMAX_API_KEY for general Claude/Codex jobs; Storytime lists
+GEMINI_API_KEY, SUME_API_KEY, ELEVENLABS_API_KEY and RYAN_MINIMAX_BASE_URL. Ads
+allows Bash; Storytime's brief instructions impose approved provider/model,
+count and total USD caps. The existing AgentSpec carries no trusted media purpose
+or per-job secret allowlist; `secrets` is plugin-wide for every job and resume.
+Neither a key name nor an agent-authored brief distinguishes a coding subprocess
+from an authorized media tool. A broad raw-key exception would restore ordinary
+coding inference credentials and is therefore absent.
 
-Unconfigured chat retains its existing SDK defaults. Unconfigured voice/embeddings retain `OPENAI_API_KEY`, and embeddings still accept legacy inline `api_key`. No org key is forced globally. `BOUNDCORP_ORG_OPENAI_KEY` is only an explicit selector value; configuring a missing name fails closed. Empty/unconfigured selectors intentionally retain legacy behavior.
+This draft takes the explicitly permitted fallback: affected jobs fail visibly
+at startup rather than silently losing keys. Do not merge/deploy it over the
+existing media workflows until the coordinator's skillbuilder config work and
+a trusted per-job media-tool handoff are coordinated. Existing live workflows
+remain untouched. Any future handoff must bind the actual approved media worker
+purpose/current workflow to an explicit per-job allowlist and a separate tool
+subprocess; it must exclude org OpenAI, private/protected keys and coding
+inference. It must reuse existing media keys/caps, never create provider approval,
+new budgets or reset reconciliation. This report requests no credential handling.
+Environment scrubbing remains inheritance hygiene, not a same-UID sandbox.
 
-Ergonaut exposes the voice selector via `VOICE_OPENAI_API_KEY_ENV` in project settings and uses it for attachment transcriber setup. Library hosts set the DJANGO_ERGO value directly. Example opt-in settings (proposal, not activated):
+## Current infrastructure evidence (read only, Nov 27)
 
-```python
-DJANGO_ERGO = {
-    # Merge with the host's existing settings; do not replace unrelated entries.
-    "VOICE_OPENAI_API_KEY_ENV": "BOUNDCORP_ORG_OPENAI_KEY",
-    "EMBEDDING_PROVIDER_CONFIG": {
-        "api_key_env": "BOUNDCORP_ORG_OPENAI_KEY",
-        "model": "text-embedding-3-small",
-    },
-}
-```
+Inspected infra-octo **origin/main e05f1c0059ba9b16793557e3e90c18c01298fa30**,
+not its stale local HEAD 3a9d7bb. Current files:
 
-## Launcher and credential-name audit
+- `infra-octo/kubernetes/apps/ergonaut/app/deployment.yaml`: seven application
+  roles: web (and migrate init), celery, bot-tasks, runpod-maintenance, bots,
+  beat, voice-bridge. Voice-bridge has one replica and **Recreate** strategy.
+- `infra-octo/kubernetes/apps/ergonaut/app/configmap.yaml`: shared nonsecret
+  selectors, `ERGONAUT_BOTS=/home/dev/p/boundcorp/ergo-bots`, mutable main
+  upgrader with 300s polling. Bot checkout hot-pulls use
+  ERGONAUT_BOTS_PULL_SECONDS (the key name exists in runtime Secret; its value
+  was not read).
+- Live Octo deployments match image
+  `ghcr.io/boundcorp/ergonaut@sha256:59e92fcd35a02d1956f213cb971b7afe1b17c793785c5ac10fd2fe2613a6790a`.
+  All seven application roles import broad `envFrom: ergonaut-runtime`.
+  Live voice-bridge is Recreate. Redis is separate from these seven roles.
+- Secret key names only: OPENAI_API_KEY exists, BOUNDCORP_ORG_OPENAI_KEY is absent;
+  37 fields include the Gemini, Ryan MiniMax and Google JSON names above.
+  Neither secret values nor pod environments were read. The ConfigMap has no
+  VOICE_OPENAI_API_KEY_ENV selector.
 
-`provider_credentials.py` records names only, never values. Provider and bot definition parsing, plugin config construction, and explicit OpenAI selection register arbitrary `api_key_env`, `key_env`, and plugin `*_api_key_env` aliases. DJANGO_ERGO settings are checked at launch, before a client has to be initialized. Registry construction registers every bot source before loading the first bot, so ordering does not expose another bot's credential. Bot/provider YAML files are reread before each scrub: changed files and aliases are covered even by stale registries. The union of previously seen names is retained for the process lifetime across reloads; unreadable/malformed existing registered files block child launch rather than passing an incomplete denylist. Removed files retain their old names in the denylist and are checked again if recreated, so deleting a retired bot does not block unrelated launches. Operators must repair/reload unreadable or malformed existing configuration if that fail-closed behavior blocks work. Symlink source paths are retained so replacing a config symlink is also rechecked.
+`envcheck` was initially missing on PATH; `/home/dev/bin/envcheck` ran successfully.
+It reported implicit Kubernetes context/readyz unavailable; the documented explicit
+route `KUBECONFIG=~/.kube/clusters/octo kubectl --context octo -n ergonaut get ...`
+succeeded for deployments, ConfigMap and Secret key names. No cluster is reported
+unreachable. This environment check made only its normal read-only route probes.
 
-Existing `scrubbed_env` launch sites include bash, Orca run/status/launch/resume/read/scanner helpers, browser/kubectl helpers and management processes. Claude and Codex call it after merging overrides, so overrides cannot reintroduce keys. Search's Claude subprocess uses Claude child_env. local_shell now scrubs after both pass_env and explicitly listed secrets; its standard-library runner and agent descendants inherit this already scrubbed environment, including resumed runs. Existing narrowly authorized metered confinement is kept separate: the environment is scrubbed before its explicitly selected credential is added under native CLI names. This code does not enable that route or relax its approval/refusal gates.
+## Exact credential proposal and coordinated future rollout
 
-The installed omp wrapper and bundled provider source were audited read-only (no harness or auth-store access); additional LLM/search API-key names and cloud token-file selectors from that source are included, while native OAuth tokens remain available. Known ambient SDK credentials cover OpenAI/Codex, Anthropic, Gemini/Google, Azure OpenAI, AWS Bedrock, Groq, Mistral, Cohere, OpenRouter, DeepSeek, xAI, Cerebras, Together, Fireworks, Hugging Face, and other common SDK names. Existing protected prefixes remain additive. HOME and native subscription authentication (including Claude OAuth) are preserved; provider API keys and cloud routing switches are removed. Omp remains subscription-only under its existing host admission checks; no auth database or devbox configuration is changed. The local Orca process and its helpers are scrubbed, but this does not attest remote credential files or an adversarial boundary.
+Proposed source: `infra-octo/kubernetes/apps/ergonaut/app/runtime-secret.sops.yaml`,
+namespace ergonaut, Secret **ergonaut-runtime**, field **OPENAI_API_KEY**.
+Proposed target: **same file, namespace and Secret**, field
+**BOUNDCORP_ORG_OPENAI_KEY**. This is a description only: no material read,
+copy, provisioning, migration, rotation or edit. Obtain separate approval for the
+exact operation; retain the old source for consumers and rollback.
 
-Environment scrubbing is defense in depth against accidental inheritance. Same-UID code can potentially inspect proc, parent environments, mounted files, shared homes or credential stores, and arbitrary shell startup files may add credentials independently. This change makes no claim of sandbox isolation, proc isolation, egress enforcement or safe live paid-agent execution. No new infrastructure sandbox is proposed in scope.
-
-## Precise ergo-bots proposal — coordinator through skillbuilder only
-
-Verified local paths and selectors; do not apply directly from this worker:
-
-```diff
---- a/providers.yaml
-+++ b/providers.yaml
-@@
-   openai:
-     type: openai
--    api_key_env: OPENAI_API_KEY
-+    api_key_env: BOUNDCORP_ORG_OPENAI_KEY
---- a/design/bot.yaml
-+++ b/design/bot.yaml
-@@
--engine: {type: openai, api_key_env: OPENAI_API_KEY, config: {model: gpt-6-luna}}
-+engine: {type: openai, api_key_env: BOUNDCORP_ORG_OPENAI_KEY, config: {model: gpt-6-luna}}
-```
-
-Leave `default: auto/medium`, subscription-only tiers, Claude/ChatGPT CLI providers and xai-oauth unchanged. Coordinator must route any eventual bot config change through skillbuilder, with exact proposed diff and approval gates. These changes are not included in this branch.
-
-## Infrastructure proposal — nonsecret, not applied
-
-Source of the intended credential: `infra-octo/kubernetes/apps/ergonaut/app/runtime-secret.sops.yaml`, namespace `ergonaut`, Secret `ergonaut-runtime`, field **`OPENAI_API_KEY`**. Intended target: same Secret, field **`BOUNDCORP_ORG_OPENAI_KEY`**. This describes a proposed future transition of the existing credential, not permission to read/copy/provision/migrate/rotate/edit secret material. Present that exact source and destination to Lee and obtain separate explicit approval before any credential operation. Do not edit SOPS in this task.
-
-Nonsecret manifest paths: `infra-octo/kubernetes/apps/ergonaut/app/deployment.yaml` (web + migrate init, celery, bot-tasks, bots, beat); `configmap.yaml` for shared runtime nonsecret selectors; inspect repository/live definitions of voice-bridge, runpod-maintenance and the standalone drive before proposing their concrete edits. The audit records broad `envFrom.secretRef: ergonaut-runtime`, which must be replaced by individual refs for **every required secret**, not just supplemented by the following entry:
-
-```yaml
-# Proposal only, in each verified OpenAI-consuming application container:
-env:
-  - name: BOUNDCORP_ORG_OPENAI_KEY
-    valueFrom:
-      secretKeyRef:
-        name: ergonaut-runtime
-        key: BOUNDCORP_ORG_OPENAI_KEY
-  - name: VOICE_OPENAI_API_KEY_ENV  # only voice/transcription consumers
-    value: BOUNDCORP_ORG_OPENAI_KEY
-# Retain configMapRef imports as appropriate. Replace broad secretRef imports
-# with explicit refs for all inventoried unrelated secrets before claiming isolation.
-```
-
-Candidate injection: web (composer), bots/bot-tasks (API chat/audio), celery only when background/embedding paths are verified, voice-bridge (realtime/TTS/STT). Propose no org-key injection to beat, migration init, maintenance or drive until a concrete consumer is established. Inventory DATABASE_URL, Django signing, queue/storage, LiveKit, integration/plugin/provider secrets and all init requirements separately; incomplete inventory is a rollout blocker, not license to drop unrelated secrets. Broad envFrom in any affected container continues exposure even after a selective ref is added. Native subscriptions and devbox are outside this credential transition.
-
-## Backward-compatible staged rollout, rollback and approval gates
-
-1. Review this draft's code/tests and report. No merge or deployment under this task. Recheck current running versions and consumer/role inventory before authorizing a future rollout.
-2. Independently attest the OpenAI account/project binding of the existing key. Environment names are transport selectors, not new accounts or budgets. `ProviderAccountMapping` is append-only and transport identity includes api_key_env: a rename creates a distinct transport identity, so an explicitly audited mapping must associate old/new selectors with the **same existing ProviderBudgetFamily and account label**. Preserve weekly consent, period boundaries, spend history, held/unknown reservations and the original shared cap; do not reset or duplicate funds. No mappings or ledger rows were changed here.
-3. Obtain separate explicit approvals for the exact credential source/target operation, concrete nonsecret infrastructure diff, identity mapping, skillbuilder bot config diff, code merge/deploy and each restart/window. Existing spending consent is conditional and does not approve these operations or #416 activation.
-4. If separately approved, first deliver compatible consumer code while keeping legacy selectors; provision the approved target field while retaining the approved old source for rollback. Then switch only intended consumers/settings to the new explicit selector. Absence of the target must fail closed. Do not replace the shared generic key globally.
-5. Replace broad secret imports role by role after complete dependency inventory; selectively inject the org credential only where needed. Verify configuration and fake/no-spend checks. Deployment currently follows mutable main automatically: merging is itself a live-change decision, so draft status is deliberate.
-6. Announce and arrange a quiet window for authorized runtime changes/restarts of web, celery, bot-tasks, bots, beat and any voice/other affected workload. Never restart devbox. Verify composer enablement, key-name presence only, subscription routing, child env hygiene, durable work, unrelated integrations and preserved accounting without provider requests. Paid requests require a separate applicable approval and safe execution boundary; never enable live paid agents on this draft's strength.
-7. Roll back consumer selectors and individual refs to the previously approved source plus compatible code, under separate operational approval; preserve accounting mappings/history/holds. Retain old source until verified rollback and all consumers are migrated. Reverting code before removing org injection can reintroduce inherited aliases, so maintain scrubbing or remove injection first under the approved plan. Never erase ledger history or create a new weekly budget to make rollback easier.
+1. Review the code/tests and resolve the media boundary first. Merging consumer
+   code itself triggers the upgrader and a fleet restart, including voice-bridge;
+   it needs operational approval, announcement and a quiet window. Draft only now.
+2. Separately approve/provision the target field before adding any non-optional
+   secretKeyRef. A missing target would prevent startup; voice-bridge Recreate
+   makes that a voice outage. Keep the old OPENAI_API_KEY throughout migration.
+3. Against current infra origin/main, inventory every required unrelated secret
+   before replacing broad envFrom with explicit refs. Add the org-key ref and
+   VOICE_OPENAI_API_KEY_ENV selector to **web, celery, bots, bot-tasks and
+   voice-bridge**: attachment transcription can run in all five, and the
+   AUDIO_TRANSCRIBER default is computed at settings import. Inject nothing new
+   into beat, runpod-maintenance or migrate init. Merely supplementing broad
+   envFrom does not isolate secrets. Preserve all integrations/native subscriptions.
+4. Roll and verify each named consumer role without inference: target variable
+   name present, selected audio config enabled, subscription routing and child
+   hygiene intact, unrelated integrations preserved. Include voice-bridge explicitly;
+   code rollout can also restart beat/maintenance. Never restart devbox.
+5. **#407 in the same coordinated window:** a selector rename changes transport
+   identity, so old grants refuse the new identity. Independently attest the same
+   OpenAI billing account; append assert_mapping for the new identity to the
+   existing **openai** family and same account label. Re-authorize funding via
+   the versioned approve_funding write, preserving the exact existing weekly
+   cap, consent, period boundaries and expiry. This approves the renamed route,
+   not fresh capacity. Keep spent amounts, held/unknown reservations, ledger
+   history and reconciliation unchanged. Requeue refused paid work only after
+   mapping and funding approval. Never create a new family, fresh $25/week,
+   duplicate funds, extend budgets or reset accounting.
+6. **Strictly last**, coordinator skillbuilder lands ergo-bots providers.yaml and
+   design/bot.yaml selectors (separate repo, no edits here). The shared checkout
+   hot-pulls without a restart, so merging this diff before every consumer role
+   is ready would break OpenAI/design routes mid-rollout. Coordinate media
+   allowlists/tool boundaries before activating the changed code as well.
+7. Roll back ergo-bots selectors first, then infrastructure refs/selectors under
+   approval. Retain the old credential field and all accounting/history/holds;
+   keep child scrubbing in place until org injection is removed. No ledger reset.
 
 ## Validation
 
-Final verification uses dedicated temporary environments pinned to this checkout, including isolated (`python -I`) subprocess imports. Dependencies are reused read-only from the existing library/voice environments; their editable source bindings are not used. The guarded suites use pytest-socket to permit only loopback and Unix sockets. Real OpenAI tests are deselected. CI installs the checkout normally; the temporary .pth setup is local test plumbing, not an application configuration change.
+Results and exact commands are recorded in `artifacts/pr418-fixes/`; final
+head/main results are filled below after the bounded runs complete. Both revisions
+use identical pytest arguments, the same dependencies and a checked-in keyless
+runner which removes provider/API/cloud credential variables before import.
+Only loopback and Unix test sockets are allowed. The runner includes the installed
+Claude binary in PATH so real-CLI coverage is exercised with fake upstream auth.
+Main is the exact reviewed merge-base/origin/main **4e292f3**. Dedicated temporary
+venvs bind each revision's sources, including isolated child imports; dependencies
+are reused read only. No #416 source is imported from the dependency-only path.
 
-Final results (the final alias-list, removed/recreated-source behavior and direct-provider registration refinements were also checked by the focused reruns below):
-
-- Library full suite: **3778 passed, 13 skipped** in 396.44s under the socket guard, with no failures.
-- Ergonaut full suite: **701 passed, 6 skipped** in 139.22s with the installed LiveKit 1.8.11/OpenAI 3.49.0 bridge SDK and socket guard. Existing warnings include fixture signing-key length, factory deprecations, open test DB sessions at teardown, and a blocked GitHub connection in a CLI fixture; no suite failures.
-- Focused library client/launcher/provider suite: **204 passed**; final other-provider/field subset **117 passed, 3 skipped, 2 deselected**; final launchers/CLI subset **75 passed, 2 skipped**; final environment/reload/subscription checks **21 passed**. These overlap and must not be summed as unique coverage.
-- Actual installed voice constructors: **3 passed**, exercising explicit realtime/TTS instance keys, composer disablement, and missing custom variables despite an ambient key. These are also included in the full Ergonaut count.
-- Library/embedding/analysis correction subset: **39 passed, 2 skipped, 2 deselected**. Exact unchanged-base analysis log-isolation subset: **14 passed**.
-- Repository-wide `ruff check .`, `ruff format --check .` and `git diff --check`: passed.
-
-The first library full attempt was interrupted after an xdist stall (3634 passed, 13 skipped, 7 failures). Six analysis log-isolation failures came from isolated child imports resolving a different checkout through the reused environment's editable install; dedicated import environments resolved them, and the same 14-test file passed on the exact unchanged base. The seventh failure was an old embedding mock targeting the removed module-global resource: it allowed one request using the fake literal `test-placeholder-not-a-credential`, rejected with HTTP 401. No valid credential or successful paid inference was used; mocks in both the field tests and shared helpers now target the instance resource class, and the corrected full run has a socket guard. This failed attempt is not a clean baseline or a final pass.
-
-The first Ergonaut full run had 696 passed, 6 skipped and two failures (admission-drain cleanup timing, and a retired-flag subprocess timeout). Both affected files passed on branch rerun and on the exact unchanged base (**17 passed, 1 skipped** on base); these were non-reproducing full-run failures, not demonstrated persistent baseline failures. The subsequent dedicated-environment full run above passed all 701 tests.
-
-All new provider tests use fake keys and HTTP MockTransport or SDK constructors without sessions. No live credentials, funded inference, deployment, configuration activation or secret operations were used. The preserved audit is historical evidence, not fresh operational verification. The final pushed SHA and draft PR are supplied in the authenticated worker outcome (a report cannot embed its own commit hash).
+Initial focused credential, local-shell, voice-guard and installed-Claude run:
+**90 passed**, no skipped tests, including both installed CLI fake-upstream tests.
+Additional cache-digest, transient read-recovery and fixture-isolation coverage
+is recorded with the final results below.
+The earlier focused attempt exposed seven legacy local-shell media-key fixture
+assumptions and a missing safe CLI constant; those were corrected explicitly,
+without ambient inheritance. The original review reproducer file was not edited.
 
 
-Reproduction commands (temporary environments described above; pytest-socket is a test-only dependency):
+Earlier full attempts (superseded, not a final green claim): the first head
+library run had 3788 passed, 13 skipped and five failures. One admission
+cancellation cleanup failure also reproduced in the identical main run; four
+normal-environment assertions came from a synthetic broken-source test leaking
+new process-wide cache/failure state through a fixture that reset only the old
+registry fields. The fixture now resets all four registries, and its deliberately
+malformed source is removed explicitly. A subsequent focused run exposed real
+equal-metadata file rewrites on this filesystem; the cache now includes a content
+digest and regression coverage. A second full invocation overlapped these
+refinements and is superseded; only the final settled-source run counts below.
 
-```sh
-ERGO_TEST_ISOLATED=1 /tmp/selective-openai-test-venv/bin/python -m pytest tests -q --tb=short -m 'not openai_real' -n 4 --disable-socket --allow-unix-socket --allow-hosts=127.0.0.1,::1,localhost
-# From ergonaut/:
-ERGO_TEST_ISOLATED=1 /tmp/selective-voice-test-venv/bin/python -m pytest -c pyproject.toml -q -n 4 --tb=short --disable-socket --allow-unix-socket --allow-hosts=127.0.0.1,::1,localhost
-```
+
+Final comparison (identical keyless/socket arguments; see
+`artifacts/pr418-fixes/COMMANDS.txt` and `RESULTS.txt`):
+
+| Check | Fixed head | Reviewed main 4e292f3 |
+| --- | --- | --- |
+| Library full | **3795 passed, 13 skipped, no failures** | 3753 passed, 13 skipped, 2 admission-cleanup failures |
+| Ergonaut full | 701 passed, 6 skipped, 1 admission-cleanup failure | 697 passed, 6 skipped, 1 admission-cleanup failure |
+| Ruff check / format | pass / 648 files | pass / 641 files |
+| Library + API migration drift | No changes detected, both | No changes detected, both |
+
+The final API failure is
+`test_admission_drain.py::test_channel_deferral_and_cleanup[False]` (cleanup
+observes `executions_active()` still true). Main fails the `[True]` variant
+in its full run and targeted file rerun (14 passed, 1 failed). These share
+the cleanup symptom in unchanged code; the differing parameter is explicit
+and is not claimed as an identical baseline test failure. Main's library
+failures are `test_direct_async_admission_waits_and_cancellation_releases`
+and `test_background_consumer_waits_then_executes`; its targeted admission
+file subsequently passed all 13 tests. No admission code/tests were changed.
+The full API suite is therefore **not claimed green**. Earlier API head run
+passed 701/6; an intermediate rerun had an inbox cleanup failure and a 15s
+retired-flag subprocess timeout under concurrent suites (not a paid call).
+
+The settled focused library regression suite passed **102 tests**, and the
+voice/service-purpose boundary file passed **4 tests**. Unchanged independent
+review controls passed **10** (three bug reproducers deselected, originals
+preserved read only). All six original keyless regressions are covered with
+synthetic auth and pass. Tests made no successful provider calls; the socket
+guard also blocked a GitHub connection attempted by an unrelated API CLI fixture.
+
+
+Final head API admission-file rerun: **15 passed** (20.04s), including both
+channel-cleanup variants. The final full library completed in 479.91s with
+**3795 passed / 13 skipped / zero failures**; final full API in 167.26s had
+the single cleanup failure described above. The full main comparison ran in
+519.32s (library) and 287.37s (API). These results supersede all intermediate
+head runs. Current draft PR: https://github.com/boundcorp/django-ergo/pull/418.
+No bot config, credentials, infrastructure, funding or running service changed;
+only the draft branch code, tests, docs and evidence are pushed.

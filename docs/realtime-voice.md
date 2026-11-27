@@ -691,3 +691,13 @@ Session metadata exposes the observed standby and resume timestamps and last sta
 ## Known gaps
 
 Known gaps beyond the accepted basic phone audio/conversation: the third hosted synthetic attempt produced a real owner-scoped history search and same-session durable result, but delegated before the request ended and generated contradictory status after the answer. Lee's later phone session submitted no delegation. Hosted speech-boundary/transcription correctness, useful orchestration, Bluetooth routing, interruption and standby/resume remain unaccepted. Automatic voice compact state uses conservative extractive rules, not a semantic summarizer: unrecognized facts can fall outside its bounded restore window. User-reported activities are anchored to server receipt, not the physical action; client timestamps have unknown clock error. The bridge provides server-calculated time since reports as silent context; live response timing has not been verified. A durable claim permits at most one commentary attempt per result across reconnects. A crash after the claim can lose the spoken announcement, but the result remains in the session card; the claim does not indicate playback. GPT-Live's `append_commentary` returns no speech identifier, so it cannot be correlated to browser playback with the inspected adapter. No per-utterance browser acknowledgment is claimed. The model is instructed not to repeat restored results unless asked, but this is not a deterministic guarantee. With standby off, a reconnect after the bridge job ends is refused. End-to-end delegation usage/spend and provider billing are not capped by this prototype. Do not represent it as production-ready.
+
+### Explicit OpenAI voice credential selection
+
+`VOICE_OPENAI_API_KEY_ENV` selects the environment variable used by GPTLive,
+TTS, STT and attachment transcription. The library also accepts this setting
+in `DJANGO_ERGO`. Unconfigured consumers retain `OPENAI_API_KEY`; an explicitly
+selected missing/empty variable fails closed. Set the selector in every
+transcription consumer (web, celery, bots, bot-tasks and voice-bridge) before
+removing the legacy key. Voice-bridge uses Recreate: provision and verify the
+target field before any non-optional secret reference is rolled out.

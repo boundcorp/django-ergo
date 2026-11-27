@@ -242,3 +242,8 @@ def test_embeddings_public_endpoint_sends():
     provider, sdk = embedding_provider()
     assert provider.generate_embedding("text") == [0.1] * 1536
     sdk.embeddings.create.assert_called_once()
+
+
+@pytest.fixture(autouse=True)
+def synthetic_voice_key(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "fake-transcription-only")

@@ -14,7 +14,7 @@
         codex_network_access: true    # set false to disable network in workspace-write
         max_turns: 100
         pass_env: [PATH, HOME, LANG, LC_ALL, TZ, USER]   # the only host variables passed on
-        secrets: [HIGGSFIELD_API_KEY] # bot secrets every job gets (API-billed tools)
+        secrets: [OFFLINE_TOOL_TOKEN] # non-inference tool secrets; denied credentials fail at startup
         timeout_minutes: 60           # per run
         max_concurrent: 2             # running jobs at once, across this root
         approve: true                 # starting, answering and stopping ask first
@@ -82,6 +82,7 @@ from django_ergo.plugins._common import clip
 from django_ergo.plugins._common import is_secret
 from django_ergo.plugins._common import record_agent_usage
 from django_ergo.protected_env import is_protected_env
+from django_ergo.protected_env import is_provider_credential
 from django_ergo.protected_env import scrubbed_env
 
 if TYPE_CHECKING:
@@ -555,6 +556,17 @@ class LocalShellPlugin(BotPlugin):
     def env(
         self, ctx, confinement: dict | None = None, folder: Path | None = None
     ) -> dict[str, str]:
+        if not confinement:
+            denied = sorted(
+                name for name in self.secrets if is_provider_credential(name)
+            )
+            if denied:
+                msg = (
+                    f"local_shell cannot hand {', '.join(denied)} to a coding subprocess. "
+                    "Media requires a trusted per-job allowlist and a separate approved "
+                    "media-tool boundary; key names or brief text do not authorize it."
+                )
+                raise LocalShellError(msg)
         env = {
             k: os.environ[k]
             for k in self.pass_env

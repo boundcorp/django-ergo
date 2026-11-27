@@ -76,3 +76,15 @@ async def test_text_bridge_tts_uses_explicit_instance_keys(monkeypatch):
     ):
         await bridge.text_voice_session(SimpleNamespace(), "offline", "offline", {})
     assert len(clients) == 2
+
+
+def test_host_services_keep_selected_credentials_but_command_children_do_not(monkeypatch):
+    from ergonaut import cli
+
+    monkeypatch.setenv("BOUNDCORP_ORG_OPENAI_KEY", "fake-host-only")
+    seen = []
+    monkeypatch.setattr(cli.subprocess, "call", lambda *args, **kwargs: seen.append(kwargs["env"]) or 0)
+    cli.run("offline-command")
+    cli.run("offline-service", application=True)
+    assert "BOUNDCORP_ORG_OPENAI_KEY" not in seen[0]
+    assert seen[1]["BOUNDCORP_ORG_OPENAI_KEY"] == "fake-host-only"

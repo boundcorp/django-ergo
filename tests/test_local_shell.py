@@ -87,7 +87,7 @@ def yaml_for(tmp_path: Path) -> str:
         template: {template}
         agents: [claude, codex]
         executables: {{claude: {fake}, codex: {codex}}}
-        secrets: [HIGGSFIELD_API_KEY]
+        secrets: [OFFLINE_TOOL_TOKEN]
         approve: false
         max_concurrent: 1
         timeout_minutes: 1
@@ -155,7 +155,7 @@ def test_a_job_asks_is_answered_and_reports_its_files(tmp_path, workers, monkeyp
     from django_ergo.conversation.models import ThreadMessage
     from django_ergo.conversation.models import Worker
 
-    monkeypatch.setenv("HIGGSFIELD_API_KEY", "hf-test")
+    monkeypatch.setenv("OFFLINE_TOOL_TOKEN", "hf-test")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "must-not-pass")
     monkeypatch.setenv("AD_MANAGER_ADS_API_KEY", "must-not-pass")
     bot, plugin, ctx, kit = setup(tmp_path)
@@ -174,7 +174,7 @@ def test_a_job_asks_is_answered_and_reports_its_files(tmp_path, workers, monkeyp
 
     wait_for_exit(folder, 1)
     env = json.loads((folder / "env.json").read_text())
-    assert "HIGGSFIELD_API_KEY" in env
+    assert "OFFLINE_TOOL_TOKEN" in env
     assert "ANTHROPIC_API_KEY" not in env and "AD_MANAGER_ADS_API_KEY" not in env
     argv = json.loads((folder / ".ergo" / "run-1.json").read_text())["argv"]
     assert argv[argv.index("--permission-mode") + 1] == "dontAsk"
@@ -229,7 +229,7 @@ def test_runs_add_new_template_files_and_flag_missing_secrets(
     from django_ergo.bots import workers as w
     from django_ergo.conversation.models import ThreadMessage
 
-    monkeypatch.delenv("HIGGSFIELD_API_KEY", raising=False)
+    monkeypatch.delenv("OFFLINE_TOOL_TOKEN", raising=False)
     bot, plugin, ctx, kit = setup(tmp_path)
     started = json.loads(
         kit.execute_tool(
@@ -237,10 +237,10 @@ def test_runs_add_new_template_files_and_flag_missing_secrets(
         )
     )
     [warning] = started["warnings"]
-    assert "HIGGSFIELD_API_KEY" in warning and "restart" in warning
+    assert "OFFLINE_TOOL_TOKEN" in warning and "restart" in warning
     folder = tmp_path / "jobs" / "old"
     wait_for_exit(folder, 1)
-    assert "HIGGSFIELD_API_KEY" not in json.loads((folder / "env.json").read_text())
+    assert "OFFLINE_TOOL_TOKEN" not in json.loads((folder / "env.json").read_text())
 
     # The kit gains a helper after the job was made, and the job edited a file.
     kit_dir = tmp_path / "kit"
@@ -248,7 +248,7 @@ def test_runs_add_new_template_files_and_flag_missing_secrets(
     (kit_dir / "bin" / "sume").write_text("#!/bin/sh\n")
     (kit_dir / "renderers" / "render.py").write_text("print('new')\n")
     (folder / "renderers" / "render.py").write_text("print('job edit')\n")
-    monkeypatch.setenv("HIGGSFIELD_API_KEY", "hf-test")
+    monkeypatch.setenv("OFFLINE_TOOL_TOKEN", "hf-test")
 
     w.run(started["id"], bot.registry)
     kit.execute_tool(
@@ -261,7 +261,7 @@ def test_runs_add_new_template_files_and_flag_missing_secrets(
     assert (folder / "renderers" / "render.py").read_text() == "print('job edit')\n"
     assert (folder / ".ergo" / "template.json").exists()
     assert not (folder / "linked").exists()
-    assert "HIGGSFIELD_API_KEY" in json.loads((folder / "env.json").read_text())
+    assert "OFFLINE_TOOL_TOKEN" in json.loads((folder / "env.json").read_text())
     w.run(started["id"], bot.registry)
     told = " ".join(
         ThreadMessage.objects.filter(metadata__worker=started["id"]).values_list(

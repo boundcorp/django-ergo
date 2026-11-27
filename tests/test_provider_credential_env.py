@@ -38,7 +38,7 @@ def test_all_provider_names_removed_without_subscription_changes(monkeypatch, fa
         # is CLAUDE_CODE_OAUTH_TOKEN, unlike omp's ANTHROPIC_OAUTH_TOKEN.
         assert "ANTHROPIC_OAUTH_TOKEN" not in env
     else:
-        assert env["ANTHROPIC_OAUTH_TOKEN"] == "fake-native-oauth"
+        assert "ANTHROPIC_OAUTH_TOKEN" not in env
     assert env["CODEX_HOME"] == "/fake/codex-home"
     assert env["CLAUDE_CONFIG_DIR"] == "/fake/claude-home"
 
@@ -82,8 +82,8 @@ def test_local_shell_pass_and_secret_lists_cannot_bypass_scrub(monkeypatch):
     plugin.on_load()
     monkeypatch.setenv("ODD_ALIAS", "fake")
     monkeypatch.setenv("HOME", "/subscription-home")
-    env = plugin.env(SimpleNamespace(secret=lambda name: "fake"))
-    assert env == {"HOME": "/subscription-home", "TOOL_TOKEN": "fake"}
+    with pytest.raises(ValueError, match="ODD_ALIAS.*coding subprocess"):
+        plugin.env(SimpleNamespace(secret=lambda name: "fake"))
 
 
 @pytest.mark.parametrize("factory", [scrubbed_env, claude_env, codex_env])
@@ -143,9 +143,7 @@ def test_local_runner_and_resumed_descendants_are_keyless(
 
     register_credential_config({"api_key_env": "ODD_ALIAS"})
     monkeypatch.setenv("ODD_ALIAS", "fake")
-    plugin = LocalShellPlugin(
-        None, {"pass_env": ["PATH", "HOME", "ODD_ALIAS"], "secrets": ["ODD_ALIAS"]}
-    )
+    plugin = LocalShellPlugin(None, {"pass_env": ["PATH", "HOME", "ODD_ALIAS"]})
     plugin.on_load()
     meta = tmp_path / ".ergo"
     meta.mkdir()
@@ -221,11 +219,15 @@ def test_direct_api_engine_configuration_registers_other_provider_aliases():
     assert scrubbed_env({"CLAUDE_CUSTOM": "fake", "GEMINI_CUSTOM": "fake"}) == {}
 
 
-def test_invalid_existing_credential_source_blocks_launch(tmp_path):
-    import yaml
-
+def test_invalid_existing_credential_source_uses_safe_environment(tmp_path):
     path = tmp_path / "bot.yaml"
     path.write_text("engine: [")
     register_credential_source(path)
-    with pytest.raises(yaml.YAMLError):
-        scrubbed_env({"ODD_ALIAS": "fake"})
+    try:
+        assert scrubbed_env({"UNKNOWN_ALIAS": "fake", "HOME": "/fake"}) == {
+            "HOME": "/fake"
+        }
+    finally:
+        path.unlink()
+        # Discovery is process-wide; isolate this deliberately broken source.
+        scrubbed_env({})
