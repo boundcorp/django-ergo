@@ -869,3 +869,8 @@ class LifecycleEvent(models.Model):
         # A new instance can still have an existing explicit primary key. Django's
         # normal save may update that row, so additions must always be inserts.
         return super().save(force_insert=True, using=using)
+
+
+from django_ergo.analysis.models import AnalysisDataset  # noqa: E402,F401
+from django_ergo.analysis.models import AnalysisJob  # noqa: E402,F401
+from django_ergo.analysis.models import AnalysisWorkspace  # noqa: E402,F401

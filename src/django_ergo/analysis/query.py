@@ -1,4 +1,4 @@
-# ruff: noqa: C901, PLR0912, PLR2004
+# ruff: noqa: C901, PLR0912, PLR2004, PLR0915, TRY003, EM101
 """Compile structured predicates for a trusted isolated dataset executor.
 
 Identifiers come exclusively from a validated schema. Values are parameters.
@@ -28,6 +28,8 @@ def compile_predicate(node: dict, columns: set[str]) -> Predicate:
             msg = "Predicate is too complex or malformed"
             raise InvalidQueryError(msg)
         op = item.get("op")
+        if not isinstance(op, str):
+            raise InvalidQueryError("Invalid predicate operation")
         if op in ("and", "or"):
             if set(item) != {"op", "args"} or not isinstance(item["args"], list):
                 msg = "Invalid boolean predicate"
@@ -104,3 +106,112 @@ def scalar(value):
     if isinstance(value, int):
         return -(2**63) <= value < 2**63
     return isinstance(value, float) and math.isfinite(value)
+
+
+def quote(name, columns):
+    if not isinstance(name, str) or name not in columns:
+        raise InvalidQueryError("Unknown column")
+    return '"' + name.replace('"', '""') + '"'
+
+
+@dataclass(frozen=True)
+class Select:
+    sql: str
+    params: tuple
+    columns: tuple
+
+
+def compile_select(spec, columns):
+    """Query only registered in-memory data. Stable order includes every output column."""
+    if not isinstance(spec, dict) or set(spec) - {
+        "columns",
+        "where",
+        "group_by",
+        "aggregates",
+        "sort",
+        "limit",
+    }:
+        raise InvalidQueryError("Invalid select")
+    limit = spec.get("limit", 100)
+    if type(limit) is not int or not 1 <= limit <= 1000:
+        raise InvalidQueryError("Invalid row limit")
+    group = spec.get("group_by", [])
+    aggregates = spec.get("aggregates", [])
+    projection = spec.get("columns", list(columns))
+    if (
+        not isinstance(group, list)
+        or not isinstance(aggregates, list)
+        or not isinstance(projection, list)
+    ):
+        raise InvalidQueryError("Invalid projection")
+    if not all(isinstance(c, str) for c in group + projection):
+        raise InvalidQueryError("Invalid column name")
+    if len(group) > 32 or len(aggregates) > 32 or not 1 <= len(projection) <= 128:
+        raise InvalidQueryError("Projection too wide")
+    params = ()
+    where = ""
+    if "where" in spec:
+        pred = compile_predicate(spec["where"], set(columns))
+        where, params = " WHERE " + pred.sql, pred.params
+    if aggregates or group:
+        names = list(group)
+        expressions = [quote(c, columns) for c in group]
+        for agg in aggregates:
+            if not isinstance(agg, dict) or set(agg) != {"op", "column", "as"}:
+                raise InvalidQueryError("Invalid aggregate")
+            op = agg["op"]
+            if not isinstance(op, str) or op not in {
+                "count",
+                "sum",
+                "avg",
+                "min",
+                "max",
+                "count_distinct",
+            }:
+                raise InvalidQueryError("Invalid aggregate operation")
+            alias = agg["as"]
+            if not isinstance(alias, str) or not 1 <= len(alias) <= 100:
+                raise InvalidQueryError("Invalid aggregate alias")
+            col = (
+                "*"
+                if op == "count" and agg["column"] == "*"
+                else quote(agg["column"], columns)
+            )
+            expression = (
+                f"COUNT(DISTINCT {col})"
+                if op == "count_distinct"
+                else f"{op.upper()}({col})"
+            )
+            expressions.append(expression + " AS " + quote(alias, {alias}))
+            names.append(alias)
+        select = ", ".join(expressions)
+        grouping = (
+            " GROUP BY " + ", ".join(quote(c, columns) for c in group) if group else ""
+        )
+    else:
+        names = projection
+        select = ", ".join(quote(c, columns) for c in names)
+        grouping = ""
+    if not names or len({name.casefold() for name in names}) != len(names):
+        raise InvalidQueryError("Duplicate or empty output columns")
+    sorting = spec.get("sort", [])
+    if not isinstance(sorting, list) or len(sorting) > 32:
+        raise InvalidQueryError("Invalid sort")
+    ordered = []
+    for item in sorting:
+        if (
+            not isinstance(item, dict)
+            or set(item) != {"column", "direction"}
+            or item["direction"] not in {"asc", "desc"}
+        ):
+            raise InvalidQueryError("Invalid sort")
+        ordered.append(
+            quote(item["column"], names)
+            + " "
+            + item["direction"].upper()
+            + " NULLS LAST"
+        )
+    # Identical projected rows are indistinguishable; ordering all outputs gives stable pagination.
+    ordered.extend(quote(c, names) + " ASC NULLS LAST" for c in names)
+    sql = f"SELECT {select} FROM data{where}{grouping}"  # noqa: S608 — quoted schema identifiers, bound values
+    return Select(sql + " ORDER BY " + ", ".join(ordered), params, tuple(names))

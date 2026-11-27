@@ -1,1 +1,1 @@
-"""Contracts for isolated analysis; no execution backend is shipped."""
+"""Disabled-by-default analysis broker; executor/controller require separate deployments."""

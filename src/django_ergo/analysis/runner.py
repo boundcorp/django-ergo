@@ -1,7 +1,8 @@
-"""Fail-closed isolated-runner contract.
+"""Legacy fail-closed contract preserved for foundation callers.
 
-No production backend is supplied. A future controller must enforce the policy
-independently; merely implementing this protocol does not establish isolation.
+Use AnalysisService with an authorized ToolContext for the implemented HTTP
+broker. Raw session/user strings are insufficient authorization to execute.
+Runtime controls are fixed by the separate controller's approved policy.
 """
 
 from dataclasses import dataclass
@@ -48,6 +49,6 @@ class IsolatedController(Protocol):
 def execute(
     *, session_id: str, user_id: str, code: str, limits: Limits | None = None
 ) -> dict:
-    """No backend is wired in: execution is unavailable, without fallback."""
-    msg = "Isolated analysis controller is not configured"
+    """Raw identity calls remain unavailable; use the authorized service, no fallback."""
+    msg = "Use an authorized AnalysisService and configured isolated controller"
     raise RunnerUnavailableError(msg)
