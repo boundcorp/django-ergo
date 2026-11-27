@@ -7,6 +7,7 @@ This module does not read targets, launch agents, or make model calls.
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import re
 from dataclasses import dataclass
@@ -113,11 +114,118 @@ class ReviewBrief:
     text: str
 
 
-def _model_guidance(bot, author_model, tier, policy):
+def _available_agents(bot, session):
+    """Check configured candidates through launch admission, without a launch."""
+    from django_ergo.bots import pools
+    from django_ergo.bots import routing
+
+    providers = bot.providers
+    if not getattr(providers, "pools", None):
+        return None
+    view = pools.listing(bot, session)
+    if view["privacy"]["restricted"]:
+        return {}
+    pool = (
+        pools.legacy_pool(providers.providers)
+        if providers.pools.legacy
+        else providers.pools.get(view["active"])
+    )
+    if pool is None:
+        return {}
+    result = {}
+    for tier in _TIERS:
+        accepted = []
+        for choice in pools.agent_candidates(providers, pool, tier):
+            try:
+                if providers.pools.legacy:
+                    scoped = copy.deepcopy(providers)
+                    scoped.routing.agents[tier] = [choice]
+                    selected = routing.pick_agent(scoped, tier)
+                else:
+                    decision = pools.select_agent(
+                        bot,
+                        session,
+                        model=(
+                            choice.model
+                            if "/" in choice.model
+                            else f"{choice.provider}/{choice.model}"
+                        ),
+                        agent=choice.agent,
+                        record=False,
+                    )
+                    if decision.pool != pool.name:
+                        continue
+                    selected = decision.choice
+                if selected and (selected.provider, selected.model, selected.agent) == (
+                    choice.provider,
+                    choice.model,
+                    choice.agent,
+                ):
+                    accepted.append(choice)
+            except (ValueError, pools.PoolRefusal):
+                continue
+        result[tier] = accepted
+    return result
+
+
+def _resolved_guidance(candidates, author_model, preferred, author_tier, swarm):
+    def same(choice):
+        return (
+            bool(author_model)
+            and author_model.rsplit("/", 1)[-1] == choice.model.rsplit("/", 1)[-1]
+        )
+
+    order = list(dict.fromkeys([preferred, author_tier, *_TIERS[::-1]]))
+    ranked = [(tier, c) for tier in order for c in candidates.get(tier, [])]
+    if not ranked:
+        return "No coding-agent candidate could be resolved in the active pool. "
+    if swarm:
+        preferred_choices = [(t, c) for t, c in ranked if t == preferred]
+        fallback = (
+            ""
+            if preferred_choices
+            else f"Fallback: no {preferred} tier candidate was admitted. "
+        )
+        ranked = preferred_choices or ranked
+        choices = list(
+            dict.fromkeys(
+                f"{c.agent}: {c.model} (provider {c.provider})" for _, c in ranked
+            )
+        )
+        return (
+            fallback
+            + "Admitted swarm candidates: "
+            + "; ".join(choices)
+            + ". Rotate when possible; disclose any fallback. "
+        )
+    tier, choice = min(ranked, key=lambda pair: (same(pair[1]), order.index(pair[0])))
+    fallback = []
+    if tier != preferred:
+        fallback.append(f"{preferred} tier unavailable for a different model")
+    if same(choice):
+        fallback.append("same model as author; no different model admitted")
+    note = "; fallback: " + ", ".join(fallback) if fallback else ""
+    return f"Suggested admitted candidate: agent {choice.agent}, model {choice.model}, provider {choice.provider}, tier {tier}{note}. "
+
+
+def _model_guidance(bot, author_model, tier, policy, session=None, swarm=False):  # noqa: PLR0913
     routing = getattr(getattr(bot, "providers", None), "routing", None) if bot else None
     tiers = getattr(routing, "tiers", {}) if routing else {}
+    agents = getattr(routing, "agents", {}) if routing else {}
     author_tier = next(
-        (t for t in _TIERS if author_model and author_model in tiers.get(t, [])), None
+        (
+            t
+            for t in _TIERS
+            if author_model
+            and (
+                author_model in tiers.get(t, [])
+                or any(
+                    author_model in (c.model, f"{c.provider}/{c.model}")
+                    for c in agents.get(t, [])
+                )
+            )
+        ),
+        None,
     )
     note = ""
     if not author_tier:
@@ -132,15 +240,23 @@ def _model_guidance(bot, author_model, tier, policy):
     )
     if tier == "up" and author_tier == "xlarge":
         note += "No higher tier exists; same tier is acceptable. "
+    resolved = ""
+    if bot and getattr(bot, "providers", None):
+        candidates = _available_agents(bot, session)
+        if candidates is not None:
+            resolved = _resolved_guidance(
+                candidates, author_model, preferred, author_tier, swarm
+            )
     return (
-        f"{note}Prefer {preferred} tier"
+        resolved
+        + f"{note}Prefer {preferred} tier"
         + (", one tier above the author when available" if tier == "up" else "")
         + (
             ", and a different model (another family is welcome but not required)"
             if policy == "cross_model"
             else ", preferably a different model"
         )
-        + ". Routing availability, active pool, allowlists, budget and runtime launch eligibility are not verified here. "
+        + ". Manager-specific availability, budget and final runtime launch eligibility are not verified here. "
         "Use the best permitted available alternative, including the author's tier or same model if necessary; disclose the actual model and any fallback or unknown routing data. "
         "Choose through the available agent tool and its normal routing; never bypass launch enforcement. For a swarm, rotate among permitted small models when available."
     )
@@ -156,6 +272,7 @@ def review_brief(  # noqa: PLR0913
     author_model="",
     bot=None,
     focus="",
+    session=None,
 ):
     """Return orchestration, reviewer and synthesis instructions; never launch work."""
     definitions, names = _definitions(bot)
@@ -215,6 +332,8 @@ def review_brief(  # noqa: PLR0913
         author_model,
         d["swarm"]["tier"] if strategy == "swarm" else d["reviewer"]["tier"],
         "cross_model" if strategy == "cross_model" else d["reviewer"]["policy"],
+        session=session,
+        swarm=strategy == "swarm",
     )
     if strategy == "swarm":
         run = (
@@ -284,6 +403,7 @@ class DevPlugin(BotPlugin):
                 author_model=author,
                 bot=ctx.bot,
                 focus=focus,
+                session=ctx.session,
             ).text
 
         return [FunctionToolkit.from_functions([brief], ctx)]

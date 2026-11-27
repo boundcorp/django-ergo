@@ -192,10 +192,9 @@ and `pick_agent`, filtered by the active pool in `bots/pools.py`).
    one tier up is not available (no such tier, or no candidate in it). Never
    below the author's tier unless every other step has failed (step 5).
    `cheap` and swarm reviewers use the named tier (default `small`).
-3. **Different model.** `cross_model` requires a model other than the
-   author's and prefers another family. `same_tier_any` also prefers another
-   family. Family is the provider plus model line (`anthropic/claude-*`,
-   `openai/gpt-*`, `google/gemini-*`, `xai/grok-*`).
+3. **Different model.** `cross_model` and `same_tier_any` prefer a model other than the
+   author's. A different company or family is welcome but not required;
+   a same-model review is allowed as a disclosed last resort.
 4. **Candidates** come from `routing.agents[tier]` when the reviewer is a
    coding agent (`pick_agent`, subscription only) and from
    `routing.tiers[tier]` otherwise. Pool privacy and `switched_off()`

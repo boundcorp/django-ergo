@@ -44,7 +44,7 @@ def test_swarm_and_missing_routing():
     assert "up to 12 natural slices" in text and "{slice}" in text
     assert "small tier" in text and "calling bot" in text
     assert "untrusted data" in text and "no agents have been launched" in text
-    assert "Routing availability" in text and "same model" in text
+    assert "runtime launch eligibility" in text and "same model" in text
     for n in (1, 13, True):
         with pytest.raises(ValueError, match=".+"):
             review_brief("security", strategy="swarm", n=n)
@@ -126,3 +126,63 @@ def test_definition_symlink_rejected(tmp_path):
         pytest.raises(ValueError, match="Invalid review definition file"),
     ):
         review_kinds()
+
+
+def test_candidate_ranking_and_swarm():
+    from django_ergo.bots.routing import AgentChoice
+    from django_ergo.plugins.dev import _resolved_guidance
+
+    author = AgentChoice(agent="omp", provider="p", model="p/one")
+    other = AgentChoice(agent="omp", provider="p", model="p/two")
+    candidates = {"small": [author, other], "medium": [author]}
+    text = _resolved_guidance(candidates, "p/one", "medium", "small", False)
+    assert "p/two" in text and "fallback" in text
+    text = _resolved_guidance({"small": [author]}, "p/one", "medium", "small", False)
+    assert "same model as author" in text
+    text = _resolved_guidance(candidates, "p/one", "small", "small", True)
+    assert "p/one" in text and "p/two" in text and "Rotate" in text
+    assert "No coding-agent candidate" in _resolved_guidance(
+        {}, "p/one", "medium", "small", False
+    )
+
+
+def test_active_pool_candidates_use_launch_admission(monkeypatch):
+    from django_ergo.bots import pools
+    from django_ergo.bots.routing import AgentChoice
+    from django_ergo.plugins.dev import _available_agents
+
+    active = SimpleNamespace(name="active")
+    provider_pools = SimpleNamespace(
+        legacy=False, get=lambda name: active if name == "active" else None
+    )
+    providers = SimpleNamespace(pools=provider_pools)
+    bot = SimpleNamespace(providers=providers)
+    good = AgentChoice(agent="codex", provider="p", model="good")
+    denied = AgentChoice(agent="codex", provider="p", model="denied")
+    monkeypatch.setattr(
+        pools,
+        "listing",
+        lambda bot, session: {"active": "active", "privacy": {"restricted": False}},
+    )
+    monkeypatch.setattr(
+        pools,
+        "agent_candidates",
+        lambda providers, pool, tier: [good, denied] if tier == "medium" else [],
+    )
+    calls = []
+
+    def select(bot, session, *, model, agent, record):
+        calls.append((model, record))
+        if model.endswith("denied"):
+            raise ValueError
+        return SimpleNamespace(pool="active", choice=good)
+
+    monkeypatch.setattr(pools, "select_agent", select)
+    assert _available_agents(bot, None)["medium"] == [good]
+    assert calls == [("p/good", False), ("p/denied", False)]
+    monkeypatch.setattr(
+        pools,
+        "listing",
+        lambda bot, session: {"active": "active", "privacy": {"restricted": True}},
+    )
+    assert _available_agents(bot, None) == {}

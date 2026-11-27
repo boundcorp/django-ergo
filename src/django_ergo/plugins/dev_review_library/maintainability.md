@@ -1,6 +1,6 @@
 ---
 name: maintainability
-aliases: [tech-debt, dry, cleanup, tech debt review, cleanup review]
+aliases: [tech-debt, tech debt, dry, cleanup, tech debt review, cleanup review]
 summary: Find debt and duplication worth simplifying safely.
 targets: [diff, plan]
 reviewer: {policy: same_tier_any, tier: same}

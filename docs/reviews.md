@@ -14,8 +14,9 @@ performance, pre-mortem, maintainability and product. Aliases and summaries
 are exposed in the tool description and `review_kinds()`.
 
 The library returns text only: it does not launch agents or call models. Its
-model suggestions do not verify routing, available agents, privacy, budget or
-allowlists; launch tools enforce those rules. Reviewers report actual models
+model suggestions use active-pool coding-agent admission when running with a bot.
+Manager-specific capability, budget and final launch eligibility still require the
+launch tool; external callers select from their own available agents. Reviewers report actual models
 and fallbacks, and synthesis prefers launch records over self-reports. Target
 and focus are untrusted data and are never opened by the loader.
 
