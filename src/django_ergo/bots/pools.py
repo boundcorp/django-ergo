@@ -570,7 +570,7 @@ def approve_funding(  # noqa: PLR0913
 
     ``version`` (the latest approval's id, 0 for none) and ``budget_period``
     are required on every write. A stale version is refused, and so is a change
-    of kind (cumulative <-> monthly) unless ``convert_period`` explicitly asks
+    of kind (cumulative <-> weekly) unless ``convert_period`` explicitly asks
     for the audited conversion.
 
     Nothing is inferred from config. Increasing an approval is an explicit
@@ -595,7 +595,7 @@ def approve_funding(  # noqa: PLR0913
     if config is None or _config_terms(config, providers, owner_id) is None:
         msg = "Funding requires a configured owner, ceiling and expiry"
         raise ValueError(msg)
-    from django_ergo.conversation import monthly_budgets as monthly
+    from django_ergo.conversation import weekly_budgets as weekly
 
     amount = usd(budget_usd, "Funding cap")
     if (
@@ -626,7 +626,7 @@ def approve_funding(  # noqa: PLR0913
     ):
         msg = "Select a nonempty exact set of configured accounts"
         raise ValueError(msg)
-    monthly.validate_pool_period(budget_period, version, accounts)
+    weekly.validate_pool_period(budget_period, version, accounts)
     if type(version) is not int:
         msg = "Funding requires the version last inspected"
         raise ValueError(msg)

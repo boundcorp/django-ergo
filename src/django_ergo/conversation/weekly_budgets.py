@@ -1,8 +1,8 @@
-"""Provider-wide UTC monthly accounting. All identities are explicit, non-secret assertions.
+"""Provider-wide UTC weekly accounting (ISO weeks, Monday 00:00 UTC to the next Monday 00:00 UTC). All identities are explicit, non-secret assertions.
 
 Lock order: provider (vendor), owner envelope, child envelope. Mapping/consent
-writes take the vendor lock too. A reservation's month never changes at settlement;
-unknown exposure from *any* earlier month continues to consume availability.
+writes take the vendor lock too. A reservation's week never changes at settlement;
+unknown exposure from *any* earlier week continues to consume availability.
 """
 
 from __future__ import annotations
@@ -21,12 +21,12 @@ from django_ergo.conversation.models import InferenceOutcome
 from django_ergo.conversation.models import InferenceRequest
 from django_ergo.conversation.models import ProviderAccountMapping
 from django_ergo.conversation.models import ProviderBudgetFamily
-from django_ergo.conversation.models import ProviderMonthlyConsent
+from django_ergo.conversation.models import ProviderWeeklyConsent
 from django_ergo.conversation.models import SpendControlAudit
 
 CUMULATIVE = "cumulative"
-MONTHLY = "calendar_month_utc"
-MAX_MONTHLY_USD = Decimal("100")
+WEEKLY = "iso_week_utc"
+MAX_WEEKLY_USD = Decimal("100")
 MAX_NOTE_LENGTH = 200
 IDENTITY_PARTS = 6
 # Wire type -> the vendor that type natively speaks to.
@@ -50,12 +50,18 @@ def utc(value):
     )
 
 
-def month_of(value=None):
-    return utc(value or timezone.now()).date().replace(day=1)
+def week_of(value=None):
+    """The Monday (UTC date) that starts the ISO week containing ``value``.
+
+    The week is the ISO week: Monday 00:00 UTC up to the next Monday 00:00 UTC.
+    It may straddle a month or year boundary; it is never split.
+    """
+    day = utc(value or timezone.now()).date()
+    return day - dt.timedelta(days=day.weekday())
 
 
-def month_start(value=None):
-    found = month_of(value)
+def week_start(value=None):
+    found = week_of(value)
     result = dt.datetime.combine(found, dt.time(), tzinfo=dt.UTC)
     from django.conf import settings
 
@@ -146,7 +152,7 @@ def _validated_family(account, family):
 def lock_family(family):
     from django_ergo.conversation.spend_guard import lock
 
-    lock(f"provider-monthly:{family}")
+    lock(f"provider-weekly:{family}")
 
 
 def _actor(actor_id, *, admin=False):
@@ -232,7 +238,7 @@ def assert_mapping(  # noqa: PLR0913 -- explicit audited account assertion
                 provider_family=family,
                 account_mapping=mapping,
                 vendor=family_id,
-                budget_month=month_of(attempt.created_at),
+                budget_week=week_of(attempt.created_at),
             )
         SpendControlAudit.objects.create(
             actor=actor,
@@ -273,7 +279,7 @@ def historical_problem(family_id):
     if paid.filter(
         Q(provider_family__isnull=True)
         | Q(account_mapping__isnull=True)
-        | Q(budget_month__isnull=True)
+        | Q(budget_week__isnull=True)
     ).exists():
         return "Ambiguous historical paid attempts require explicit account mapping and reconciliation"
     if (
@@ -290,7 +296,7 @@ def set_consent(  # noqa: PLR0913 -- explicit recurring consent terms
     actor_id,
     family_id,
     version,
-    monthly_usd,
+    weekly_usd,
     enabled,
     valid_from,
     expires_at,
@@ -302,9 +308,9 @@ def set_consent(  # noqa: PLR0913 -- explicit recurring consent terms
 
     actor = _actor(actor_id)
     note = _note(note)
-    amount = usd(monthly_usd, "Monthly consent")
-    if amount > MAX_MONTHLY_USD or type(enabled) is not bool or timezone_name != "UTC":
-        msg = "Monthly consent requires UTC, a boolean switch and at most $100 per provider"
+    amount = usd(weekly_usd, "Weekly consent")
+    if amount > MAX_WEEKLY_USD or type(enabled) is not bool or timezone_name != "UTC":
+        msg = "Weekly consent requires UTC, a boolean switch and at most $100 per provider per ISO week"
         raise ValueError(msg)
     if (
         not isinstance(valid_from, dt.datetime)
@@ -330,11 +336,11 @@ def set_consent(  # noqa: PLR0913 -- explicit recurring consent terms
             raise VersionConflict(msg)
         if enabled and (problem := historical_problem(family_id)):
             raise ValueError(problem)
-        consent = ProviderMonthlyConsent.objects.create(
+        consent = ProviderWeeklyConsent.objects.create(
             family=family,
             actor=actor,
             version=expected + 1,
-            monthly_usd=amount,
+            weekly_usd=amount,
             enabled=enabled,
             valid_from=valid_from,
             expires_at=expires_at,
@@ -342,11 +348,11 @@ def set_consent(  # noqa: PLR0913 -- explicit recurring consent terms
         )
         SpendControlAudit.objects.create(
             actor=actor,
-            action="monthly_consent",
+            action="weekly_consent",
             details={
                 "family": family_id,
                 "version": consent.version,
-                "monthly_usd": str(amount),
+                "weekly_usd": str(amount),
                 "enabled": enabled,
                 "timezone": "UTC",
                 "note": note,
@@ -358,16 +364,17 @@ def set_consent(  # noqa: PLR0913 -- explicit recurring consent terms
 def totals(rows, *, period=CUMULATIVE, now=None):
     """Exact priced usage plus conservative pending/unknown exposure.
 
-    Monthly spend belongs to the attempt's original month. Outstanding holds
-    from prior months carry forward, including attempts predating enrollment.
+    Weekly spend belongs to the attempt's original ISO week (the week it
+    started, even if it settles after Monday 00:00 UTC). Outstanding holds
+    from prior weeks carry forward, including attempts predating enrollment.
     """
     spent = held = Decimal(0)
-    start = month_start(now)
+    start = week_start(now)
     for row in rows.exclude(outcome=InferenceOutcome.NOT_SENT):
         priced = row.cost_status == "priced" and row.cost_usd is not None
-        in_month = (row.budget_month or month_of(row.created_at)) == month_of(start)
+        in_week = (row.budget_week or week_of(row.created_at)) == week_of(start)
         if priced:
-            if period == CUMULATIVE or in_month:
+            if period == CUMULATIVE or in_week:
                 spent += row.cost_usd
         else:
             held += row.reserved_usd or Decimal(0)
@@ -375,10 +382,10 @@ def totals(rows, *, period=CUMULATIVE, now=None):
 
 
 def validate_pool_period(budget_period, version, accounts):
-    if budget_period not in (CUMULATIVE, MONTHLY):
-        msg = "Funding period must be cumulative or calendar_month_utc"
+    if budget_period not in (CUMULATIVE, WEEKLY):
+        msg = "Funding period must be cumulative or iso_week_utc"
         raise ValueError(msg)
-    if budget_period != MONTHLY:
+    if budget_period != WEEKLY:
         return
     if type(version) is not int:
         msg = "Recurring funding requires the version last inspected"
@@ -430,28 +437,28 @@ def reservation_context(identity, amount, *, required=False, now=None):  # noqa:
         raise SpendDenied(msg)
     if problem := historical_problem(family_id):
         raise SpendDenied(problem)
-    spent, held = totals(family.attempts.all(), period=MONTHLY, now=now)
-    if spent + held + amount > consent.monthly_usd:
-        msg = f"Provider {family_id} UTC monthly budget is used: ${spent} spent and ${held} reserved"
+    spent, held = totals(family.attempts.all(), period=WEEKLY, now=now)
+    if spent + held + amount > consent.weekly_usd:
+        msg = f"Provider {family_id} UTC weekly budget is used: ${spent} spent and ${held} reserved"
         raise SpendDenied(msg)
     return {
         "provider_family": family,
         "account_mapping": mapping,
-        "budget_month": month_of(now),
+        "budget_week": week_of(now),
     }
 
 
 def inspect_family(family_id):
     family = ProviderBudgetFamily.objects.get(pk=family_id)
     consent = family.consents.order_by("-version").first()
-    spent, held = totals(family.attempts.all(), period=MONTHLY)
+    spent, held = totals(family.attempts.all(), period=WEEKLY)
     return {
         "family": family.pk,
         "owner_id": str(family.owner_id),
         "timezone": "UTC",
-        "month": str(month_of()),
+        "week": str(week_of()),
         "version": consent.version if consent else 0,
-        "monthly_usd": str(consent.monthly_usd) if consent else None,
+        "weekly_usd": str(consent.weekly_usd) if consent else None,
         "enabled": bool(consent and consent.enabled),
         "spent_usd": str(spent),
         "reserved_usd": str(held),

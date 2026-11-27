@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { MonthlyProviderBudget, PoolFunding } from '../api'
+import type { WeeklyProviderBudget, PoolFunding } from '../api'
 import { api } from '../api'
 import { fromLocalInput } from '../localTime'
 
@@ -22,18 +22,18 @@ export function vendorOf(account: { identity: string; provider_type?: string }):
   return families[account.provider_type || ''] ?? ''
 }
 
-export function MonthlyFunding({ details, admin }: { details: PoolFunding; admin: boolean }) {
+export function WeeklyFunding({ details, admin }: { details: PoolFunding; admin: boolean }) {
   const names = [...new Set(details.accounts.map(vendorOf).filter(Boolean))]
   return (
     <div>
       {names.map(family => (
-        <MonthlyProviderForm key={family} family={family} details={details} admin={admin} />
+        <WeeklyProviderForm key={family} family={family} details={details} admin={admin} />
       ))}
     </div>
   )
 }
 
-export function MonthlyProviderForm({
+export function WeeklyProviderForm({
   family,
   details,
   admin,
@@ -42,7 +42,7 @@ export function MonthlyProviderForm({
   details: PoolFunding
   admin: boolean
 }) {
-  const [data, setData] = useState<MonthlyProviderBudget | null>(null)
+  const [data, setData] = useState<WeeklyProviderBudget | null>(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [identity, setIdentity] = useState('')
@@ -57,7 +57,7 @@ export function MonthlyProviderForm({
   useEffect(() => {
     let cancelled = false
     api
-      .monthlyProviderBudget(family)
+      .weeklyProviderBudget(family)
       .then(value => {
         if (!cancelled) setData(value)
       })
@@ -68,7 +68,7 @@ export function MonthlyProviderForm({
       cancelled = true
     }
   }, [family])
-  async function write(fn: () => Promise<MonthlyProviderBudget>) {
+  async function write(fn: () => Promise<WeeklyProviderBudget>) {
     setBusy(true)
     setError('')
     try {
@@ -84,13 +84,13 @@ export function MonthlyProviderForm({
     <section className="border border-stroke rounded-control p-3 my-2 flex flex-col gap-2 text-xs">
       <p className="font-semibold">{family}: recurring provider budget · UTC</p>
       <p>
-        One aggregate cap across all bots, threads, models, accounts and keys. Maximum $100 each UTC calendar month.
-        Unknown holds from prior months reduce availability until reconciled.
+        One aggregate cap across all bots, threads, models, accounts and keys. Maximum $100 each UTC ISO week (Monday
+        00:00 to the next Monday 00:00 UTC). Unknown holds from prior weeks reduce availability until reconciled.
       </p>
       {data && (
         <p>
-          Version {data.version} · {data.enabled ? 'Enabled' : 'Disabled'} · ${data.monthly_usd ?? '0'} monthly · $
-          {data.spent_usd} spent · ${data.reserved_usd} held · month {data.month}. Owner {data.owner_id}; consenting
+          Version {data.version} · {data.enabled ? 'Enabled' : 'Disabled'} · ${data.weekly_usd ?? '0'} weekly · $
+          {data.spent_usd} spent · ${data.reserved_usd} held · week of {data.week}. Owner {data.owner_id}; consenting
           actor {data.actor_id ?? 'none'}.
         </p>
       )}
@@ -106,7 +106,7 @@ export function MonthlyProviderForm({
           onSubmit={e => {
             e.preventDefault()
             void write(() =>
-              api.assertMonthlyMapping({
+              api.assertWeeklyMapping({
                 identity,
                 owner: details.owner,
                 account_label: label,
@@ -168,9 +168,9 @@ export function MonthlyProviderForm({
           onSubmit={e => {
             e.preventDefault()
             void write(() =>
-              api.setMonthlyProviderConsent(family, {
+              api.setWeeklyProviderConsent(family, {
                 version: data.version,
-                monthly_usd: amount,
+                weekly_usd: amount,
                 enabled,
                 valid_from: new Date().toISOString(),
                 expires_at: fromLocalInput(expiry),
@@ -181,9 +181,9 @@ export function MonthlyProviderForm({
           }}
         >
           <label>
-            Recurring USD per UTC calendar month{' '}
+            Recurring USD per UTC ISO week{' '}
             <input
-              aria-label={`${family} monthly USD`}
+              aria-label={`${family} weekly USD`}
               type="number"
               min="0"
               max="100"
@@ -217,7 +217,7 @@ export function MonthlyProviderForm({
           />
           <label>
             <input type="checkbox" checked={acknowledged} onChange={e => setAcknowledged(e.target.checked)} />I
-            explicitly authorize these recurring monthly terms until expiry, subject to all existing privacy, pause and
+            explicitly authorize these recurring weekly terms until expiry, subject to all existing privacy, pause and
             grant restrictions.
           </label>
           <button disabled={busy || !acknowledged || !amount || !expiry || !note}>

@@ -10,15 +10,15 @@ from django.contrib.auth import get_user_model
 
 from django_ergo.bots import pools
 from django_ergo.bots.providers import parse_providers
-from django_ergo.conversation import monthly_budgets as monthly
 from django_ergo.conversation import spend_guard
+from django_ergo.conversation import weekly_budgets as weekly
 from django_ergo.conversation.models import InferenceRequest
 from tests.test_model_pools import environment  # noqa: F401 -- synthetic keys only
-from tests.test_monthly_provider_budgets import END
-from tests.test_monthly_provider_budgets import START
-from tests.test_monthly_provider_budgets import clock  # noqa: F401
-from tests.test_monthly_provider_budgets import consent
-from tests.test_monthly_provider_budgets import reserve
+from tests.test_weekly_provider_budgets import END
+from tests.test_weekly_provider_budgets import START
+from tests.test_weekly_provider_budgets import clock  # noqa: F401
+from tests.test_weekly_provider_budgets import consent
+from tests.test_weekly_provider_budgets import reserve
 
 pytestmark = pytest.mark.django_db(transaction=True)
 User = get_user_model()
@@ -69,7 +69,7 @@ def _setup(monkeypatch):
     owner = User.objects.create(username="lee")
     admin = User.objects.create(username="admin", is_superuser=True)
     providers = parse_providers(CONFIG)
-    monthly.assert_mapping(
+    weekly.assert_mapping(
         actor_id=admin.pk,
         owner_id=owner.pk,
         identity=pools.transport_identity(
@@ -87,7 +87,7 @@ def _setup(monkeypatch):
         expires_at=END,
         valid_from=START,
         accounts=pools.funding_accounts(providers, providers.pools.get("paid")),
-        budget_period=monthly.CUMULATIVE,
+        budget_period=weekly.CUMULATIVE,
         version=0,
     )
     grant = pools.snapshot(providers, owner.pk).get("paid").grant
@@ -99,7 +99,7 @@ def test_google_host_on_openai_wire_is_google_and_needs_a_mapping(clock, monkeyp
     identity = pools.transport_identity(
         providers.providers["gemini-compat"], "gemini-2.5-pro"
     )
-    assert monthly.family_of(identity) == "google"
+    assert weekly.family_of(identity) == "google"
     # Google is enrolled but this credential is unmapped: denied before any row.
     with pytest.raises(spend_guard.SpendDenied, match="explicit admin mapping"):
         reserve(owner, providers, grant, "40", "gemini-compat/gemini-2.5-pro")
@@ -109,13 +109,13 @@ def test_google_host_on_openai_wire_is_google_and_needs_a_mapping(clock, monkeyp
 def test_unprovable_vendor_is_unknown_and_blocks_google(clock, monkeypatch):  # noqa: F811
     owner, providers, grant = _setup(monkeypatch)
     identity = pools.transport_identity(providers.providers["proxy"], "gemini-2.5-pro")
-    assert monthly.family_of(identity) == ""
+    assert weekly.family_of(identity) == ""
     pk = reserve(owner, providers, grant, "40", "proxy/gemini-2.5-pro")
     row = InferenceRequest.objects.get(pk=pk)
     assert row.vendor == ""  # never the wire type 'openai'
     assert row.provider_family_id is None
     # Unknown history counts in the conservative gate: Google fails closed.
-    assert "Ambiguous historical" in monthly.historical_problem("google")
+    assert "Ambiguous historical" in weekly.historical_problem("google")
     with pytest.raises(spend_guard.SpendDenied, match="Ambiguous historical"):
         reserve(owner, providers, grant, "10", "gemini/gemini-2.5-pro")
     assert sum(r.reserved_usd for r in InferenceRequest.objects.all()) == Decimal(40)
@@ -125,4 +125,4 @@ def test_unknown_vendor_fails_closed_for_recurring_sends(clock, monkeypatch):  #
     owner, providers, grant = _setup(monkeypatch)
     identity = pools.transport_identity(providers.providers["proxy"], "gemini-2.5-pro")
     with pytest.raises(spend_guard.SpendDenied, match="mapping"):
-        monthly.reservation_context(identity, Decimal(1), required=True)
+        weekly.reservation_context(identity, Decimal(1), required=True)

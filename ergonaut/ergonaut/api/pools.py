@@ -68,10 +68,10 @@ class FundingIn(Schema):
     note: str = ""
     budget_period: str
     version: StrictInt
-    convert_period: StrictBool = False  # explicit audited cumulative <-> monthly change
+    convert_period: StrictBool = False  # explicit audited cumulative <-> weekly change
 
 
-class MonthlyMappingIn(Schema):
+class WeeklyMappingIn(Schema):
     model_config = ConfigDict(extra="forbid")
 
     identity: str
@@ -82,11 +82,11 @@ class MonthlyMappingIn(Schema):
     family: str = ""  # the vendor the admin asserts; validated against type and host
 
 
-class MonthlyConsentIn(Schema):
+class WeeklyConsentIn(Schema):
     model_config = ConfigDict(extra="forbid")
 
     version: StrictInt
-    monthly_usd: str
+    weekly_usd: str
     enabled: StrictBool
     valid_from: datetime
     expires_at: datetime
@@ -249,10 +249,10 @@ def approve_funding(request, name: str, data: FundingIn):
     return _settings(request)
 
 
-@router.post("/pools/monthly-mapping")
-def monthly_mapping(request, data: MonthlyMappingIn):
+@router.post("/pools/weekly-mapping")
+def weekly_mapping(request, data: WeeklyMappingIn):
     """Explicit admin assertion about configured metadata; no credential reads."""
-    from django_ergo.conversation import monthly_budgets as monthly
+    from django_ergo.conversation import weekly_budgets as weekly
 
     _admin(request)
     providers = pools.fresh_providers(registry().providers)
@@ -265,7 +265,7 @@ def monthly_mapping(request, data: MonthlyMappingIn):
     if owner is None:
         raise HttpError(400, "Choose an active account owner")
     mapping = _apply(
-        monthly.assert_mapping,
+        weekly.assert_mapping,
         actor_id=request.auth.pk,
         owner_id=owner.pk,
         identity=data.identity,
@@ -274,7 +274,7 @@ def monthly_mapping(request, data: MonthlyMappingIn):
         attempt_ids=data.attempt_ids,
         family=data.family,
     )
-    return monthly.inspect_family(mapping.family_id)
+    return weekly.inspect_family(mapping.family_id)
 
 
 def _family_manager(request, family):
@@ -287,32 +287,32 @@ def _family_manager(request, family):
         raise HttpError(403, "Only the provider family owner or admin may inspect recurring terms")
 
 
-@router.get("/pools/monthly/{family}")
+@router.get("/pools/weekly/{family}")
 def monthly_details(request, family: str):
-    from django_ergo.conversation import monthly_budgets as monthly
+    from django_ergo.conversation import weekly_budgets as weekly
 
     _family_manager(request, family)
-    return monthly.inspect_family(family)
+    return weekly.inspect_family(family)
 
 
-@router.put("/pools/monthly/{family}")
-def monthly_consent(request, family: str, data: MonthlyConsentIn):
-    from django_ergo.conversation import monthly_budgets as monthly
+@router.put("/pools/weekly/{family}")
+def weekly_consent(request, family: str, data: WeeklyConsentIn):
+    from django_ergo.conversation import weekly_budgets as weekly
 
     _family_manager(request, family)
     _apply(
-        monthly.set_consent,
+        weekly.set_consent,
         actor_id=request.auth.pk,
         family_id=family,
         version=data.version,
-        monthly_usd=data.monthly_usd,
+        weekly_usd=data.weekly_usd,
         enabled=data.enabled,
         valid_from=data.valid_from,
         expires_at=data.expires_at,
         timezone_name=data.timezone,
         note=data.note,
     )
-    return monthly.inspect_family(family)
+    return weekly.inspect_family(family)
 
 
 @router.post("/pools/paid-pause")

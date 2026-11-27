@@ -9,10 +9,10 @@ from django.db.migrations.executor import MigrationExecutor
 
 
 @pytest.mark.django_db(transaction=True)
-def test_monthly_upgrade_and_reverse_preserve_ambiguous_paid_history(settings):
+def test_weekly_upgrade_and_reverse_preserve_ambiguous_paid_history(settings):
     settings.USE_TZ = True
     before = ("django_ergo", "0063_google_engine_signatures")
-    after = ("django_ergo", "0064_provider_monthly_budgets")
+    after = ("django_ergo", "0064_provider_weekly_budgets")
     try:
         executor = MigrationExecutor(connection)
         executor.migrate([before])
@@ -46,7 +46,7 @@ def test_monthly_upgrade_and_reverse_preserve_ambiguous_paid_history(settings):
         old.get_model("django_ergo", "InferenceRequest").objects.filter(
             pk=attempt.pk
         ).update(
-            created_at=dt.datetime(2026, 10, 31, 23, 59, 59, tzinfo=dt.UTC),
+            created_at=dt.datetime(2027, 1, 1, 12, 0, tzinfo=dt.UTC),
         )
         executor = MigrationExecutor(connection)
         executor.migrate([after])
@@ -54,7 +54,9 @@ def test_monthly_upgrade_and_reverse_preserve_ambiguous_paid_history(settings):
         migrated = current.get_model("django_ergo", "InferenceRequest").objects.get(
             pk=attempt.pk
         )
-        assert migrated.budget_month == dt.date(2026, 10, 1)
+        assert migrated.budget_week == dt.date(
+            2026, 12, 28
+        )  # Fri 2027-01-01 is in ISO week 53 of 2026
         assert (
             migrated.provider_family_id is None and migrated.account_mapping_id is None
         )
@@ -66,9 +68,9 @@ def test_monthly_upgrade_and_reverse_preserve_ambiguous_paid_history(settings):
             == "cumulative"
         )
         assert not current.get_model(
-            "django_ergo", "ProviderMonthlyConsent"
+            "django_ergo", "ProviderWeeklyConsent"
         ).objects.exists()
-        from django_ergo.conversation.monthly_budgets import historical_problem
+        from django_ergo.conversation.weekly_budgets import historical_problem
 
         assert "Ambiguous" in historical_problem("openai")
         MigrationExecutor(connection).migrate([before])

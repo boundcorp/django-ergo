@@ -1497,7 +1497,7 @@ class ProviderAccountMapping(BudgetRecord):
         return f"{self.family_id}: {self.account_label}"
 
 
-class ProviderMonthlyConsent(BudgetRecord):
+class ProviderWeeklyConsent(BudgetRecord):
     """Explicit recurring authority, independently switchable and append-only."""
 
     family = models.ForeignKey(
@@ -1506,7 +1506,7 @@ class ProviderMonthlyConsent(BudgetRecord):
     actor = models.ForeignKey(User, on_delete=models.PROTECT, related_name="+")
     created_at = models.DateTimeField(auto_now_add=True)
     version = models.PositiveIntegerField()
-    monthly_usd = models.DecimalField(max_digits=16, decimal_places=4)
+    weekly_usd = models.DecimalField(max_digits=16, decimal_places=4)
     enabled = models.BooleanField(default=False)
     valid_from = models.DateTimeField()
     expires_at = models.DateTimeField()
@@ -1519,16 +1519,16 @@ class ProviderMonthlyConsent(BudgetRecord):
                 fields=["family", "version"], name="provider_consent_version"
             ),
             models.CheckConstraint(
-                condition=Q(monthly_usd__gte=0, monthly_usd__lte=100),
-                name="provider_monthly_max_100",
+                condition=Q(weekly_usd__gte=0, weekly_usd__lte=100),
+                name="provider_weekly_max_100",
             ),
             models.CheckConstraint(
-                condition=Q(timezone="UTC"), name="provider_monthly_utc"
+                condition=Q(timezone="UTC"), name="provider_weekly_utc"
             ),
         ]
 
     def __str__(self):
-        return f"{self.family_id} monthly consent v{self.version}"
+        return f"{self.family_id} weekly consent v{self.version}"
 
 
 class SpendFunding(models.Model):
@@ -1830,7 +1830,7 @@ class InferenceRequest(TimeStampedMixin):
         null=True,
         related_name="attempts",
     )
-    budget_month = models.DateField(null=True, db_index=True)
+    budget_week = models.DateField(null=True, db_index=True)
     # The vendor family this attempt was recorded against (blank: unknown).
     vendor = models.CharField(max_length=16, blank=True, default="")
     structured_call = models.ForeignKey(

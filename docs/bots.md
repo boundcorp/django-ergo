@@ -3010,14 +3010,18 @@ separate from pinning and prevents resolving or idle archival. Existing
 archived chats are marked where applicable but stay archived, with their
 history and status unchanged.
 
+<<<<<<< HEAD
 ## Review briefs
 
 Enable `plugins: [{name: dev}]` for reusable review instructions. See [Review briefs](reviews.md) for kinds, orchestration, overrides and the CLI.
 Recurring metered funding uses an explicit `calendar_month_utc` approval, separate
+=======
+Recurring metered funding uses an explicit `iso_week_utc` approval, separate
+>>>>>>> e8fdd3e (feat: switch recurring provider budgets from monthly to weekly iso weeks)
 from providers.yaml ceilings and independent provider-wide recurring consent.
-Each vendor is capped at $100 per UTC calendar month across aliases and all
+Each vendor is capped per UTC ISO week (Monday 00:00 to Monday 00:00 UTC; the amount is set by explicit consent) across aliases and all
 bots/threads/models/keys; outstanding holds carry forward and cumulative issued
 grants retain their lifetime limits. Config alone never funds this mode. See
-[model-pools.md](model-pools.md#recurring-provider-budgets-utc-calendar-months)
+[model-pools.md](model-pools.md#recurring-provider-budgets-utc-iso-weeks)
 for the secondary API schema and authenticated account/consent workflow. Existing
 personal privacy restrictions and paid coding refusals still apply.

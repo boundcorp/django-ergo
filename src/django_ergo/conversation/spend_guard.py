@@ -176,7 +176,7 @@ def family_spent_and_reserved(
 
 def _totals(revisions, *, period="cumulative", now=None) -> tuple[Decimal, Decimal]:
     from django_ergo.conversation.models import InferenceRequest
-    from django_ergo.conversation.monthly_budgets import totals
+    from django_ergo.conversation.weekly_budgets import totals
 
     return totals(
         InferenceRequest.objects.filter(pool__in=[ledger_key(pk) for pk in revisions]),
@@ -685,14 +685,14 @@ def reserve(  # noqa: PLR0913, PLR0912, PLR0915, C901
         raise SpendDenied(msg)
     msg = ""
     locks = _locks_of(envelope)
-    from django_ergo.conversation import monthly_budgets as monthly
+    from django_ergo.conversation import weekly_budgets as weekly
 
     captured_identity = getattr(current, "identity", "")
     captured_family = (
-        monthly.family_of(captured_identity) if captured_identity else provider
+        weekly.family_of(captured_identity) if captured_identity else provider
     )
     with transaction.atomic():
-        monthly.lock_family(captured_family)
+        weekly.lock_family(captured_family)
         for key in locks:
             lock(key)
         grant = (
@@ -704,7 +704,7 @@ def reserve(  # noqa: PLR0913, PLR0912, PLR0915, C901
                 problem = f"the spend grant doesn't cover {ref}"
             elif output_tokens is not None and output_tokens > terms.max_output_tokens:
                 problem = f"the output ceiling is now {terms.max_output_tokens} tokens"
-            elif launch and "calendar_month_utc" in terms.limits:
+            elif launch and "iso_week_utc" in terms.limits:
                 problem = (
                     "recurring API funding does not authorize paid coding launches"
                 )
@@ -730,14 +730,14 @@ def reserve(  # noqa: PLR0913, PLR0912, PLR0915, C901
             msg = f"{ref}: {problem}; refusing to send"
         else:
             identity = terms.account_identities.get(ref, captured_identity)
-            if identity and monthly.family_of(identity) != captured_family:
+            if identity and weekly.family_of(identity) != captured_family:
                 msg = "Provider/account changed while acquiring budget locks"
                 raise SpendDenied(msg)
             reservation_time = timezone.now()
-            monthly_fields = monthly.reservation_context(
+            weekly_fields = weekly.reservation_context(
                 identity,
                 amount,
-                required=monthly.MONTHLY in terms.limits,
+                required=weekly.WEEKLY in terms.limits,
                 now=reservation_time,
             )
             limits = [
@@ -791,7 +791,7 @@ def reserve(  # noqa: PLR0913, PLR0912, PLR0915, C901
                     reserved_usd=amount,
                     cost_status="pending",
                     **fields,
-                    **monthly_fields,
+                    **weekly_fields,
                 )
     if msg:
         raise SpendDenied(msg)
@@ -819,7 +819,7 @@ def priced(usage: Usage | None, price: ExactPrice | None) -> dict:
 
 def _finish(pk, **fields) -> None:
     from django_ergo.conversation.models import InferenceRequest
-    from django_ergo.conversation.monthly_budgets import lock_family
+    from django_ergo.conversation.weekly_budgets import lock_family
 
     family = (
         InferenceRequest.objects.filter(pk=pk)

@@ -224,19 +224,19 @@ export type FundingApproval = {
   expires_at: string
   accounts: string[]
   note: string
-  budget_period: 'cumulative' | 'calendar_month_utc'
+  budget_period: 'cumulative' | 'iso_week_utc'
   version: number // the funding revision last inspected; a stale one is refused
-  convert_period?: boolean // explicit, audited cumulative <-> monthly conversion
+  convert_period?: boolean // explicit, audited cumulative <-> weekly conversion
 }
 
-export type MonthlyProviderBudget = {
+export type WeeklyProviderBudget = {
   family: string
   owner_id: string
   actor_id: string | null
   timezone: 'UTC'
-  month: string
+  week: string // Monday (UTC date) of the current ISO week
   version: number
-  monthly_usd: string | null
+  weekly_usd: string | null
   enabled: boolean
   spent_usd: string
   reserved_usd: string
@@ -246,9 +246,9 @@ export type MonthlyProviderBudget = {
   accounts: { id: number; identity: string; account_label: string; actor_id: string; assertion: string }[]
 }
 
-export type MonthlyConsentWrite = {
+export type WeeklyConsentWrite = {
   version: number
-  monthly_usd: string
+  weekly_usd: string
   enabled: boolean
   valid_from: string
   expires_at: string
@@ -1276,18 +1276,18 @@ export const api = {
   poolFunding: (pool: string) => request<PoolFunding>('GET', `/pools/${encodeURIComponent(pool)}/funding`),
   approveFunding: (pool: string, body: FundingApproval) =>
     request<PoolSettings>('POST', `/pools/${encodeURIComponent(pool)}/funding`, body),
-  monthlyProviderBudget: (family: string) =>
-    request<MonthlyProviderBudget>('GET', `/pools/monthly/${encodeURIComponent(family)}`),
-  setMonthlyProviderConsent: (family: string, body: MonthlyConsentWrite) =>
-    request<MonthlyProviderBudget>('PUT', `/pools/monthly/${encodeURIComponent(family)}`, body),
-  assertMonthlyMapping: (body: {
+  weeklyProviderBudget: (family: string) =>
+    request<WeeklyProviderBudget>('GET', `/pools/weekly/${encodeURIComponent(family)}`),
+  setWeeklyProviderConsent: (family: string, body: WeeklyConsentWrite) =>
+    request<WeeklyProviderBudget>('PUT', `/pools/weekly/${encodeURIComponent(family)}`, body),
+  assertWeeklyMapping: (body: {
     identity: string
     owner: string
     account_label: string
     assertion: string
     attempt_ids: string[]
     family: string
-  }) => request<MonthlyProviderBudget>('POST', '/pools/monthly-mapping', body),
+  }) => request<WeeklyProviderBudget>('POST', '/pools/weekly-mapping', body),
   poolEnvelopes: (pool: string) =>
     request<PoolEnvelopeCandidates>('GET', `/pools/${encodeURIComponent(pool)}/envelope`),
   linkPoolEnvelope: (pool: string, body: { envelope?: string; fund?: boolean; restore?: boolean; note: string }) =>

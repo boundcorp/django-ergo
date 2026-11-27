@@ -7,15 +7,17 @@ from django.conf import settings
 from django.db import migrations, models
 
 
-def original_months(apps, schema_editor):
+def original_weeks(apps, schema_editor):
     """Backfill chronology only, never infer billing identity, consent or zero usage."""
     Attempt = apps.get_model("django_ergo", "InferenceRequest")
     for row in Attempt.objects.using(schema_editor.connection.alias).all().iterator():
         created = row.created_at
         if created.tzinfo is not None:
             created = created.astimezone(dt.timezone.utc)
+        day = created.date()
+        # The ISO week (Monday 00:00 UTC start) the attempt was created in.
         Attempt.objects.using(schema_editor.connection.alias).filter(pk=row.pk).update(
-            budget_month=created.date().replace(day=1)
+            budget_week=day - dt.timedelta(days=day.weekday())
         )
 
 
@@ -28,7 +30,7 @@ class Migration(migrations.Migration):
     operations = [
         migrations.AddField(
             model_name="inferencerequest",
-            name="budget_month",
+            name="budget_week",
             field=models.DateField(db_index=True, null=True),
         ),
         migrations.AddField(
@@ -135,7 +137,7 @@ class Migration(migrations.Migration):
             ),
         ),
         migrations.CreateModel(
-            name="ProviderMonthlyConsent",
+            name="ProviderWeeklyConsent",
             fields=[
                 (
                     "id",
@@ -148,7 +150,7 @@ class Migration(migrations.Migration):
                 ),
                 ("created_at", models.DateTimeField(auto_now_add=True)),
                 ("version", models.PositiveIntegerField()),
-                ("monthly_usd", models.DecimalField(decimal_places=4, max_digits=16)),
+                ("weekly_usd", models.DecimalField(decimal_places=4, max_digits=16)),
                 ("enabled", models.BooleanField(default=False)),
                 ("valid_from", models.DateTimeField()),
                 ("expires_at", models.DateTimeField()),
@@ -178,16 +180,16 @@ class Migration(migrations.Migration):
                     ),
                     models.CheckConstraint(
                         condition=models.Q(
-                            ("monthly_usd__gte", 0), ("monthly_usd__lte", 100)
+                            ("weekly_usd__gte", 0), ("weekly_usd__lte", 100)
                         ),
-                        name="provider_monthly_max_100",
+                        name="provider_weekly_max_100",
                     ),
                     models.CheckConstraint(
                         condition=models.Q(("timezone", "UTC")),
-                        name="provider_monthly_utc",
+                        name="provider_weekly_utc",
                     ),
                 ],
             },
         ),
-        migrations.RunPython(original_months, migrations.RunPython.noop),
+        migrations.RunPython(original_weeks, migrations.RunPython.noop),
     ]
