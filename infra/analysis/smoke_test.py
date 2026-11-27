@@ -116,6 +116,7 @@ def check_escapes(result):
     output = result["output"]
     line = next(x for x in output.splitlines() if x.startswith("RESULTS "))
     results = json.loads(line.removeprefix("RESULTS "))
+    print(json.dumps(results, indent=1), file=sys.stderr)  # CI evidence, no secrets
     assert results.pop("inherited") == [], "inherited descriptors"
     parent = results.pop("parent")
     assert parent == "/proc/1", parent
