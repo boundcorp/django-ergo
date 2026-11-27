@@ -120,8 +120,13 @@ def check_escapes(result):
     assert results.pop("inherited") == [], "inherited descriptors"
     parent = results.pop("parent")
     assert parent == "/proc/1", parent
-    for key in ("list parent fds", parent + "/mem", parent + "/environ"):
+    # Linux refuses to list a non-dumpable process's fds; gVisor under Docker
+    # lists the numbers but, like Linux, refuses to open any of them.
+    assert results.pop("list parent fds", "blocked:EACCES") == "blocked:EACCES"
+    for key in (parent + "/mem", parent + "/environ"):
         assert results.pop(key) == "blocked:EACCES", key
+    for fd in (0, 1, 2):
+        assert results[f"{parent}/fd/{fd}"] == "blocked:EACCES", fd
     for path, outcome in results.items():
         if path in OWN:
             assert outcome == "wrote" and "ESCAPED " + path in output, path
