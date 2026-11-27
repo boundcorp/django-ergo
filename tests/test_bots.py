@@ -2331,6 +2331,11 @@ async def test_a_refused_thread_call_names_its_target_when_there_is_one(
         assert is_error, (name, content)
         refusal = json.loads(content)
         assert refusal.pop("error")
+        # The error envelope (PR #413) is additive to the fields naming the target.
+        assert refusal.pop("category") == "invalid_argument"
+        assert refusal.pop("retryable") is False
+        assert refusal.pop("state_changed") == "no"
+        assert refusal.pop("next_action") == ""
         assert refusal == target, name
 
     content, is_error = await sync_to_async(call)(

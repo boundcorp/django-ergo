@@ -28,12 +28,14 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import logging
 import mimetypes
 from dataclasses import dataclass
 from dataclasses import field
 from pathlib import Path
 from typing import TYPE_CHECKING
+from typing import NoReturn
 
 from django.core.files.base import ContentFile
 from django.core.files.base import File
@@ -384,6 +386,273 @@ def replace_session_file(
     if old and old != row.file.name:
         row.file.storage.delete(old)
     return row
+
+
+# -- guarded text edits ---------------------------------------------------------
+
+APPEND_KEYS_KEPT = 100
+PREVIEW_LINES = 20
+PREVIEW_LINE_CHARS = 200
+
+
+def _refuse(message: str, category: str, **fields) -> NoReturn:
+    """Raise a categorized ``ToolError``; nothing was changed."""
+    from django_ergo.conversation.tool_dispatch import ToolError
+
+    raise ToolError(message, category=category, **fields)
+
+
+def _locked_text(session_id, attachment_id, *, max_bytes):
+    """The row (locked ``FOR UPDATE``) and its decoded text. Must run inside
+    ``transaction.atomic()``. Refuses anything it could not rewrite whole."""
+    from django_ergo.conversation.models import ConversationAttachment
+
+    row = (
+        ConversationAttachment.objects.select_for_update()
+        .filter(pk=attachment_id, session_id=session_id)
+        .first()
+    )
+    if row is None:
+        _refuse(f"No file {attachment_id}", "not_found")
+    if row.private_export_id:
+        _refuse(
+            "Private export snapshots are immutable; create a new file instead.",
+            "permission_denied",
+        )
+    if not is_text(row.media_type) or not row.file:
+        _refuse(f"{row.filename} is not a text file", "invalid_argument")
+    if (row.size or 0) > max_bytes:
+        _refuse(
+            f"{row.filename} is {row.size} bytes, over the {max_bytes}-byte "
+            "limit for edits; nothing was changed. Use ergo_attachments_create "
+            "for a smaller file.",
+            "limit_exceeded",
+        )
+    with row.file.open("rb") as handle:
+        data = handle.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        _refuse(
+            f"{row.filename} is over the {max_bytes}-byte limit for edits; "
+            "nothing was changed.",
+            "limit_exceeded",
+        )
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        _refuse(
+            f"{row.filename} is not valid UTF-8; nothing was changed.",
+            "invalid_argument",
+        )
+    return row, data, text
+
+
+def _check_precondition(row, data, expected_sha256, expected_version):
+    """Compare against the bytes just read under the lock, not the stored hash."""
+    actual = hashlib.sha256(data).hexdigest()
+    version = int((row.metadata or {}).get("version", 1))
+    expected = (expected_sha256 or "").strip().lower()
+    if expected and len(expected) < 12:  # noqa: PLR2004
+        _refuse(
+            "expected_sha256 must be at least 12 hex characters", "invalid_argument"
+        )
+    stale = (expected and not actual.startswith(expected)) or (
+        expected_version is not None and int(expected_version) != version
+    )
+    if stale:
+        _refuse(
+            f"{row.filename} changed since you read it; nothing was changed.",
+            "stale_version",
+            next_action="Re-read the file (or the range) and retry with its current sha256.",
+            current_sha256=actual,
+            current_version=version,
+        )
+    return actual, version
+
+
+def _line_of(text: str, index: int) -> int:
+    return text.count("\n", 0, index) + 1
+
+
+def _write_locked(row, data: bytes, version: int):
+    """Store ``data`` on the locked row. The old file goes only after commit."""
+    from django.db import transaction
+
+    old = row.file.name if row.file else ""
+    row.file.save(row.filename or f"{row.id}", ContentFile(data), save=False)
+    new = row.file.name
+    storage = row.file.storage
+    row.size = len(data)
+    row.sha256 = hashlib.sha256(data).hexdigest()
+    row.metadata = {**(row.metadata or {}), "version": version}
+    try:
+        row.save(update_fields=["file", "size", "sha256", "metadata", "updated_at"])
+    except BaseException:
+        storage.delete(new)
+        raise
+    if old and old != new:
+        transaction.on_commit(lambda: storage.delete(old))
+
+
+def _receipt(row, previous_sha, new_text, first_line, last_line, **extra):
+    lines = new_text.splitlines()
+    shown = [
+        f"{n}: {lines[n - 1][:PREVIEW_LINE_CHARS]}"
+        for n in range(first_line, min(last_line, first_line + PREVIEW_LINES - 1) + 1)
+        if n <= len(lines)
+    ]
+    return {
+        "id": str(row.id),
+        "filename": row.filename,
+        "version": (row.metadata or {}).get("version", 1),
+        "sha256": row.sha256,
+        "previous_sha256": previous_sha,
+        "changed_lines": f"{first_line}-{last_line}",
+        "total_lines": len(lines),
+        "preview": shown,
+        **extra,
+    }
+
+
+def edit_session_text(  # noqa: PLR0913
+    session_id,
+    attachment_id,
+    old_text: str,
+    new_text: str,
+    *,
+    replace_all: bool = False,
+    expected_sha256: str = "",
+    expected_version: int | None = None,
+    max_bytes: int,
+) -> dict:
+    """Exact-text replace under a row lock. The precondition is checked against
+    the bytes read inside the lock, so two writers cannot both pass it. Changes
+    nothing (and says why) on a stale version, a missing or ambiguous match, or a
+    result over ``max_bytes``."""
+    from django.db import transaction
+
+    if not old_text:
+        _refuse("old_text must not be empty", "invalid_argument")
+    if not expected_sha256 and expected_version is None:
+        _refuse(
+            "Give expected_sha256 (or expected_version) from your last read.",
+            "invalid_argument",
+        )
+    with transaction.atomic():
+        row, data, text = _locked_text(session_id, attachment_id, max_bytes=max_bytes)
+        previous, version = _check_precondition(
+            row, data, expected_sha256, expected_version
+        )
+        count = text.count(old_text)
+        if count == 0:
+            _refuse(
+                "old_text was not found; nothing was changed.",
+                "not_found",
+                next_action="Re-read the range and copy the text exactly.",
+            )
+        if count > 1 and not replace_all:
+            first = []
+            at = -1
+            for _ in range(min(count, 3)):
+                at = text.index(old_text, at + 1)
+                first.append(_line_of(text, at))
+            _refuse(
+                f"old_text matches {count} places (lines {first}); nothing was changed.",
+                "ambiguous_match",
+                matches=count,
+                first_lines=first,
+                next_action="Add surrounding text to make old_text unique, or set replace_all.",
+            )
+        # Locate every replaced span in the new text, to report what changed.
+        pieces = text.split(old_text)
+        spans, out_len = [], 0
+        out = []
+        for position, piece in enumerate(pieces):
+            out.append(piece)
+            out_len += len(piece)
+            if position < len(pieces) - 1:
+                spans.append((out_len, out_len + len(new_text)))
+                out.append(new_text)
+                out_len += len(new_text)
+        result = "".join(out)
+        encoded = result.encode()
+        if len(encoded) > max_bytes:
+            _refuse(
+                f"Result would be {len(encoded)} bytes; the limit is {max_bytes}. "
+                "Nothing was changed.",
+                "limit_exceeded",
+            )
+        first_line = _line_of(result, spans[0][0])
+        last_line = _line_of(result, max(spans[-1][1] - 1, spans[-1][0]))
+        _write_locked(row, encoded, version + 1)
+        return _receipt(
+            row, previous, result, first_line, last_line, replacements=len(spans)
+        )
+
+
+def append_session_text(  # noqa: PLR0913
+    session_id,
+    attachment_id,
+    content: str,
+    *,
+    separator: str = "\n",
+    idempotency_key: str = "",
+    expected_sha256: str = "",
+    expected_version: int | None = None,
+    max_bytes: int,
+) -> dict:
+    """Append under a row lock. ``separator`` goes between the old text and
+    ``content`` unless the file is empty or already ends with it. A retry with
+    the same ``idempotency_key`` and payload returns the first receipt and writes
+    nothing; the same key with a different payload is a conflict. Keys are scoped
+    to the file and the last ``APPEND_KEYS_KEPT`` are remembered."""
+    from django.db import transaction
+
+    if not content:
+        _refuse("content must not be empty", "invalid_argument")
+    key = (idempotency_key or "").strip()
+    payload = hashlib.sha256(
+        json.dumps([content, separator], ensure_ascii=False).encode()
+    ).hexdigest()
+    with transaction.atomic():
+        row, data, text = _locked_text(session_id, attachment_id, max_bytes=max_bytes)
+        keys = list((row.metadata or {}).get("append_keys") or [])
+        seen = next((k for k in keys if key and k.get("key") == key), None)
+        if seen is not None:
+            if seen.get("payload_sha256") != payload:
+                _refuse(
+                    f"idempotency_key {key!r} was already used with different content; "
+                    "nothing was changed.",
+                    "conflict",
+                    next_action="Use a new key for new content.",
+                )
+            return {**seen["receipt"], "replayed": True}
+        previous, version = _check_precondition(
+            row, data, expected_sha256, expected_version
+        )
+        glue = separator if text and not text.endswith(separator) else ""
+        result = text + glue + content
+        encoded = result.encode()
+        if len(encoded) > max_bytes:
+            _refuse(
+                f"Result would be {len(encoded)} bytes; the limit is {max_bytes}. "
+                "Nothing was changed.",
+                "limit_exceeded",
+            )
+        first_line = _line_of(result, len(text + glue))
+        _write_locked(row, encoded, version + 1)
+        receipt = _receipt(
+            row, previous, result, first_line, len(result.splitlines()), appended=True
+        )
+        if key:
+            row.metadata = {
+                **row.metadata,
+                "append_keys": [
+                    *keys,
+                    {"key": key, "payload_sha256": payload, "receipt": receipt},
+                ][-APPEND_KEYS_KEPT:],
+            }
+            row.save(update_fields=["metadata"])
+        return receipt
 
 
 def _store(row: ConversationAttachment, data: bytes | File) -> None:

@@ -40,7 +40,36 @@ Its `attachments` skill gives:
 | `ergo_attachments_look(attachment_id, question)` | see an image, PDF or video: an image comes back in the tool result so the bot looks itself; a video goes to Gemini (below); other files go to the bot's model in a separate call that answers the question |
 | `ergo_attachments_frames(attachment_id, count or times)` | still frames from a video (up to 8, evenly spaced or at given seconds), which the bot sees itself and which are saved in the chat |
 | `ergo_attachments_create`, `ergo_attachments_update` | write or replace a text file in this chat |
+| `ergo_attachments_edit(attachment_id, old_text, new_text, replace_all, expected_sha256 or expected_version)` | replace exact text in a text file of this chat, only if the file is unchanged since the bot's read (below) |
+| `ergo_attachments_append(attachment_id, content, separator, idempotency_key, expected_sha256)` | add text to the end of a text file of this chat; a retry with the same key adds it once (below) |
 | `ergo_attachments_archive`, `ergo_attachments_unarchive` | clear old files out of the working set (below) |
+
+### Guarded edits and appends
+
+`ergo_attachments_edit` and `ergo_attachments_append` work on text files in the
+bot's own session, up to `max_bytes`. Edit needs `expected_sha256` (12 or more
+hex characters, from a list or read) or `expected_version`; append accepts them
+optionally. The row is locked (`SELECT ... FOR UPDATE`) and the precondition is
+compared with the bytes read inside the lock, so two writers cannot both pass.
+Failures change nothing and come back as structured errors: `stale_version`
+(with `current_sha256`), `not_found`, `ambiguous_match` (count and first line
+numbers; edit only), `conflict` (reused append key with different content),
+`limit_exceeded` and `invalid_argument`. Receipts hold `version`, `sha256`,
+`previous_sha256`, `changed_lines`, `total_lines` and up to 20 preview lines,
+never the whole file.
+
+Append keys are scoped to the file, stored in its metadata, and the last 100 are
+kept. A retry with the same key and content returns the first receipt with
+`replayed: true` before any precondition check, so a timed-out call can be
+retried with its old `expected_sha256`. The separator is added only when the file
+is non-empty and does not already end with it.
+
+Limits: a file larger than `max_bytes` (an upload can be) can't be edited or
+appended to, and a result over `max_bytes` is refused; nothing is truncated. The
+lock covers `ergo_attachments_edit` and `_append`. `ergo_attachments_update` and
+the Files panel do not take it; they are unchanged, so a whole-file write that
+races a locked edit can still win after the edit commits. Page validation for
+`.jhtml` files is not run on edit.
 
 Text reads accept optional 1-based inclusive `start_line` and `end_line`.
 Ranged or large reads return numbered lines, a content hash prefix and version,

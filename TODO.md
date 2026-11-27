@@ -43,6 +43,12 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 
 ### Next
 
+- [ ] **Tooling recommendations, phase 1** (R1-R4, audit 2026-11-27): R3 (guarded
+  `ergo_attachments_edit`/`_append`) and R4 (`ergo_bot_cost`) have landed with
+  tests; R1 still needs plugin error-path migration and R2 still needs the
+  shared ranged read in self-read, config-repo and pages. Open: `.jhtml` page
+  check on edit, `create` for append, a lock on `ergo_attachments_update`,
+  continuation for lines over 50,000 characters and for uploads over `max_bytes`.
 - [ ] **Iteration lifecycle**: opt-in correlated handoff, worker and approval
   evidence plus a deterministic projection; production trace and broader
   question, provider, build, dependency and deployment instrumentation remain.

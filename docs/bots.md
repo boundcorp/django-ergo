@@ -2337,7 +2337,9 @@ Files in a chat session are `ConversationAttachment` rows: sent with a
 message, uploaded to the session (Ergonaut's Files panel), or written by the
 bot (`source` says which; session files have no `message_sequence`). The bot
 gets `ergo_attachments_list`, `ergo_attachments_read`,
-`ergo_attachments_create` and `ergo_attachments_update`. It writes text
+`ergo_attachments_create` and `ergo_attachments_update`, plus guarded
+`ergo_attachments_edit` and `ergo_attachments_append` (see
+[attachments](attachments.md)). It writes text
 files only in its own session, reads files in the same user's other
 sessions, and sees the session's file list in every turn's context.
 `ergo_attachments_read` supports inclusive line ranges, with a 50,000-character
@@ -3012,3 +3014,15 @@ chats, named chats and channel chats start permanent; ordinary task threads do n
 separate from pinning and prevents resolving or idle archival. Existing
 archived chats are marked where applicable but stay archived, with their
 history and status unchanged.
+
+### Context cost report
+
+`python -m django ergo_bot_cost path/to/bot [--session ID] [--json]` (or
+`ergonaut bot-cost`) prints where one turn's context goes: system instructions,
+tool schemas (loader and loaded skills, Claude-shaped JSON), context sections,
+stored history by block kind with the largest tool results, and what each
+unloaded skill adds when loaded. Read only: no model call, and a rolled-back
+throwaway session unless `--session` is given. Numbers are exact character
+counts (a proxy), `chars/4` token estimates, or, labelled separately,
+input-token counts a provider recorded on the last stored reply. See
+`django_ergo.bots.cost`.
