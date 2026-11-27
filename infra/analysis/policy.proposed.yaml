@@ -1,0 +1,94 @@
+# PROPOSAL ONLY. No infrastructure is provisioned or approved by this file.
+# See docs/isolated-analysis-plan.md for required runtime, disk/PID/network controls.
+apiVersion: v1
+kind: List
+items:
+- apiVersion: v1
+  kind: Namespace
+  metadata:
+    name: ergo-analysis-jobs
+    labels:
+      pod-security.kubernetes.io/enforce: restricted
+- apiVersion: v1
+  kind: Namespace
+  metadata:
+    name: ergo-analysis-control
+    labels:
+      pod-security.kubernetes.io/enforce: restricted
+- apiVersion: v1
+  kind: ServiceAccount
+  metadata:
+    name: analysis-job
+    namespace: ergo-analysis-jobs
+  automountServiceAccountToken: false
+- apiVersion: networking.k8s.io/v1
+  kind: NetworkPolicy
+  metadata:
+    name: no-job-network
+    namespace: ergo-analysis-jobs
+  spec:
+    podSelector: {}
+    policyTypes:
+    - Ingress
+    - Egress
+    ingress: []
+    egress: []
+- apiVersion: v1
+  kind: ResourceQuota
+  metadata:
+    name: analysis-ceilings
+    namespace: ergo-analysis-jobs
+  spec:
+    hard:
+      pods: '4'
+      persistentvolumeclaims: '64'
+      requests.storage: 64Gi
+      requests.cpu: '4'
+      limits.cpu: '4'
+      requests.memory: 2Gi
+      limits.memory: 2Gi
+- apiVersion: v1
+  kind: ServiceAccount
+  metadata:
+    name: analysis-controller
+    namespace: ergo-analysis-control
+- apiVersion: rbac.authorization.k8s.io/v1
+  kind: Role
+  metadata:
+    name: analysis-controller
+    namespace: ergo-analysis-jobs
+  rules:
+  - apiGroups:
+    - ''
+    resources:
+    - pods
+    - persistentvolumeclaims
+    verbs:
+    - create
+    - get
+    - delete
+  - apiGroups:
+    - ''
+    resources:
+    - pods
+    verbs:
+    - patch
+  - apiGroups:
+    - ''
+    resources:
+    - pods/log
+    verbs:
+    - get
+- apiVersion: rbac.authorization.k8s.io/v1
+  kind: RoleBinding
+  metadata:
+    name: analysis-controller
+    namespace: ergo-analysis-jobs
+  subjects:
+  - kind: ServiceAccount
+    name: analysis-controller
+    namespace: ergo-analysis-control
+  roleRef:
+    apiGroup: rbac.authorization.k8s.io
+    kind: Role
+    name: analysis-controller
