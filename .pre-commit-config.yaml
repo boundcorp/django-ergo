@@ -9,6 +9,7 @@ repos:
     rev: v4.5.0
     hooks:
       - id: trailing-whitespace
+        exclude: \.patch$ # blank context lines are " \n"; stripping breaks git apply
       - id: end-of-file-fixer
       - id: check-json
       - id: check-toml

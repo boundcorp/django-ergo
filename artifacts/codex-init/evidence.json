@@ -1,0 +1,60 @@
+{
+  "source_commit": "ccf9be8cc458bd6b8336fe84d68d8893f2691a5e",
+  "stable_tag_checked": "rust-v0.172.0",
+  "patch_regressions": {
+    "patch_applies": true,
+    "resolver_tests_passed": 10,
+    "identity_source_compiled": true,
+    "separate_job_ids": 4,
+    "concurrent_same_root_reuses_id": 8,
+    "synthetic_home_unchanged": true,
+    "kernel_sandbox": {
+      "identity_succeeded": true,
+      "synthetic_writes_blocked": [
+        "auth.json",
+        "config.toml",
+        "installation_id"
+      ]
+    },
+    "full_codex_build": false,
+    "patched_appserver_handshake": false
+  },
+  "installed_cli_handshake": {
+    "read_only_home": {
+      "initialized": false,
+      "exit": 1,
+      "read_only_error": true,
+      "synthetic_auth_config_writes_blocked": [
+        "auth.json",
+        "config.toml"
+      ]
+    },
+    "writable_unauthenticated_control": {
+      "initialized": true,
+      "exit": 0,
+      "read_only_error": false,
+      "synthetic_auth_config_writes_blocked": []
+    },
+    "synthetic_readonly_home_unchanged": true,
+    "requests_sent": [
+      "initialize",
+      "initialized (only on success)"
+    ],
+    "network_access": false
+  },
+  "envcheck": {
+    "exit": 127,
+    "diagnostic": "envcheck: command not found"
+  },
+  "real_credentials_read_or_copied": false,
+  "installed_binary_changed": false,
+  "production_fix_complete": false,
+  "verification": {
+    "ruff_check": "passed",
+    "ruff_format": "passed",
+    "rustfmt_runtime_module": "passed",
+    "patch_apply_check": "passed",
+    "upstream_working_tree_unchanged": true
+  },
+  "patch_sha256": "83384bf67a9a8ff5659559e659ed7f2521007900bcc2c347f5b4c9cfef03beaf"
+}

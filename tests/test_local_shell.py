@@ -148,6 +148,87 @@ def test_codex_network_access_requires_boolean():
         plugin.on_load()
 
 
+def _captured_launch(tmp_path, monkeypatch, config, agent="codex", number=1):
+    """Run LocalShellPlugin.launch with Popen replaced; returns the env it got."""
+    from django_ergo.plugins import local_shell
+
+    seen = {}
+
+    def fake_popen(argv, **kwargs):
+        seen["env"] = kwargs["env"]
+
+    monkeypatch.setattr(local_shell.subprocess, "Popen", fake_popen)
+    plugin = local_shell.LocalShellPlugin(None, config)
+    plugin.on_load()
+    folder = tmp_path / "job"
+    folder.mkdir(exist_ok=True)
+    plugin.launch(None, folder, agent, ["true"], number)
+    return folder, seen["env"]
+
+
+def test_codex_runtime_home_is_off_by_default_and_never_inherited(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("CODEX_RUNTIME_HOME", str(tmp_path / "shared"))
+    folder, env = _captured_launch(
+        tmp_path, monkeypatch, {"pass_env": ["PATH", "CODEX_RUNTIME_HOME"]}
+    )
+    assert "CODEX_RUNTIME_HOME" not in env
+    assert not (folder / ".ergo" / "codex-state").exists()
+
+
+def test_codex_runtime_home_gives_each_run_a_fresh_private_root(tmp_path, monkeypatch):
+    import stat
+
+    monkeypatch.setenv("CODEX_RUNTIME_HOME", str(tmp_path / "shared"))
+    config = {"codex_runtime_home": True, "pass_env": ["PATH", "CODEX_RUNTIME_HOME"]}
+    folder, first = _captured_launch(tmp_path, monkeypatch, config, number=1)
+    _, second = _captured_launch(tmp_path, monkeypatch, config, number=2)
+    state = (folder / ".ergo" / "codex-state").resolve()
+    assert first["CODEX_RUNTIME_HOME"] == str(state / "run-1")
+    assert second["CODEX_RUNTIME_HOME"] == str(state / "run-2")
+    for run in ("run-1", "run-2"):
+        mode = (state / run).stat().st_mode
+        assert stat.S_IMODE(mode) == 0o700
+        assert list((state / run).iterdir()) == []
+    # The job's file snapshot never includes runtime state.
+    from django_ergo.plugins.local_shell import _snapshot
+
+    (state / "run-1" / "history.jsonl").write_text("task text")
+    assert _snapshot(folder) == {}
+    # Claude runs are unaffected.
+    _, claude = _captured_launch(
+        tmp_path, monkeypatch, config, agent="claude", number=3
+    )
+    assert "CODEX_RUNTIME_HOME" not in claude
+    assert not (state / "run-3").exists()
+
+
+def test_codex_runtime_home_refuses_reuse_and_symlinks(tmp_path, monkeypatch):
+    from django_ergo.plugins.local_shell import LocalShellError
+
+    config = {"codex_runtime_home": True}
+    folder, _ = _captured_launch(tmp_path, monkeypatch, config, number=1)
+    with pytest.raises(LocalShellError, match="already exists"):
+        _captured_launch(tmp_path, monkeypatch, config, number=1)
+    state = folder / ".ergo" / "codex-state"
+    shared = tmp_path / "shared-state"
+    shared.mkdir()
+    state.rename(tmp_path / "moved")
+    state.symlink_to(shared)
+    with pytest.raises(LocalShellError, match="real folder"):
+        _captured_launch(tmp_path, monkeypatch, config, number=2)
+    assert list(shared.iterdir()) == []
+
+
+def test_codex_runtime_home_requires_boolean():
+    from django_ergo.plugins.local_shell import LocalShellPlugin
+
+    plugin = LocalShellPlugin(None, {"codex_runtime_home": "true"})
+    with pytest.raises(TypeError, match="codex_runtime_home must be a boolean"):
+        plugin.on_load()
+
+
 @pytest.mark.django_db(transaction=True)
 def test_a_job_asks_is_answered_and_reports_its_files(tmp_path, workers, monkeypatch):  # noqa: F811
     from django_ergo.bots import workers as w
