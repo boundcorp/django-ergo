@@ -76,7 +76,7 @@ patch.
 
 Reproduce: `sh artifacts/codex-state-root/build.sh`, then `e2e.py` (see the
 script header). The build directory is `build/codex-state-root/` (git-ignored,
-about 6 GB), with `-j2` throughout. Baseline took 14m27s and the incremental
+about 9 GB including target, registry and toolchain), with `-j2` throughout. Baseline took 14m27s and the incremental
 candidate 8m14s on the shared devbox.
 
 ## End-to-end regressions (`codex-state-root/e2e.py`, results in `e2e-results.json`)
