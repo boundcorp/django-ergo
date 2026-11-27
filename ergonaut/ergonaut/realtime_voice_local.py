@@ -33,7 +33,8 @@ def main():
             capture_output=True,
         )
         secret = json.loads(result.stdout)
-        os.environ["OPENAI_API_KEY"] = base64.b64decode(secret["data"]["OPENAI_API_KEY"], validate=True).decode()
+        key_name = os.environ.get("VOICE_OPENAI_API_KEY_ENV") or "OPENAI_API_KEY"
+        os.environ[key_name] = base64.b64decode(secret["data"][key_name], validate=True).decode()
         for name in ("LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET"):
             os.environ[name] = livekit[name]
         os.environ["ERGO_VOICE_LIVEKIT_CONFIG"] = str(config)

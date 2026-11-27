@@ -66,7 +66,9 @@ class TestGenerateEmbedding:
 
         mock_response = openai_test_manager.create_mock_response(fixture)
 
-        with patch("openai.embeddings.create", return_value=mock_response):
+        with patch(
+            "openai.resources.embeddings.Embeddings.create", return_value=mock_response
+        ):
             result = generate_embedding(fixture.input_data["text"])
 
         # Verify result matches fixture
@@ -137,7 +139,7 @@ class TestOpenAIIntegrationErrors:
 
     def test_generate_embedding_api_error(self):
         """Test generate_embedding error handling."""
-        with patch("openai.embeddings.create") as mock_create:
+        with patch("openai.resources.embeddings.Embeddings.create") as mock_create:
             mock_create.side_effect = Exception("API Error")
 
             with pytest.raises(Exception, match="API Error"):

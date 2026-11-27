@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from django_ergo.bots.providers import PROVIDERS_FILE
+from django_ergo.protected_env import scrubbed_env
 
 from ergonaut.apps.bots.loading import bot_paths, load_registry
 
@@ -140,7 +141,12 @@ class ReloadingRegistry:
 
 def git_toplevel(path: Path) -> Path | None:
     proc = subprocess.run(
-        ["git", "rev-parse", "--show-toplevel"], cwd=path, capture_output=True, text=True, check=False
+        ["git", "rev-parse", "--show-toplevel"],
+        cwd=path,
+        capture_output=True,
+        text=True,
+        check=False,
+        env=scrubbed_env(),
     )
     return Path(proc.stdout.strip()) if proc.returncode == 0 else None
 
@@ -149,7 +155,9 @@ def pull_checkout(repo: Path) -> str:
     """Fast-forward a clean checkout from its upstream. Returns what happened."""
 
     def git(*args: str) -> subprocess.CompletedProcess:
-        return subprocess.run(["git", *args], cwd=repo, capture_output=True, text=True, check=False, timeout=60)
+        return subprocess.run(
+            ["git", *args], cwd=repo, capture_output=True, text=True, check=False, timeout=60, env=scrubbed_env()
+        )
 
     if git("status", "--porcelain").stdout.strip():
         return "skipped: uncommitted changes"
@@ -195,6 +203,7 @@ def migrate_tables(paths: list[Path]) -> bool:
         capture_output=True,
         text=True,
         check=False,
+        env=scrubbed_env(),
     )
     if result.returncode != 0:
         logger.error("Bot table migrations failed: %s", (result.stderr or result.stdout).strip()[-2000:])

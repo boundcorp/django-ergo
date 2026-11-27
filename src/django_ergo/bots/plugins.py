@@ -74,6 +74,9 @@ class BotPlugin:
     def __init__(self, bot: Bot, config: dict[str, Any] | None = None):
         self.bot = bot
         self.config = dict(config or {})
+        from django_ergo.provider_credentials import register_credential_config
+
+        register_credential_config(self.config)
 
     def _applies(self, ctx: ToolContext) -> bool:
         """False in a thread when ``root_only`` is on."""

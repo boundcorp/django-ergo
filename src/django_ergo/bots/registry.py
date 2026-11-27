@@ -250,6 +250,15 @@ class BotRegistry:
         """Load each bot folder. With ``skip_broken``, a folder that fails (bad
         bot.yaml, a tool file that won't import, a duplicate name) is logged and
         recorded in ``failed`` while the others load."""
+        from django_ergo.provider_credentials import register_credential_source
+
+        paths = list(paths)
+        for path in paths:
+            config = Path(path)
+            if config.is_dir():
+                config = config / "bot.yaml"
+            if config.is_file():
+                register_credential_source(config)
         registry = cls()
         for path in paths:
             if not skip_broken:

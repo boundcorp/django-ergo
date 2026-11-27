@@ -48,3 +48,12 @@ class ProjectFixture:
 def project_fixture_common(db, settings, test_user):
     user, client = test_user
     return ProjectFixture(settings=settings, user=user, client=client)
+
+
+@pytest.fixture(autouse=True)
+def isolated_provider_credential_names(monkeypatch):
+    """Temporary bot/provider config belongs to this test's process model."""
+    from django_ergo import provider_credentials
+
+    monkeypatch.setattr(provider_credentials, "_NAMES", set())
+    monkeypatch.setattr(provider_credentials, "_SOURCES", set())

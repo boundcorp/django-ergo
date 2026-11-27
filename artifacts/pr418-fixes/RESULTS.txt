@@ -1,0 +1,51 @@
+PR418 final evidence summary. Full ignored logs remain alongside this file.
+See COMMANDS.txt for exact keyless commands and source-bound environments.
+Ruff 0.12.5 check and format pass on head (648 files) and main (641 files).
+git diff --check passes.
+
+library-head-verified.log
+3795 passed, 13 skipped, 9 warnings in 479.91s (0:07:59)
+
+library-main.log
+FAILED tests/test_admission_paths.py::test_direct_async_admission_waits_and_cancellation_releases
+FAILED tests/test_admission_paths.py::test_background_consumer_waits_then_executes
+2 failed, 3753 passed, 13 skipped, 9 warnings in 519.32s (0:08:39)
+
+api-head-complete.log
+FAILED ergonaut/apps/bots/tests/test_admission_drain.py::test_channel_deferral_and_cleanup[False]
+1 failed, 701 passed, 6 skipped, 634 warnings in 167.26s (0:02:47)
+
+api-main.log
+FAILED ergonaut/apps/bots/tests/test_admission_drain.py::test_channel_deferral_and_cleanup[True]
+1 failed, 697 passed, 6 skipped, 634 warnings in 287.37s (0:04:47)
+
+digest-isolated.log
+102 passed, 3 warnings in 34.07s
+
+service-boundary-final.log
+4 passed, 1 warning in 7.41s
+
+review-controls.log
+10 passed, 3 deselected, 1 warning in 28.34s
+
+api-head-admission-rerun.log
+15 passed, 10 warnings in 20.04s
+
+api-main-admission-rerun.log
+FAILED ergonaut/apps/bots/tests/test_admission_drain.py::test_channel_deferral_and_cleanup[True]
+1 failed, 14 passed, 10 warnings in 30.73s
+
+library-main-admission-rerun.log
+13 passed, 1 warning in 15.11s
+
+migrations-head.log
+No changes detected
+
+migrations-main.log
+No changes detected
+
+api-migrations-head.log
+No changes detected
+
+api-migrations-main.log
+No changes detected

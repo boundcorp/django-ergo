@@ -368,13 +368,38 @@ class FakeAnthropic(BaseHTTPRequestHandler):
             self.wfile.write(sse(event))
 
 
+@pytest.fixture
+def fake_cli_upstream(monkeypatch):
+    """Test-only final-launch adapter; production overrides remain scrubbed."""
+    import django_ergo.conversation.engines.claude_code as module
+
+    original = module.asyncio.create_subprocess_exec
+    selected = {}
+
+    async def launch(*args, **kwargs):
+        # Fixed loopback server and synthetic auth from this fixture only.
+        env = dict(kwargs["env"])
+        env.update(selected)
+        kwargs["env"] = env
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(module.asyncio, "create_subprocess_exec", launch)
+    return selected
+
+
 @pytest.mark.skipif(
     shutil.which("claude") is None, reason="Claude Code isn't installed"
 )
-async def test_real_claude_code_cli_makes_one_request(tmp_path):
+async def test_real_claude_code_cli_makes_one_request(tmp_path, fake_cli_upstream):
     server = ThreadingHTTPServer(("127.0.0.1", 0), FakeAnthropic)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     FakeAnthropic.requests = []
+    fake_cli_upstream.update(
+        {
+            "ANTHROPIC_BASE_URL": f"http://127.0.0.1:{server.server_port}",
+            "ANTHROPIC_API_KEY": "sk-ant-test",
+        }
+    )
     try:
         engine = ClaudeCodeEngine({"model": "claude-sonnet-5-5", "timeout": 60})
         engine._client = ClaudeCodeClient(
@@ -412,10 +437,18 @@ async def test_real_claude_code_cli_makes_one_request(tmp_path):
 @pytest.mark.skipif(
     shutil.which("claude") is None, reason="Claude Code isn't installed"
 )
-async def test_real_claude_code_cli_resumes_its_transcript(tmp_path, monkeypatch):
+async def test_real_claude_code_cli_resumes_its_transcript(
+    tmp_path, monkeypatch, fake_cli_upstream
+):
     server = ThreadingHTTPServer(("127.0.0.1", 0), FakeAnthropic)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     FakeAnthropic.requests = []
+    fake_cli_upstream.update(
+        {
+            "ANTHROPIC_BASE_URL": f"http://127.0.0.1:{server.server_port}",
+            "ANTHROPIC_API_KEY": "sk-ant-test",
+        }
+    )
     client = ClaudeCodeClient(
         timeout=60,
         env={

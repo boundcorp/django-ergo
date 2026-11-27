@@ -2038,7 +2038,7 @@ sample provenance, limitations and a reviewable PR URL, not huge transcripts.
   codex_network_access: true # false disables networking in workspace-write
   max_turns: 100
   pass_env: [PATH, HOME, LANG, LC_ALL, TZ, USER]
-  secrets: [HIGGSFIELD_API_KEY] # bot secrets every job gets
+  secrets: [OFFLINE_TOOL_TOKEN] # non-inference tool secret
   timeout_minutes: 60
   max_concurrent: 2
   approve: true
@@ -2098,8 +2098,11 @@ or grant writes outside the workspace.
 The agent's environment is rebuilt from `pass_env` plus `secrets`; variables
 that would move an agent CLI onto API billing (`ANTHROPIC_API_KEY`,
 `OPENAI_API_KEY` and the like) are never passed, and listing one in `secrets`
-is an error. The bot's other secrets never reach it. A listed secret that
-isn't set in the process launching the run is left out, and
+is an error. Provider aliases, provider-family keys, JSON credentials and
+credential file pointers are also denied, including deliberately listed media
+keys until a trusted per-job media-tool boundary exists (see Credential hygiene
+for child processes below). The bot's other secrets never reach it. An otherwise
+allowed listed secret that isn't set in the process launching the run is left out, and
 `ergo_agent_start` (as `warnings`) or the reply's result says which ones.
 The Ergonaut release image also installs its pinned PyYAML version for the base
 `/usr/local/bin/python3`, so job shells that select that interpreter can parse
@@ -2581,7 +2584,7 @@ preserves this `telegram_user` identity.
 
 **Media.** Photos, videos, voice notes, audio and documents become attachments.
 Active voice and audio are transcribed when `DJANGO_ERGO["AUDIO_TRANSCRIBER"]`
-is set (Ergonaut sets it when `OPENAI_API_KEY` is); passive audio is not.
+is set (Ergonaut sets it when the selected voice key is available); passive audio is not.
 The photos of an album arrive as one active turn, and with `photo_batch_wait`
 so do photos a person sends one at a time (handy for a recipe in several
 screenshots); a text they send while photos are gathering goes with them at once.
@@ -3022,3 +3025,26 @@ grants retain their lifetime limits. Config alone never funds this mode. See
 [model-pools.md](model-pools.md#recurring-provider-budgets-utc-iso-weeks)
 for the secondary API schema and authenticated account/consent workflow. Existing
 personal privacy restrictions and paid coding refusals still apply.
+
+### Credential hygiene for child processes
+
+Ordinary coding subprocesses exclude provider credential families, arbitrary
+configured `api_key_env` aliases, prefixed API keys, service-account JSON and
+credential file pointers. Native Claude OAuth and Codex configuration remain
+available. Overrides, `pass_env` and `secrets` cannot restore org OpenAI or
+private inference credentials. Registered YAML parsing is cached by file identity, timestamps and a content
+digest, so equal-metadata rewrites still register new aliases. A malformed/unreadable source retains known aliases
+and restricts children to safe native fields, so unknown aliases cannot leak
+and other bots' subscription chats remain usable.
+
+Local shell checks denied secrets on every start/resume and raises an explicit
+startup error instead of silently dropping them. Existing Ads and Storytime
+configs deliberately list Gemini/MiniMax media credentials, but their general
+Claude/Codex jobs have no trusted per-job media-purpose/secret grant. This draft
+does not infer authorization from key names or brief text. Restoring that handoff
+requires an explicit job allowlist tied to the existing approved media workflow
+and its existing caps, plus a separate media-tool subprocess boundary. It must
+never restore raw media credentials to an ordinary coding agent or authorize
+a new inference provider/budget. Until that policy is implemented, affected
+jobs fail visibly; this draft must not deploy over those workflows. Environment
+scrubbing is inheritance hygiene, not isolation from same-UID code or files.

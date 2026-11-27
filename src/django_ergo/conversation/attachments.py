@@ -133,7 +133,9 @@ async def openai_transcription(
         if request_timeout is not None
         else {}
     )
-    client = openai.AsyncOpenAI(**options)
+    from django_ergo.openai_credentials import voice_openai_key
+
+    client = openai.AsyncOpenAI(api_key=voice_openai_key(), **options)
     assert_public_endpoint(getattr(client, "base_url", None), what=what)
     return await client.audio.transcriptions.create(
         model=model,

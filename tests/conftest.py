@@ -36,3 +36,14 @@ def _provider_switches_without_db(request, monkeypatch):
             "django_ergo.conversation.spend_guard.paid_dispatch_problem",
             lambda **kwargs: "",
         )
+
+
+@pytest.fixture(autouse=True)
+def _isolated_credential_names(monkeypatch):
+    """Each test models a fresh process; temporary config files must not persist."""
+    from django_ergo import provider_credentials
+
+    monkeypatch.setattr(provider_credentials, "_NAMES", set())
+    monkeypatch.setattr(provider_credentials, "_SOURCES", set())
+    monkeypatch.setattr(provider_credentials, "_SOURCE_STAMPS", {})
+    monkeypatch.setattr(provider_credentials, "_BROKEN_SOURCES", set())
