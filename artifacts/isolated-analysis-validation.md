@@ -42,3 +42,22 @@ Real container/Kubernetes isolation smoke and adversarial tests are unrun; image
 Runtime enablement requires separate Lee approval for a sandbox RuntimeClass/worker pool, verified deny-all networking, quota-backed 1 GiB workspace volumes, kubelet/runtime PID enforcement, hard node/log disk quotas, restricted admission/RBAC, verified HTTPS/authentication and a durable single-replica controller ledger. Pod ephemeral-storage limits are eviction thresholds, not hard quotas. App processes never launch code/parsers or receive runtime credentials. Node-loss fencing and actual process/storage reclamation must be accepted on the target runtime before enabling.
 
 First version limitations: protected private-export copies deliberately cannot enter reusable workspaces (avoids unprotected derived exports); one job/workspace and one controller replica; whole-file pandas parsing can hit memory/time limits; first XLSX sheet only; no structured joins (isolated pandas joins available); offset queries recompute full data; 16 KiB transfer chunks launch separate pods and have high startup overhead; polling rather than terminal notifications; no resumable transfer tool. Workspaces expire after configurable idle retention, while exports remain independent chat attachments. See the architecture doc for exact settings and rollback order.
+
+## Independent review follow-up (2026-11-27)
+
+Input SHA `107808445831dbbc07422e94d7ffd5b9c20f61ec` was independently audited against actual code. See `artifacts/isolated-analysis-security-review.md` for findings, fixes, adversarial tests, wire-protocol evidence and remaining infrastructure gates. This follow-up supersedes the original disappearance-based reaping safety claim: API absence does **not** prove process termination. Durable termination evidence and a retained Pod finalizer now protect the workspace fence; unexplained absence remains blocked.
+
+The application service moved to `plugins/analysis_service.py` to fix an actual repository import-layer regression. Added dataset/select result validation, isolated module startup, source-free child argv, per-chunk private-export rechecks, canonical handle validation and cancellation tombstones for pre-launch ambiguous submissions. Arbitrary Python can still forge executor content; transport signatures do not attest calculation correctness. Feature defaults remain disabled.
+
+Independent checks:
+
+- Reproduced the original final analysis result: **80 passed**, 9.70s.
+- Reproduced and fixed the previously omitted layer suite failure (two upward imports).
+- Intermediate expanded acceptance: **339 passed, 8 skipped**, 93.29s.
+- Final focused analysis/security/layer regression run after the final code edits: **118 passed**, 15.08s.
+- Final expanded acceptance: **347 passed, 8 skipped**, 92.12s, after all code changes and regressions.
+- Repository-wide Ruff check and format check pass (625 Python files), migration drift has no changes, Django system check has no issues, proposed YAML parses as eight resources and diff whitespace passes.
+- Fetched current main `39b99c183784cbff474e7cf1bd84322d13218128`; migration dependency `0063_google_engine_signatures` remains its latest schema.
+- Actual loopback HTTP harness verifies controller authentication/replay/errors. Actual generated Kubernetes client 37.0.3 exercises adapter wire serialization and responses against a local emulator, including JSON Patch finalizer removal. Neither test validates deployed TLS, Kubernetes admission, kubelet cleanup or runtime isolation.
+
+The expanded command adds `tests/test_analysis_security_review.py` and `tests/test_import_layers.py` to the original combined command above. Existing eight skips and the platformdirs runtime-directory warning remain. No live infrastructure/image/deployment tests or paid API calls occurred.

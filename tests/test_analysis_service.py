@@ -18,9 +18,9 @@ from django_ergo.analysis.models import AnalysisDataset
 from django_ergo.analysis.models import AnalysisJob
 from django_ergo.analysis.models import AnalysisWorkspace
 from django_ergo.analysis.runner import RunnerUnavailableError
-from django_ergo.analysis.service import AnalysisService
 from django_ergo.conversation.models import ConversationAttachment
 from django_ergo.conversation.models import ConversationSession
+from django_ergo.plugins.analysis_service import AnalysisService
 
 pytestmark = pytest.mark.django_db
 
@@ -31,7 +31,7 @@ def setup(tmp_path, monkeypatch, settings):
     from tests.test_analysis_runtime import Runtime
 
     monkeypatch.setattr(
-        "django_ergo.analysis.service.closed_to", lambda bot, session: False
+        "django_ergo.plugins.analysis_service.closed_to", lambda bot, session: False
     )
     monkeypatch.setattr(
         "django_ergo.plugins.attachments.closed_to",
@@ -187,7 +187,7 @@ def test_attachment_stream_actual_size_enforced(setup, monkeypatch):
     row = attachment(ctx.session, "lie.csv", b"123456789")
     row.size = 1
     row.save(update_fields=["size"])
-    monkeypatch.setattr("django_ergo.analysis.service.MAX_FILE_BYTES", 8)
+    monkeypatch.setattr("django_ergo.plugins.analysis_service.MAX_FILE_BYTES", 8)
     with pytest.raises(ValueError, match="stream exceeds"):
         service.import_attachment(str(row.id))
 
@@ -313,3 +313,107 @@ def test_private_export_copies_cannot_be_laundered_through_workspace(setup):
     with pytest.raises(PermissionError, match="Private export copies"):
         service.import_attachment(str(copy.id))
     assert AnalysisWorkspace.objects.count() == 0
+
+
+def test_source_protection_rechecked_without_timestamp_change(setup, monkeypatch):
+    from django_ergo.conversation.models import PrivateExport
+    from django_ergo.conversation.models import StructuredCall
+
+    service, _, _, ctx = setup
+    original = ConversationSession.objects.create(
+        user=ctx.user, engine_type="openai", transport_type="http"
+    )
+    receipt = PrivateExport.objects.create(
+        source=original,
+        destination=ctx.session,
+        call=StructuredCall.objects.create(kind="fixture", user=ctx.user),
+    )
+    source = attachment(ctx.session, "newly-protected.csv", b"x\n1\n")
+    original_transfer = service.transfer
+
+    from contextlib import contextmanager
+
+    @contextmanager
+    def protect_after_initial_lookup():
+        # QuerySet.update deliberately bypasses auto_now, so version checks alone
+        # cannot enforce a newly applied no-forward restriction.
+        ConversationAttachment.objects.filter(pk=source.pk).update(
+            private_export=receipt
+        )
+        with original_transfer() as acquired:
+            yield acquired
+
+    monkeypatch.setattr(service, "transfer", protect_after_initial_lookup)
+    with pytest.raises(ValueError, match="changed during import"):
+        service.import_attachment(str(source.id))
+    assert AnalysisJob.objects.count() == 0
+
+
+@pytest.mark.parametrize("operation", ["job", "dataset", "workspace"])
+def test_noncanonical_ids_rejected_before_orm_lookup(setup, operation):
+    from django_ergo.analysis.protocol import ProtocolError
+
+    service, _, _, _ = setup
+    callbacks = {
+        "job": lambda: service.status("../../not-a-job"),
+        "dataset": lambda: service.select("../../not-a-dataset", {}),
+        "workspace": lambda: service.owned_workspace("../../not-a-workspace"),
+    }
+    with pytest.raises(ProtocolError, match="identifier"):
+        callbacks[operation]()
+
+
+def test_app_rejects_forged_dataset_before_persisting_handle(setup, monkeypatch):
+    from django_ergo.analysis.protocol import ProtocolError
+
+    service, runtime, _, ctx = setup
+    source = attachment(ctx.session, "test.csv", b"x\n1\n")
+    imported = service.import_attachment(str(source.id))
+    submitted = service.submit({"op": "dataset", "file": imported["file"]})
+    runtime.results[submitted["job"]]["result"]["schema"] = [
+        {"name": "x", "type": {"untrusted": "object"}}
+    ]
+    with pytest.raises(ProtocolError, match="Malformed dataset"):
+        service.status(submitted["job"])
+    assert not AnalysisDataset.objects.exists()
+
+
+def test_ambiguous_submission_can_cancel_without_launching(setup, monkeypatch):
+    service, runtime, _, _ = setup
+    real_call = service.client.call
+
+    def uncertain(body):
+        if body["action"] == "submit":
+            message = "Fixture connection lost before submit"
+            raise RunnerUnavailableError(message)
+        return real_call(body)
+
+    monkeypatch.setattr(service.client, "call", uncertain)
+    submitted = service.submit({"op": "list"})
+    assert submitted["state"] == "submitting"
+    assert service.status(submitted["job"], cancel=True)["state"] == "cancelled"
+    assert runtime.launches == 0
+
+
+@pytest.mark.parametrize(
+    "operation", ["submit", "status", "cancel", "select", "import", "export"]
+)
+def test_revoked_session_blocks_every_operation(setup, monkeypatch, operation):
+    import uuid
+
+    service, runtime, _, _ = setup
+    monkeypatch.setattr(
+        "django_ergo.plugins.analysis_service.closed_to", lambda bot, session: True
+    )
+    callbacks = {
+        "submit": lambda: service.submit({"op": "list"}),
+        "status": lambda: service.status(str(uuid.uuid4())),
+        "cancel": lambda: service.status(str(uuid.uuid4()), cancel=True),
+        "select": lambda: service.select(str(uuid.uuid4()), {}),
+        "import": lambda: service.import_attachment(str(uuid.uuid4())),
+        "export": lambda: service.export_file("file.csv"),
+    }
+    with pytest.raises(PermissionError, match="authorized analysis session"):
+        callbacks[operation]()
+    assert runtime.launches == 0
+    assert not AnalysisWorkspace.objects.exists()

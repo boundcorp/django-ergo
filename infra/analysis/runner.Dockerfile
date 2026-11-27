@@ -8,4 +8,4 @@ RUN pip install --no-cache-dir '.[analysis-runner]' && chmod -R a-w /opt/analysi
 ENV HOME=/tmp MPLBACKEND=Agg OPENBLAS_NUM_THREADS=1
 USER 10001:10001
 WORKDIR /workspace
-ENTRYPOINT ["python", "-m", "django_ergo.analysis.executor"]
+ENTRYPOINT ["python", "-I", "-m", "django_ergo.analysis.executor"]

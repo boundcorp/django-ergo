@@ -11,6 +11,8 @@ import re
 from django_ergo.analysis.protocol import MAX_RESPONSE
 from django_ergo.analysis.protocol import encode
 
+TERMINATION_FINALIZER = "analysis.ergonaut.dev/termination-observed"
+
 
 class KubernetesRuntime:
     def __init__(self, *, core, namespace, image, storage_class, runtime_class):
@@ -63,6 +65,7 @@ class KubernetesRuntime:
             "kind": "Pod",
             "metadata": {
                 "name": "analysis-" + job,
+                "finalizers": [TERMINATION_FINALIZER],
                 "labels": {"app": "analysis-job", "analysis-workspace": workspace},
                 "annotations": {
                     "sidecar.istio.io/inject": "false",
@@ -92,7 +95,12 @@ class KubernetesRuntime:
                         "name": "executor",
                         "image": self.image,
                         "imagePullPolicy": "IfNotPresent",
-                        "command": ["python", "-m", "django_ergo.analysis.executor"],
+                        "command": [
+                            "python",
+                            "-I",
+                            "-m",
+                            "django_ergo.analysis.executor",
+                        ],
                         "env": [
                             {
                                 "name": "ANALYSIS_REQUEST",
@@ -163,7 +171,63 @@ class KubernetesRuntime:
             if exc.status == 404:
                 return "absent"
             raise
-        return pod.status.phase.lower()
+        phase = pod.status.phase.lower()
+        if phase in {"succeeded", "failed"}:
+            # PodGC/node-loss can synthesize a terminal phase. Require kubelet
+            # container termination evidence, not merely a high-level Pod phase.
+            statuses = pod.status.container_statuses or []
+            if (
+                pod.status.reason in {"NodeLost", "NodeShutdown"}
+                or len(statuses) != 1
+                or statuses[0].name != "executor"
+                or not statuses[0].state.terminated
+                or not statuses[0].state.terminated.finished_at
+                or statuses[0].state.terminated.finished_at.year <= 1970
+                or statuses[0].state.terminated.reason
+                in {"ContainerStatusUnknown", "NodeLost"}
+            ):
+                return "unknown"
+        return phase
+
+    def release_job(self, job):
+        """Remove ONLY our finalizer after the ledger commits termination evidence."""
+        from kubernetes.client.exceptions import ApiException
+
+        try:
+            pod = self.core.read_namespaced_pod(
+                "analysis-" + job, self.namespace, _request_timeout=(5, 15)
+            )
+            finalizers = pod.metadata.finalizers or []
+            if TERMINATION_FINALIZER in finalizers:
+                # Optimistic concurrency prevents removing another owner's finalizer
+                # or mutating a replacement object after a stale read.
+                self.core.patch_namespaced_pod(
+                    "analysis-" + job,
+                    self.namespace,
+                    [
+                        {
+                            "op": "test",
+                            "path": "/metadata/uid",
+                            "value": pod.metadata.uid,
+                        },
+                        {
+                            "op": "test",
+                            "path": "/metadata/resourceVersion",
+                            "value": pod.metadata.resource_version,
+                        },
+                        {
+                            "op": "replace",
+                            "path": "/metadata/finalizers",
+                            "value": [
+                                v for v in finalizers if v != TERMINATION_FINALIZER
+                            ],
+                        },
+                    ],
+                    _request_timeout=(5, 15),
+                )
+        except ApiException as exc:
+            if exc.status != 404:
+                raise
 
     def result(self, job):
         # Never log pod output: this is untrusted user data, not controller telemetry.

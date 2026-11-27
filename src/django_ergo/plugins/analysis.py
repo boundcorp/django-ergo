@@ -1,10 +1,10 @@
 """Opt-in isolated analysis tools. No workspace is created on chat creation."""
 
-from django_ergo.analysis.service import AnalysisService
-from django_ergo.analysis.service import safe_name
 from django_ergo.bots.plugins import BotPlugin
 from django_ergo.bots.tools import FunctionToolkit
 from django_ergo.bots.tools import bot_tool
+from django_ergo.plugins.analysis_service import AnalysisService
+from django_ergo.plugins.analysis_service import safe_name
 
 
 class AnalysisPlugin(BotPlugin):

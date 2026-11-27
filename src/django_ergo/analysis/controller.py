@@ -3,7 +3,7 @@
 
 Single-process HTTP server + durable SQLite ledger. Run exactly one replica on
 its own durable volume; restart recovery keeps workspace fences until pods are
-confirmed absent. The key and Kubernetes credentials never enter job pods.
+confirmed terminated and absent. The key and Kubernetes credentials never enter job pods.
 """
 
 import json
@@ -38,9 +38,15 @@ class Controller:
         PRAGMA synchronous=FULL;
         CREATE TABLE IF NOT EXISTS nonces (id TEXT PRIMARY KEY, at INTEGER);
         CREATE TABLE IF NOT EXISTS workspaces (id TEXT PRIMARY KEY, user TEXT, session TEXT, touched REAL, retired INTEGER DEFAULT 0, purged INTEGER DEFAULT 0, lease TEXT DEFAULT '', lease_until REAL DEFAULT 0);
-        CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, workspace TEXT, request BLOB, state TEXT, started REAL, result BLOB, final TEXT DEFAULT '');
+        CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, workspace TEXT, request BLOB, state TEXT, started REAL, result BLOB, final TEXT DEFAULT '', stopped INTEGER DEFAULT 0);
         CREATE UNIQUE INDEX IF NOT EXISTS one_active_job ON jobs(workspace) WHERE state NOT IN ('succeeded','failed','cancelled','timeout');
         """)
+        # Upgrade the private ledger without interpreting old API absence as death.
+        if "stopped" not in {
+            row["name"] for row in self.db.execute("PRAGMA table_info(jobs)")
+        }:
+            with self.db:
+                self.db.execute("ALTER TABLE jobs ADD COLUMN stopped INTEGER DEFAULT 0")
 
     def authenticated(self, key, raw):
         message = open_envelope(key, raw)
@@ -63,7 +69,7 @@ class Controller:
         if row is None:
             if body["action"] == "inspect":
                 return None
-            if body["action"] != "submit" and body["action"] != "acquire":
+            if body["action"] not in {"submit", "acquire", "cancel"}:
                 raise ProtocolError("Unknown workspace")
             with self.db:
                 self.db.execute(
@@ -166,11 +172,29 @@ class Controller:
                 self.db.execute("UPDATE jobs SET state='running' WHERE id=?", (job,))
         elif action in {"status", "cancel"}:
             job = identifier(body["job"])
-            row = self.db.execute(
-                "SELECT * FROM jobs WHERE id=? AND workspace=?", (job, wid)
-            ).fetchone()
-            if row is None:
+            row = self.db.execute("SELECT * FROM jobs WHERE id=?", (job,)).fetchone()
+            if row is not None and row["workspace"] != wid:
                 raise ProtocolError("Unknown job")
+            if row is None:
+                # A lost submit reply does not tell the app whether launch happened.
+                # If it did not, persist cancellation before a delayed submit arrives.
+                if action != "cancel" or not isinstance(body.get("request"), dict):
+                    raise ProtocolError("Unknown job")
+                request_bytes = encode(body["request"], limit=64 * 1024)
+                with self.db:
+                    self.db.execute(
+                        "INSERT INTO jobs(id,workspace,request,state,started,result,final,stopped) VALUES (?,?,?,'cancelled',?,?,'cancelled',1)",
+                        (
+                            job,
+                            wid,
+                            request_bytes,
+                            now,
+                            encode({"ok": False, "error": "Cancelled before launch"}),
+                        ),
+                    )
+                row = self.db.execute(
+                    "SELECT * FROM jobs WHERE id=?", (job,)
+                ).fetchone()
             if action == "cancel" and row["state"] not in TERMINAL:
                 with self.db:
                     self.db.execute(
@@ -201,6 +225,7 @@ class Controller:
         for row in rows:
             phase = self.runtime.status(row["id"])
             state, final, result = row["state"], row["final"], row["result"]
+            stopped = row["stopped"] or phase in {"succeeded", "failed"}
             if state != "reaping":
                 if phase in {"succeeded", "failed"}:
                     try:
@@ -233,14 +258,23 @@ class Controller:
                     )
                 elif phase not in {"absent", "pending"}:
                     state = "running"
-            if state == "reaping":
-                self.runtime.delete_job(row["id"])
-                if self.runtime.status(row["id"]) == "absent":
-                    state = final
+            # Commit termination evidence and reaping intent BEFORE API mutations.
+            # A crash after finalizer removal must not erase the evidence; absence
+            # alone (including a lost node or ambiguous launch) never releases a fence.
             with self.db:
                 self.db.execute(
-                    "UPDATE jobs SET state=?,final=?,result=? WHERE id=?",
-                    (state, final, result, row["id"]),
+                    "UPDATE jobs SET state=?,final=?,result=?,stopped=? WHERE id=?",
+                    (state, final, result, int(stopped), row["id"]),
+                )
+            if state == "reaping":
+                self.runtime.delete_job(row["id"])
+                if stopped:
+                    self.runtime.release_job(row["id"])
+                    if self.runtime.status(row["id"]) == "absent":
+                        state = final
+            with self.db:
+                self.db.execute(
+                    "UPDATE jobs SET state=? WHERE id=?", (state, row["id"])
                 )
                 self.db.execute(
                     "UPDATE workspaces SET touched=? WHERE id=?",
@@ -264,7 +298,7 @@ class Controller:
                     )
 
 
-def serve(controller, key, host="127.0.0.1", port=8080):
+def make_server(controller, key, host="127.0.0.1", port=8080):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):
             pass  # Never log bodies, authentication, code, filenames or pod output.
@@ -304,7 +338,11 @@ def serve(controller, key, host="127.0.0.1", port=8080):
                     "Analysis reconciliation failed; fences retained"
                 )
 
-    Server((host, port), Handler).serve_forever(poll_interval=1)
+    return Server((host, port), Handler)
+
+
+def serve(controller, key, host="127.0.0.1", port=8080):
+    make_server(controller, key, host, port).serve_forever(poll_interval=1)
 
 
 def main():

@@ -70,6 +70,12 @@ items:
   - apiGroups:
     - ''
     resources:
+    - pods
+    verbs:
+    - patch
+  - apiGroups:
+    - ''
+    resources:
     - pods/log
     verbs:
     - get

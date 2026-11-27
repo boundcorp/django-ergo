@@ -170,7 +170,7 @@ def python_job(code):
     if not isinstance(code, str) or len(code.encode()) > 32 * 1024:
         raise ValueError("Code exceeds byte cap")
     proc = subprocess.Popen(  # noqa: S603 — only inside credential-free job container
-        [sys.executable, "-I", "-c", code],
+        [sys.executable, "-I", "-"],
         cwd=ROOT,
         env={
             "PATH": "/usr/local/bin:/usr/bin:/bin",
@@ -178,7 +178,7 @@ def python_job(code):
             "MPLBACKEND": "Agg",
             "OPENBLAS_NUM_THREADS": "1",
         },
-        stdin=subprocess.DEVNULL,
+        stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         start_new_session=True,
@@ -187,6 +187,9 @@ def python_job(code):
     deadline = time.monotonic() + 55
     reason = "exited"
     try:
+        # Python reads the whole script before executing: source stays out of argv.
+        proc.stdin.write(code.encode())
+        proc.stdin.close()
         with selectors.DefaultSelector() as selector:
             selector.register(proc.stdout, selectors.EVENT_READ)
             while selector.get_map():
@@ -210,6 +213,7 @@ def python_job(code):
             os.killpg(proc.pid, signal.SIGKILL)
         proc.wait(timeout=5)
         proc.stdout.close()
+        proc.stdin.close()
     return {
         "output": output.decode(errors="replace"),
         "exit_code": proc.returncode,

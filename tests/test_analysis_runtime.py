@@ -45,6 +45,11 @@ class Runtime:
         return {"ok": True, "result": {"output": "ok"}}
 
     def delete_job(self, job):
+        # Model kubelet termination with a finalizer retaining the API object.
+        if not self.hold_deletion and job in self.pods:
+            self.pods[job] = "failed"
+
+    def release_job(self, job):
         if not self.hold_deletion:
             self.pods.pop(job, None)
 
@@ -109,6 +114,7 @@ def test_cancellation_keeps_fence_until_actual_deletion(broker):
     with pytest.raises(ProtocolError, match="busy"):
         controller.dispatch({**body, "job": uid()})
     runtime.hold_deletion = False
+    controller.reconcile()
     assert controller.dispatch({**body, "action": "status"})["state"] == "cancelled"
     controller.dispatch({**body, "job": uid()})
 
@@ -120,6 +126,7 @@ def test_timeout_recovery_and_stale_cleanup(broker, tmp_path):
         controller.db.execute("UPDATE jobs SET started=?", (time.time() - 100,))
     # A new process reads durable fences and reaps the old pod.
     restarted = Controller(str(tmp_path / "ledger.sqlite"), runtime)
+    assert restarted.dispatch({**body, "action": "status"})["state"] == "reaping"
     assert restarted.dispatch({**body, "action": "status"})["state"] == "timeout"
     with restarted.db:
         restarted.db.execute(
@@ -138,6 +145,7 @@ def test_active_and_transfer_leases_exclude_cleanup(broker):
     controller.reconcile()
     assert runtime.deleted == []
     controller.dispatch({**body, "action": "cancel"})
+    controller.reconcile()
     lease = uid()
     controller.dispatch({**body, "action": "acquire", "lease": lease})
     with controller.db:
@@ -160,7 +168,8 @@ def test_launch_ambiguity_preserves_durable_fence(broker, monkeypatch):
     assert controller.dispatch(body)["state"] == "launching"
     with pytest.raises(ProtocolError, match="busy"):
         controller.dispatch({**body, "job": uid()})
-    assert controller.dispatch({**body, "action": "cancel"})["state"] == "cancelled"
+    assert controller.dispatch({**body, "action": "cancel"})["state"] == "reaping"
+    assert controller.dispatch({**body, "action": "status"})["state"] == "cancelled"
 
 
 def test_http_client_checks_reply_binding_and_stream_cap(broker):
@@ -518,6 +527,7 @@ def test_cleanup_crash_retries_storage_without_resurrecting_workspace(
     controller, runtime, body = broker
     controller.dispatch(body)
     controller.dispatch({**body, "action": "cancel"})
+    controller.reconcile()
     with controller.db:
         controller.db.execute("UPDATE workspaces SET touched=0")
 

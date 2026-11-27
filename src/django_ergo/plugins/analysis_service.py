@@ -1,4 +1,4 @@
-# ruff: noqa: TRY003, EM101, PLR2004, C901, PLR0912
+# ruff: noqa: TRY003, EM101, PLR2004, C901
 """Session authorization, lazy receipts and streaming attachment orchestration.
 
 Only HTTP and Django storage run here. Parsing and file operations are jobs.
@@ -26,6 +26,10 @@ from django_ergo.analysis.protocol import CHUNK_BYTES
 from django_ergo.analysis.protocol import MAX_FILE_BYTES
 from django_ergo.analysis.protocol import ProtocolError
 from django_ergo.analysis.protocol import encode
+from django_ergo.analysis.protocol import identifier
+from django_ergo.analysis.query import compile_select
+from django_ergo.analysis.results import dataset_result
+from django_ergo.analysis.results import select_result
 from django_ergo.analysis.runner import RunnerUnavailableError
 from django_ergo.bots.registry import closed_to
 from django_ergo.conversation.models import ConversationAttachment
@@ -75,7 +79,7 @@ class AnalysisService:
     def owned_workspace(self, wid):
         session = self.authorize()
         row = AnalysisWorkspace.objects.filter(
-            pk=wid, session=session, retired=False
+            pk=identifier(str(wid)), session=session, retired=False
         ).first()
         if row is None:
             raise PermissionError("No workspace in this session")
@@ -132,7 +136,9 @@ class AnalysisService:
         job = (
             AnalysisJob.objects.select_related("workspace")
             .filter(
-                pk=job_id, workspace__session=self.session, workspace__retired=False
+                pk=identifier(job_id),
+                workspace__session=self.session,
+                workspace__retired=False,
             )
             .first()
         )
@@ -151,7 +157,14 @@ class AnalysisService:
                 return {"job": str(job.id), "state": "submitting"}
         else:
             result = self.call(
-                job.workspace, "cancel" if cancel else "status", job=str(job.id)
+                job.workspace,
+                "cancel" if cancel else "status",
+                job=str(job.id),
+                **(
+                    {"request": json.loads(bytes(job.request))}
+                    if cancel and job.state == "submitting"
+                    else {}
+                ),
             )
         job.state = result["state"]
         job.save(update_fields=["state"])
@@ -163,14 +176,7 @@ class AnalysisService:
                 raise ProtocolError("Malformed executor result")
             value = response["result"]
             if job.operation == "dataset":
-                if (
-                    not re.fullmatch(r"[a-f0-9]{64}", value.get("version", ""))
-                    or not isinstance(value.get("schema"), list)
-                    or len(value["schema"]) > 128
-                    or type(value.get("rows")) is not int
-                    or value["rows"] < 0
-                ):
-                    raise ProtocolError("Malformed dataset result")
+                dataset_result(value)
                 row, _ = AnalysisDataset.objects.get_or_create(
                     job=job,
                     defaults={
@@ -190,6 +196,20 @@ class AnalysisService:
             if job.operation == "select":
                 if value.get("version") != job.metadata["version"]:
                     raise ProtocolError("Dataset version mismatch")
+                dataset = AnalysisDataset.objects.get(
+                    pk=job.metadata["dataset"], workspace=job.workspace
+                )
+                request = json.loads(bytes(job.request))
+                compiled = compile_select(
+                    request["query"], [column["name"] for column in dataset.schema]
+                )
+                select_result(
+                    value,
+                    columns=compiled.columns,
+                    source_rows=dataset.rows,
+                    offset=job.metadata["offset"],
+                    limit=request["query"].get("limit", 100),
+                )
                 offset = value.pop("next_offset", None)
                 if offset is not None:
                     if type(offset) is not int or offset <= job.metadata["offset"]:
@@ -212,7 +232,9 @@ class AnalysisService:
         dataset = (
             AnalysisDataset.objects.select_related("workspace")
             .filter(
-                pk=dataset_id, workspace__session=self.session, workspace__retired=False
+                pk=identifier(dataset_id),
+                workspace__session=self.session,
+                workspace__retired=False,
             )
             .first()
         )
@@ -310,7 +332,8 @@ class AnalysisService:
                 self.authorize()
                 current = plugin.file_for(self.ctx, str(row.id))
                 if (
-                    current.file.name != row.file.name
+                    current.private_export_id
+                    or current.file.name != row.file.name
                     or current.sha256 != row.sha256
                     or current.updated_at != row.updated_at
                 ):
