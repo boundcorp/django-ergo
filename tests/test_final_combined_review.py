@@ -223,6 +223,8 @@ def test_funding_requires_actual_owner_or_admin_and_explicit_accounts(tmp_path):
             budget_usd="2",
             expires_at=config.expires_at,
             accounts=[],
+            budget_period="cumulative",
+            version=0,
         )
 
 
@@ -447,7 +449,7 @@ def test_migration_existing_history_starts_paused_without_consent():
     from django.utils import timezone
 
     before = ("django_ergo", "0061_spend_envelope_families")
-    leaf = ("django_ergo", "0062_explicit_funding_and_paid_latch")
+    leaf = ("django_ergo", "0065_provider_weekly_budgets")
     try:
         MigrationExecutor(connection).migrate([before])
         executor = MigrationExecutor(connection)

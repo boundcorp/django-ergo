@@ -56,6 +56,9 @@ from django_ergo.bots.pool_config import legacy_pool
 from django_ergo.bots.routing import AgentChoice
 from django_ergo.bots.routing import is_auto
 from django_ergo.bots.routing import tier_of
+from django_ergo.conversation.funding import FUNDING_DECIMALS
+from django_ergo.conversation.funding import VersionConflict
+from django_ergo.conversation.funding import usd
 from django_ergo.conversation.inference_policy import PolicyError
 from django_ergo.conversation.spend_guard import paid_dispatch_problem
 
@@ -399,7 +402,6 @@ def current_policy() -> dict | None:
 # ownership, switches), and the owner's current budget caps the cumulative
 # spend of the owner and every grant they issued on the pool.
 
-FUNDING_DECIMALS = 4
 CONFIG_SOURCE = "config"
 # revoked_reason prefix of revocations made by following providers.yaml (any
 # other revocation was a person's, and config sync never undoes it).
@@ -533,6 +535,23 @@ def set_paid_pause(*, by_id, paused: bool, version: str):
     return state
 
 
+def _check_funding_revision(latest, version, budget_period, convert_period):
+    """Refuse a stale revision, or a kind change that wasn't asked for.
+    Returns the kind converted from, for the audit trail."""
+    if type(version) is not int or version != (latest.pk if latest else 0):
+        msg = "Funding changed; refresh and try again"
+        raise VersionConflict(msg)
+    if latest is None or latest.budget_period == budget_period:
+        return None
+    if convert_period is not True:
+        msg = (
+            f"This approval is {latest.budget_period}; changing it to "
+            f"{budget_period} is a conversion and must be requested explicitly"
+        )
+        raise ValueError(msg)
+    return latest.budget_period
+
+
 def approve_funding(  # noqa: PLR0913
     providers: Providers,
     pool: str,
@@ -543,8 +562,16 @@ def approve_funding(  # noqa: PLR0913
     accounts,
     valid_from=None,
     note: str = "",
+    budget_period: str,
+    version: int,
+    convert_period: bool = False,
 ):
     """Owner/admin consent with explicit cap, window and exact account set.
+
+    ``version`` (the latest approval's id, 0 for none) and ``budget_period``
+    are required on every write. A stale version is refused, and so is a change
+    of kind (cumulative <-> weekly) unless ``convert_period`` explicitly asks
+    for the audited conversion.
 
     Nothing is inferred from config. Increasing an approval is an explicit
     new audited action on the SAME cumulative ledger, never a budget reset.
@@ -568,6 +595,8 @@ def approve_funding(  # noqa: PLR0913
     if config is None or _config_terms(config, providers, owner_id) is None:
         msg = "Funding requires a configured owner, ceiling and expiry"
         raise ValueError(msg)
+    from django_ergo.conversation import weekly_budgets as weekly
+
     amount = usd(budget_usd, "Funding cap")
     if (
         amount <= 0
@@ -597,6 +626,10 @@ def approve_funding(  # noqa: PLR0913
     ):
         msg = "Select a nonempty exact set of configured accounts"
         raise ValueError(msg)
+    weekly.validate_pool_period(budget_period, version, accounts)
+    if type(version) is not int:
+        msg = "Funding requires the version last inspected"
+        raise ValueError(msg)
     with transaction.atomic():
         lock(CONFIG_ENVELOPES_LOCK)
         envelope = _config_envelope(config, providers, owners, timezone.now())
@@ -608,7 +641,12 @@ def approve_funding(  # noqa: PLR0913
                 or "Reconcile prior funding history first"
             )
         lock(envelope_lock_key(envelope.pk))
+        latest = envelope.funding.order_by("-pk").first()
+        converted_from = _check_funding_revision(
+            latest, version, budget_period, convert_period
+        )
         approval = SpendFunding.objects.create(
+            budget_period=budget_period,
             envelope=envelope,
             actor=actor,
             budget_usd=amount,
@@ -623,6 +661,8 @@ def approve_funding(  # noqa: PLR0913
             action="fund",
             details={
                 "approval": approval.pk,
+                "budget_period": budget_period,
+                **({"converted_from": converted_from} if converted_from else {}),
                 "budget_usd": str(amount),
                 "valid_from": start.isoformat(),
                 "expires_at": expires_at.isoformat(),
@@ -774,6 +814,7 @@ def _settle(envelope, providers: Providers, owners: dict, now):  # noqa: C901, P
     terms = _config_terms(pool, providers, envelope.owner_id)
     from decimal import ROUND_DOWN
 
+    terms["budget_period"] = funding.budget_period
     terms["budget_usd"] = min(terms["budget_usd"], funding.budget_usd).quantize(
         Decimal("0.0001"), rounding=ROUND_DOWN
     )
@@ -1371,7 +1412,16 @@ class SendAuthority:
             max_output_tokens=min(terms.max_output_tokens, pool.max_output_tokens),
             cap_envelope=root.pk,
             cap_usd=root_budget,
+            cap_period=current.budget_period
+            if envelope.source == CONFIG_SOURCE
+            else owners_current.budget_period,
             prices=prices,
+            account_identities={
+                r: transport_identity(
+                    providers.providers[r.partition("/")[0]], r.partition("/")[2]
+                )
+                for r in on
+            },
         )
 
 
@@ -3101,6 +3151,7 @@ def _grant_view(grant, spent=None) -> dict | None:
         "grantee": grant.grantee_id,
         "routes": list(grant.routes or []),
         "budget_usd": str(grant.budget_usd),
+        "budget_period": grant.budget_period,
         "per_launch_usd": str(grant.per_launch_usd)
         if grant.per_launch_usd is not None
         else None,
@@ -3290,10 +3341,6 @@ def chat_models(bot: Bot, session=None, user_id=None) -> list[str]:
 
 
 # -- runtime selection state ------------------------------------------------------------
-
-
-class VersionConflict(ValueError):  # noqa: N818
-    pass
 
 
 def _require_version(version, what: str) -> int:
@@ -3503,38 +3550,6 @@ def update_pool_state(name: str, providers: Providers, *, version: int, **change
         state.version += 1
         state.save()
     return state
-
-
-def usd(value, what: str, *, required: bool = True) -> Decimal | None:
-    """A finite, non-negative amount of US dollars (strings, ints, floats or
-    Decimals), or ValueError."""
-    from decimal import InvalidOperation
-
-    if value is None or value == "":
-        if required:
-            msg = f"{what} is required"
-            raise ValueError(msg)
-        return None
-    if isinstance(value, bool) or not isinstance(value, int | float | str | Decimal):
-        msg = f"{what} must be a number of US dollars"
-        raise ValueError(msg)  # noqa: TRY004
-    try:
-        amount = Decimal(str(value).strip())
-    except InvalidOperation as exc:
-        msg = f"{what} must be a number of US dollars"
-        raise ValueError(msg) from exc
-    if not amount.is_finite() or amount < 0:
-        msg = f"{what} must be a finite amount, 0 or more"
-        raise ValueError(msg)
-    if amount.normalize().as_tuple().exponent < -FUNDING_DECIMALS:
-        msg = (
-            f"{what} must have at most 4 decimal places; ambiguous rounding is refused"
-        )
-        raise ValueError(msg)
-    if amount >= Decimal("1e12"):
-        msg = f"{what} is too large"
-        raise ValueError(msg)
-    return amount
 
 
 def issue_grant(  # noqa: PLR0912, PLR0913, C901, PLR0915
