@@ -13,7 +13,11 @@ inherited descriptor and marks this process non-dumpable, which makes
 pidfd_getfd). A probe child then confirms that the saved descriptor really is
 unreachable before any user code starts; if the runtime does not enforce it,
 the job fails closed. User Python gets only bounded pipes, a 64 MiB file-size
-rlimit and no controlling terminal. After it exits the executor, as PID 1,
+rlimit and no controlling terminal. Untrusted workspace files (CSV, Parquet,
+XLSX) are parsed the same way, in a forked child that closed the log
+descriptor first, so a parser bug gives no more than user Python has. PID 1
+ignores SIGINT, the one signal a same-namespace process could otherwise use
+to interrupt it. After the job the executor, as PID 1,
 kills and reaps every remaining process before it writes the one capped result
 record to the saved descriptor and a short digest of that record to the
 termination-message file (which it truncates first, because the kubelet
@@ -57,15 +61,19 @@ class LogIsolationError(RuntimeError):
 
 
 # Runs as the same uid as user code, as a child of the executor (PID 1 in the
-# pod). Exit 0 only if the saved log descriptor cannot be reached via /proc.
+# pod). Exit 0 only if opening the saved log descriptor via /proc is refused
+# with a permission error (Linux and gVisor both give EACCES). Any other
+# failure, such as a missing /proc or a wrong pid, proves nothing: fail closed.
 PROBE = """
-import os, sys
+import errno, os, sys
 try:
     os.close(os.open("/proc/%d/fd/%s" % (os.getppid(), sys.argv[1]), os.O_WRONLY))
-except OSError:
-    sys.exit(0)
+except OSError as exc:
+    sys.exit(0 if exc.errno in (errno.EACCES, errno.EPERM) else 4)
 sys.exit(3)
 """
+# Wall-clock budget for one job step, inside the pod's 60s activeDeadline.
+JOB_SECONDS = 55
 
 
 def filename(name):
@@ -211,6 +219,7 @@ def child_limits():
     # host-backed termination-message file; workspace files share this cap.
     resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_FILE_BYTES, MAX_FILE_BYTES))
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
 
 
 def isolate_log_stream():
@@ -285,7 +294,7 @@ def python_job(code):
         preexec_fn=child_limits,  # noqa: PLW1509 — single-threaded executor
     )
     output = bytearray()
-    deadline = time.monotonic() + 55
+    deadline = time.monotonic() + JOB_SECONDS
     reason = "exited"
     try:
         # Python reads the whole script before executing: source stays out of argv.
@@ -324,12 +333,66 @@ def python_job(code):
     }
 
 
+def parse_in_child(fn, request):
+    """Run ``fn(request)`` (untrusted file parsing) in a forked child.
+
+    The child closes the log descriptor before it touches any workspace file
+    and stays non-dumpable (inherited from this process), so it cannot reopen
+    the descriptor through /proc either. It returns its JSON result over a
+    bounded pipe; its error messages may contain file data and are dropped.
+    """
+    if LOG_FD is None or not log_stream_unreachable(LOG_FD):
+        raise LogIsolationError
+    read_end, write_end = os.pipe()
+    pid = os.fork()
+    if pid == 0:
+        status = 1
+        try:
+            os.close(read_end)
+            os.close(LOG_FD)
+            os.setsid()
+            child_limits()
+            raw = json.dumps(fn(request), allow_nan=False).encode()
+            write_all(write_end, raw[: RECORD_BYTES + 1])
+            status = 0
+        except BaseException:  # noqa: BLE001, S110 — never report parser errors
+            pass
+        finally:
+            os._exit(status)
+    os.close(write_end)
+    data = bytearray()
+    deadline = time.monotonic() + JOB_SECONDS
+    try:
+        with selectors.DefaultSelector() as selector:
+            selector.register(read_end, selectors.EVENT_READ)
+            while len(data) <= RECORD_BYTES and time.monotonic() < deadline:
+                if not selector.select(timeout=0.1):
+                    continue
+                chunk = os.read(read_end, 65536)
+                if not chunk:
+                    break
+                data.extend(chunk)
+    finally:
+        os.close(read_end)
+        with suppress(ProcessLookupError):
+            os.kill(pid, signal.SIGKILL)
+        _, status = os.waitpid(pid, 0)
+        reap_everything()
+    if (
+        not os.WIFEXITED(status)
+        or os.WEXITSTATUS(status) != 0
+        or len(data) > RECORD_BYTES
+    ):
+        raise ValueError("Parser failed or exceeded its limits")
+    return json.loads(data)
+
+
 def run(request):
     op = request["op"]
     if op == "python":
         return python_job(request["code"])
     if op in {"dataset", "select"}:
-        return dataset(request)
+        return parse_in_child(dataset, request)
     if op == "list":
         entries = []
         for entry in ROOT.iterdir():
@@ -413,6 +476,9 @@ def write_termination_record(record):
 
 def main():
     global LOG_FD  # noqa: PLW0603 — process-wide, set once at startup
+    # Python's default SIGINT handler would let any same-namespace process
+    # raise KeyboardInterrupt inside PID 1; children get SIG_DFL back.
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
     log, nondumpable = isolate_log_stream()
     LOG_FD = log if nondumpable else None
     try:

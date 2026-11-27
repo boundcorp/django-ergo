@@ -278,6 +278,8 @@ def executor(tmp_path, monkeypatch):
     # test_analysis_log_isolation.py.
     monkeypatch.setattr(executor, "LOG_FD", 1)
     monkeypatch.setattr(executor, "log_stream_unreachable", lambda fd: True)
+    # Parsing runs in-process here; the forked parser child is covered there too.
+    monkeypatch.setattr(executor, "parse_in_child", lambda fn, request: fn(request))
     return executor
 
 

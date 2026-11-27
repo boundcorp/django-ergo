@@ -67,16 +67,17 @@ def docker(*args, check=True):
     return subprocess.run(["docker", *args], capture_output=True, check=check)
 
 
-def run_case(image, runtime, code, linger=0):
+def run_case(image, runtime, request, linger=0, seed=None):
     name = "analysis-smoke-" + uuid.uuid4().hex[:12]
     with tempfile.TemporaryDirectory() as tmp:
         workspace = Path(tmp) / "workspace"
         workspace.mkdir()
         workspace.chmod(0o777)
+        for file, text in (seed or {}).items():
+            (workspace / file).write_text(text)
         termination = Path(tmp) / "termination-log"
         termination.write_bytes(b"")
         termination.chmod(0o666)  # as the kubelet creates it
-        request = json.dumps({"op": "python", "code": code})
         docker(
             "run", "-d", "--name", name, "--runtime", runtime,
             "--user", "10001:10001", "--read-only", "--cap-drop", "ALL",
@@ -85,7 +86,7 @@ def run_case(image, runtime, code, linger=0):
             "--tmpfs", "/tmp:rw,size=128m",
             "-v", f"{workspace}:/workspace",
             "-v", f"{termination}:/dev/termination-log",
-            "-e", "ANALYSIS_REQUEST=" + request,
+            "-e", "ANALYSIS_REQUEST=" + json.dumps(request),
             "-e", "MPLBACKEND=Agg", "-e", "HOME=/tmp", "-e", "OPENBLAS_NUM_THREADS=1",
             image,
         )  # fmt: skip
@@ -135,6 +136,9 @@ def check_escapes(result):
     assert results["/proc/1/fd/1"] == "blocked:EACCES"
     assert results["/dev/tty"].startswith("blocked:")
     assert results["/dev/console"].startswith("blocked:")
+    assert results["ptrace parent"].startswith("blocked:"), results["ptrace parent"]
+    pidfd = results["pidfd_getfd parent"]
+    assert pidfd.startswith("blocked:"), pidfd
     return results
 
 
@@ -145,9 +149,13 @@ def main():
     args = parser.parse_args()
     report = {}
 
-    def case(name, code, linger=0):
+    def case(name, code, linger=0, request=None, seed=None):
         stdout, stderr, termination, files = run_case(
-            args.image, args.runtime, code, linger
+            args.image,
+            args.runtime,
+            request or {"op": "python", "code": code},
+            linger,
+            seed,
         )
         result = only_record(stdout, stderr, termination)
         report[name] = "ok"
@@ -169,6 +177,16 @@ def main():
     result, files = case("imports", IMPORTS)
     assert result["output"] == "imports ok\n", result["output"]
     assert "plot.png" in files
+    # Untrusted files are parsed in a forked child of PID 1 that closed the
+    # log descriptor; the fork and the probe must work under this runtime.
+    result, files = case(
+        "dataset-parse",
+        None,
+        request={"op": "dataset", "file": "data.csv"},
+        seed={"data.csv": "x,y\n1,a\n2,b\n"},
+    )
+    assert result["rows"] == 2, result
+    assert result["file"] in files, files
     print(json.dumps({"runtime": args.runtime, "cases": report}, indent=2))
     return 0
 

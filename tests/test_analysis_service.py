@@ -54,6 +54,11 @@ def setup(tmp_path, monkeypatch, settings):
             root = tmp_path / workspace
             root.mkdir(exist_ok=True)
             monkeypatch.setattr(executor, "ROOT", root)
+            # In-process parsing; the forked parser child is covered in
+            # test_analysis_log_isolation.py.
+            monkeypatch.setattr(
+                executor, "parse_in_child", lambda fn, request: fn(request)
+            )
             # Only known fixture requests, never supplied untrusted code.
             self.results[job] = {"ok": True, "result": executor.run(request)}
             self.pods[job] = "succeeded"

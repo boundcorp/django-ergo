@@ -90,3 +90,21 @@ def test_runner_entrypoint_is_the_admitted_pod_command():
     container = runtime.pod_spec("j", "w", {"op": "list"})["spec"]["containers"][0]
     assert json.loads(entrypoint) == container["command"]
     assert "USER 10001:10001" in text
+
+
+def test_workflow_pins_actions_and_drops_checkout_token():
+    workflow = (ROOT / ".github" / "workflows" / "analysis-images.yml").read_text()
+    uses = re.findall(r"uses:\s*(\S+)", workflow)
+    assert uses
+    for ref in uses:
+        assert re.fullmatch(r"[\w.-]+/[\w.-]+@[0-9a-f]{40}", ref), ref
+    checkouts = workflow.count("uses: actions/checkout@")
+    assert workflow.count("persist-credentials: false") == checkouts
+    # Publishing (and the registry login) only from main, never on PRs.
+    assert "pull_request_target" not in workflow
+    assert (
+        "PUBLISH: ${{ github.event_name == 'push' && "
+        "github.ref == 'refs/heads/main' }}" in workflow
+    )
+    assert workflow.count("if: env.PUBLISH == 'true'") == 2
+    assert not re.search(r"\|\s*(sudo\s+)?(ba)?sh\b", workflow)

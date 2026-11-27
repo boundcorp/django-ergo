@@ -140,6 +140,8 @@ def check_escapes(results, output):
             assert outcome != "wrote", (path, outcome)
             assert "ESCAPED " + path not in output
     assert results["/dev/tty"].startswith("blocked:")
+    assert results["ptrace parent"].startswith("blocked:")
+    assert results["pidfd_getfd parent"].startswith("blocked:")
     assert "INSIDE fd1" in output
     assert "INSIDE fd2" in output
 
@@ -241,3 +243,159 @@ def test_python_job_refuses_without_log_isolation(tmp_path, monkeypatch):
     # open its descriptors through /proc.
     if os.geteuid() != 0:
         assert executor.log_stream_unreachable(1) is False
+
+
+# The executor parses untrusted workspace files (CSV, Parquet, XLSX). These
+# stand in for a parser bug that runs attacker code: the wrapper swaps the
+# parser for the escape probe and the parse must still happen in a child that
+# holds no log descriptor.
+COMPROMISED_PARSER = (
+    "import contextlib, io, json, pathlib, sys\n"
+    "from django_ergo.analysis import executor\n"
+    "executor.ROOT = pathlib.Path(sys.argv[1])\n"
+    "executor.TERMINATION_LOG = pathlib.Path(sys.argv[2])\n"
+    "probe = pathlib.Path(sys.argv[3]).read_text()\n"
+    "def compromised(request):\n"
+    "    out = io.StringIO()\n"
+    "    with contextlib.redirect_stdout(out):\n"
+    "        exec(probe, {'__name__': 'probe'})\n"
+    "    return {'output': out.getvalue()}\n"
+    "executor.dataset = compromised\n"
+    "executor.main()\n"
+)
+
+
+def run_compromised_parser(tmp_path, *, pid1=False):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(exist_ok=True)
+    termination = tmp_path / "termination-log"
+    termination.write_bytes(b"")
+    probe = tmp_path / "probe.py"
+    probe.write_text(ESCAPES)
+    command = [
+        sys.executable,
+        "-I",
+        "-c",
+        COMPROMISED_PARSER,
+        str(workspace),
+        str(termination),
+        str(probe),
+    ]
+    if pid1:
+        command = [
+            "unshare",
+            "--user",
+            "--map-current-user",
+            "--pid",
+            "--fork",
+            "--mount-proc",
+            *command,
+        ]
+    proc = subprocess.run(
+        command,
+        env={
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "ANALYSIS_REQUEST": json.dumps({"op": "dataset", "file": "x.csv"}),
+        },
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        start_new_session=True,
+        timeout=120,
+        check=False,
+    )
+    return proc, termination.read_bytes()
+
+
+def check_parser_escapes(proc, termination):
+    record = assert_only_record(proc, termination)
+    assert b"ESCAPED" not in proc.stdout
+    assert record["ok"] is True, record
+    output = record["result"]["output"]
+    line = next(x for x in output.splitlines() if x.startswith("RESULTS "))
+    results = json.loads(line.removeprefix("RESULTS "))
+    parent = results.pop("parent")
+    # Only the result pipe is open besides /dev/null on 0, 1 and 2.
+    assert len(results.pop("inherited")) <= 1
+    assert results.pop("list parent fds") == "blocked:EACCES"
+    for key in (parent + "/mem", parent + "/environ", parent + "/fd/1"):
+        assert results.pop(key) == "blocked:EACCES", key
+    assert results.pop("ptrace parent").startswith("blocked:")
+    assert results.pop("pidfd_getfd parent").startswith("blocked:")
+    for path, outcome in results.items():
+        if path.startswith(parent + "/fd/") or path == "/dev/tty":
+            assert outcome != "wrote", path
+    return parent
+
+
+@needs_non_root
+def test_compromised_parser_cannot_reach_container_log(tmp_path):
+    proc, termination = run_compromised_parser(tmp_path)
+    check_parser_escapes(proc, termination)
+
+
+@needs_non_root
+@needs_pid_namespace
+def test_compromised_parser_cannot_reach_container_log_as_pid1(tmp_path):
+    proc, termination = run_compromised_parser(tmp_path, pid1=True)
+    assert check_parser_escapes(proc, termination) == "/proc/1"
+
+
+@needs_non_root
+def test_real_parse_runs_in_child_and_returns_result(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "data.csv").write_text("x,y\n1,a\n2,b\n")
+    proc, termination = run_executor(tmp_path, {"op": "dataset", "file": "data.csv"})
+    record = assert_only_record(proc, termination)
+    assert record["ok"] is True, record
+    assert record["result"]["rows"] == 2
+    assert (workspace / record["result"]["file"]).exists()
+
+
+@needs_non_root
+def test_parser_failure_is_generic(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "bad.csv").write_text("secret,SECRET\n1,2\n")
+    proc, termination = run_executor(tmp_path, {"op": "dataset", "file": "bad.csv"})
+    record = assert_only_record(proc, termination)
+    assert record == {
+        "ok": False,
+        "error": "Job failed; invalid input or resource limit",
+    }
+    assert b"SECRET" not in proc.stdout
+
+
+def test_parse_refuses_without_log_isolation(tmp_path, monkeypatch):
+    from django_ergo.analysis import executor
+
+    monkeypatch.setattr(executor, "ROOT", tmp_path)
+    monkeypatch.setattr(executor, "LOG_FD", None)
+    (tmp_path / "data.csv").write_text("x\n1\n")
+    with pytest.raises(executor.LogIsolationError):
+        executor.run({"op": "dataset", "file": "data.csv"})
+
+
+def test_probe_fails_closed_on_non_permission_errors(monkeypatch):
+    from django_ergo.analysis import executor
+
+    # A descriptor number that does not exist gives ENOENT, which proves
+    # nothing about isolation, so the probe must not pass.
+    assert executor.log_stream_unreachable(987654) is False
+
+
+@needs_non_root
+@needs_pid_namespace
+def test_sigint_cannot_interrupt_pid1(tmp_path):
+    code = (
+        "import os, signal, time\n"
+        "for _ in range(20):\n"
+        "    os.kill(1, signal.SIGINT)\n"
+        "    time.sleep(0.01)\n"
+        "print('still here')\n"
+    )
+    proc, termination = run_executor(
+        tmp_path, {"op": "python", "code": code}, pid1=True
+    )
+    record = assert_only_record(proc, termination)
+    assert record["result"]["output"] == "still here\n"

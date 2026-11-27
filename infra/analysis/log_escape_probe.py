@@ -41,6 +41,49 @@ for leaf in ("mem", "environ"):
     except OSError as exc:
         results[parent + "/" + leaf] = "blocked:" + errno.errorcode[exc.errno]
 results["parent"] = parent
+# The kernel calls besides /proc that could reach the parent's descriptors.
+# Both need ptrace access, which a non-dumpable parent denies to the same uid.
+try:
+    import ctypes
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.syscall.restype = ctypes.c_long
+    libc.ptrace.restype = ctypes.c_long
+
+    def call(value):
+        if value == -1:
+            code = ctypes.get_errno()
+            return "blocked:" + errno.errorcode.get(code, str(code))
+        return None
+
+    PTRACE_SEIZE = 0x4206
+    outcome = call(
+        libc.ptrace(
+            ctypes.c_long(PTRACE_SEIZE), ctypes.c_long(os.getppid()), None, None
+        )
+    )
+    # Exiting detaches a tracer, so a successful seize needs no cleanup.
+    results["ptrace parent"] = outcome or "attached"
+    pidfd = libc.syscall(
+        ctypes.c_long(434), ctypes.c_long(os.getppid()), 0
+    )  # pidfd_open
+    outcome = call(pidfd)
+    if outcome is None:
+        for number in range(32):
+            fd = libc.syscall(ctypes.c_long(438), pidfd, number, 0)  # pidfd_getfd
+            outcome = call(fd)
+            if outcome is None:
+                try:
+                    os.write(fd, b"ESCAPED pidfd_getfd\n")
+                    outcome = "wrote"
+                except OSError:
+                    outcome = "obtained"
+                os.close(fd)
+                break
+        os.close(pidfd)
+    results["pidfd_getfd parent"] = outcome
+except OSError as exc:
+    results["ptrace parent"] = "blocked:" + str(exc)
 for path in (
     "/dev/stdout",
     "/dev/stderr",
