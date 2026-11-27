@@ -7,6 +7,7 @@ from django.core.management.base import BaseCommand
 from django.utils import timezone
 
 from django_ergo.analysis.client import configured_client
+from django_ergo.analysis.config import retention_days
 from django_ergo.analysis.models import AnalysisWorkspace
 
 
@@ -14,10 +15,10 @@ class Command(BaseCommand):
     help = "Remove expired analysis receipts only after the isolated controller confirms retirement"
 
     def handle(self, *args, **options):
+        if getattr(settings, "ERGO_ANALYSIS_ENABLED", False) is not True:
+            return
+        days = retention_days(getattr(settings, "ERGO_ANALYSIS_RETENTION_DAYS", 30))
         client = configured_client()
-        days = int(getattr(settings, "ERGO_ANALYSIS_RETENTION_DAYS", 30))
-        if not 1 <= days <= 365:  # noqa: PLR2004
-            raise ValueError("Invalid analysis retention")  # noqa: TRY003, EM101
         cutoff = timezone.now() - timedelta(days=days)
         for workspace in (
             AnalysisWorkspace.objects.select_related("session")
