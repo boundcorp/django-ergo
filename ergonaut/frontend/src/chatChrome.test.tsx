@@ -8,7 +8,7 @@ import { Transcript } from './components/Transcript'
 import { EffortSlider, modelLabel } from './components/ModelPicker'
 import { PinnedDashboard } from './pages/Chat'
 
-test('an exited question is actionable even in the collapsed worker disclosure', () => {
+test('an exited question shows as needing a new run in the compact worker card', () => {
   const worker: Worker = {
     id: 'worker-question',
     title: 'Prepare artifact',
@@ -44,10 +44,11 @@ test('an exited question is actionable even in the collapsed worker disclosure',
       }),
     ),
   )
-  const summary = html.match(/<summary\b[^>]*>[\s\S]*?<\/summary>/)?.[0]
-  expect(summary).toContain('Needs new run')
-  expect(summary).not.toContain('completed')
+  const row = html.match(/<div[^>]*data-testid="worker-row"[\s\S]*?Needs new run/)?.[0]
+  expect(row).toBeTruthy()
+  expect(html).not.toContain('>Done<')
   expect(html).not.toContain('text-success')
+  expect(html).toContain('Needs a new run; the agent process has exited')
 })
 
 describe('MobileSessionBar', () => {

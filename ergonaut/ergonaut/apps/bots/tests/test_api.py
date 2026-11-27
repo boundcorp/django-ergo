@@ -1577,6 +1577,8 @@ def test_running_workers_show_in_the_chat_and_keep_it_busy(client, cook, use_bot
     ]
     assert detail["workers"][0]["session_id"] == root["id"]
     assert detail["workers"][0]["activity"]["at"] == 1790000000
+    # An Orca watch with no agent recorded (an older row) says so with empty strings.
+    assert detail["workers"][0]["agent"] == {"agent": "", "model": "", "effort": "", "tier": "", "launch_model": ""}
 
     # Its log: this bot has no Orca plugin to read it from now, so it's what was kept.
     log = client.get(f"/api/sessions/{root['id']}/workers/{worker.pk}/log").json()
@@ -1593,6 +1595,40 @@ def test_running_workers_show_in_the_chat_and_keep_it_busy(client, cook, use_bot
         assert tasks.resume_workers() == 1
     Worker.objects.filter(pk=worker.pk).update(status="completed")
     assert {s["id"]: s["busy"] for s in client.get("/api/sessions").json()}[root["id"]] is False
+
+
+@pytest.mark.django_db(transaction=True)
+def test_chat_workers_name_their_agent_model_effort_and_tier(client, cook, use_bots):
+    from django_ergo.conversation.models import Worker
+
+    use_bots(say("hi"))
+    root = post(client, "/api/bots/kitchen/root").json()
+    Worker.objects.create(
+        session_id=root["id"],
+        bot_name="kitchen",
+        title="claude: Tooling audit",
+        function="agent:orca",
+        status="running",
+        state={
+            "agent": "claude",
+            "model": "claude-haiku-5-5",
+            "effort": "low",
+            "dispatch_receipt": {"requested": {"tier": "small"}, "launch_model": "anthropic/claude-haiku-5-5"},
+        },
+    )
+    Worker.objects.create(session_id=root["id"], bot_name="kitchen", title="Index", function="task:index")
+    detail = client.get(f"/api/sessions/{root['id']}").json()
+    agents = {w["title"]: w["agent"] for w in detail["workers"]}
+    assert agents == {
+        "claude: Tooling audit": {
+            "agent": "claude",
+            "model": "claude-haiku-5-5",
+            "effort": "low",
+            "tier": "small",
+            "launch_model": "anthropic/claude-haiku-5-5",
+        },
+        "Index": None,  # not a coding agent
+    }
 
 
 @pytest.mark.django_db(transaction=True)

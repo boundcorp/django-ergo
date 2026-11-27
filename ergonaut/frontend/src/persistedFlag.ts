@@ -19,11 +19,17 @@ export function saveFlag(key: string, open: boolean) {
   }
 }
 
+/** A remembered flag; when `key` changes (say, another chat's), it reads that key's choice. */
 export function usePersistedFlag(key: string): [boolean, (open: boolean) => void] {
-  const [open, setOpen] = useState(() => readFlag(key))
+  const [state, setState] = useState(() => ({ key, open: readFlag(key) }))
+  let open = state.open
+  if (state.key !== key) {
+    open = readFlag(key)
+    setState({ key, open })
+  }
   const set = useCallback(
     (value: boolean) => {
-      setOpen(value)
+      setState({ key, open: value })
       saveFlag(key, value)
     },
     [key],

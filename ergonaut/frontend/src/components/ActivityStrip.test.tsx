@@ -34,9 +34,11 @@ let createRoot: typeof CreateRoot
 let container: HTMLDivElement
 const originalStorage = Object.getOwnPropertyDescriptor(globalThis, 'localStorage')
 
-function render(requests: DelegatedRequest[] = [request('waiting')], workers: Worker[] = []) {
+function render(requests: DelegatedRequest[] = [request('waiting')], workers: Worker[] = [], sessionId = 's1') {
   act(() =>
-    root.render(createElement(ActivityStrip, { requests, workers }, createElement('p', null, 'Activity details'))),
+    root.render(
+      createElement(ActivityStrip, { sessionId, requests, workers }, createElement('p', null, 'Activity details')),
+    ),
   )
 }
 
@@ -80,7 +82,9 @@ describe('ActivityStrip', () => {
     )
     const button = disclosure()
     expect(button.textContent).toContain('1 request')
-    expect(button.textContent).toContain('2 active / 3 workers')
+    expect(button.textContent).toContain('1 worker running · 1 queued · 1 finished')
+    // One status dot per worker in the collapsed chip.
+    expect(button.querySelectorAll('span[title]').length).toBe(3)
     expect(container.querySelector('section')?.getAttribute('aria-label')).toBe('Chat activity')
     render([request('answered'), request('failed')], [])
     expect(container.textContent).toBe('')
@@ -98,7 +102,7 @@ describe('ActivityStrip', () => {
     expect(button.getAttribute('aria-expanded')).toBe('true')
     expect(panel.hidden).toBe(false)
     expect(panel.textContent).toContain('Activity details')
-    expect(window.localStorage.getItem('ergonaut.activity')).toBe('open')
+    expect(window.localStorage.getItem('ergonaut.activity.s1')).toBe('open')
 
     act(() => root.unmount())
     root = createRoot(container)
@@ -108,11 +112,30 @@ describe('ActivityStrip', () => {
     expect(container.textContent).toContain('Activity details')
     act(() => button.click())
     expect(button.getAttribute('aria-expanded')).toBe('false')
-    expect(window.localStorage.getItem('ergonaut.activity')).toBe('closed')
+    expect(window.localStorage.getItem('ergonaut.activity.s1')).toBe('closed')
     act(() => root.unmount())
     root = createRoot(container)
     render()
     expect(disclosure().getAttribute('aria-expanded')).toBe('false')
+  })
+
+  test('remembers open or closed per chat, and keeps the open panel short', () => {
+    const agents = [worker('running'), { ...worker('running'), id: 'b' }].map(w => ({
+      ...w,
+      agent: { agent: 'claude', model: 'claude-haiku-5-5', effort: '', tier: 'small', launch_model: '' },
+    }))
+    render([], agents, 'chat-a')
+    expect(disclosure().textContent).toContain('2 agents running')
+    act(() => disclosure().click())
+    expect(disclosure().getAttribute('aria-expanded')).toBe('true')
+    const panel = container.querySelector('[data-testid="activity-panel"]')!
+    expect(panel.className).toContain('max-h-')
+    expect(panel.className).toContain('overflow-y-auto')
+    // Another chat starts closed, and coming back finds the first one open.
+    render([], agents, 'chat-b')
+    expect(disclosure().getAttribute('aria-expanded')).toBe('false')
+    render([], agents, 'chat-a')
+    expect(disclosure().getAttribute('aria-expanded')).toBe('true')
   })
 
   test('still toggles when storage is unavailable', () => {

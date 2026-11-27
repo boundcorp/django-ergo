@@ -237,7 +237,8 @@ describe('tool result presentation', () => {
       const html = renderTool(name, {}, worker)
       expect(html).toContain('Delegated task')
       expect(html).toContain('Queued')
-      expect(html).toContain('<summary')
+      expect(html).toContain('data-testid="worker-row"')
+      expect(html).toContain('&gt;_ log') // opens the same terminal as the activity panel
       expect(html).not.toContain(`title="${name}"`)
     },
   )

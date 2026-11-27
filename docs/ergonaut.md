@@ -513,12 +513,20 @@ unscoped devbox drafts are not migrated because their owner is unknown.
   live request card shows that a queued message has moved on, the call no longer
   shows its old queue position; without live request data the original status
   remains. Workers (`ergo_agent_start`, `orca_start_worker`, `ergo_worker_start`)
-  get a card with their status, progress and PRs. An Orca worker's card also
-  shows the agent's last few tool calls and output lines, how long ago it
-  last did something ("stalled" past the plugin's `stall_minutes`, or
-  "waiting on you" when it's parked on a prompt), and "Open full log", which
-  reads its recent transcript or screen from Orca and refreshes while it
-  runs. A reply from another chat
+  get a one-row card: a state badge (running, waiting on you, stalled past
+  the plugin's `stall_minutes`, queued, done, failed), the coding agent with
+  its model and effort (or tier; "model unknown" for workers that never
+  recorded one), how long it has run and since its last output, its error or
+  progress, and PRs. Its "log" button opens a terminal view that reads the
+  agent's recent transcript or screen from Orca: monospace, escape codes
+  stripped, line breaks kept and long lines scrolling sideways, refreshed
+  every 5 seconds while it runs and following the end unless you scroll up.
+- **Activity**: above the transcript, a chat's open requests and workers sit
+  behind one summary chip ("2 agents running · 1 waiting on you", with a
+  coloured dot per worker), open or closed per chat. Open, each worker is one
+  row (two on a phone) with the same badge, model and log button plus its
+  latest line of output, and the list scrolls inside a short panel instead
+  of pushing the chat down. A reply from another chat
   is one row you can open, the user message whose turn sent work on says
   "Sent to" the chat, and chat ids in a bot's text are links with a status
   dot.

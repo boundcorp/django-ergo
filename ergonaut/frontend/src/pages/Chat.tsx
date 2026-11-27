@@ -46,7 +46,7 @@ import { TodoButton, TodoList } from '../components/TodoList'
 import { WakeNotice } from '../components/WakeNotice'
 import { RecurringWakeNotice } from '../components/RecurringWakeNotice'
 import { usePersistedFlag } from '../persistedFlag'
-import { WorkerActivityView, WorkerPulse } from '../components/WorkerActivity'
+import { WorkerRow } from '../components/WorkerActivity'
 import { useSessionUsage } from '../components/UsageSparkline'
 import { UsageHistory } from '../components/UsageHistory'
 import { agoLong } from '../time'
@@ -1017,7 +1017,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
             onCount={onPinCount}
           />
         </MobileSessionBar>
-        <ActivityStrip requests={detail.requests ?? []} workers={detail.workers ?? []}>
+        <ActivityStrip sessionId={id} requests={detail.requests ?? []} workers={detail.workers ?? []}>
           <Requests requests={detail.requests ?? []} onAnswered={load} />
           <Workers workers={detail.workers ?? []} />
         </ActivityStrip>
@@ -1387,56 +1387,29 @@ const REQUEST_STATUS: Record<DelegatedRequest['status'], string> = {
 }
 
 // Delegated work still open: what this chat is waiting on, and what it's doing for others.
-const WORKER_ICON: Record<Worker['status'], string> = {
-  queued: '…',
-  running: '',
-  completed: '✓',
-  failed: '✗',
-  cancelled: '⊘',
-}
-
-// Long-running work this chat started: running ones with their latest progress and output
-// (the full log a click away), and the last few that finished (their results also arrive
-// as messages).
+// Long-running work this chat started, one compact row each (its output a click away), and
+// the last few that finished behind a toggle (their results also arrive as messages).
 function Workers({ workers }: { workers: Worker[] }) {
   const [showDone, setShowDone] = useState(false)
   const running = workers.filter(w => w.status === 'queued' || w.status === 'running')
-  const finished = workers.filter(w => !running.includes(w))
-  const done = finished
+  const done = workers.filter(w => !running.includes(w))
   if (!workers.length) return null
   return (
-    <div className="mx-4 mb-2 flex flex-col gap-2 rounded-card border border-stroke bg-surface px-4 py-3 text-xs sm:mx-6">
+    <div className="mb-2 flex flex-col divide-y divide-stroke/60 rounded-card border border-stroke bg-surface px-3 py-0.5">
       {running.map(w => (
-        <div key={w.id} className="min-w-0">
-          <div className="flex items-center gap-2 truncate">
-            {w.status === 'running' ? (
-              <span className="h-2.5 w-2.5 shrink-0 animate-spin rounded-full border-[1.5px] border-indigo-500 border-t-transparent" />
-            ) : (
-              <span className="text-zinc-400">{WORKER_ICON[w.status]}</span>
-            )}
-            <span className="font-medium">{w.title}</span>
-            <span className="truncate text-zinc-500">{w.progress || w.status}</span>
-            <span className="ml-auto" />
-            <WorkerPulse worker={w} />
-          </div>
-          <WorkerActivityView worker={w} lines={2} />
-        </div>
+        <WorkerRow key={w.id} worker={w} />
       ))}
       {!!done.length && (
-        <button className="self-start text-zinc-400 hover:text-zinc-600" onClick={() => setShowDone(s => !s)}>
+        <button
+          type="button"
+          className="self-start py-1 text-xs text-muted hover:text-ink"
+          aria-expanded={showDone}
+          onClick={() => setShowDone(s => !s)}
+        >
           {showDone ? '▾' : '▸'} {done.length} finished worker{done.length === 1 ? '' : 's'}
         </button>
       )}
-      {showDone &&
-        done.map(w => (
-          <div key={w.id} className="flex items-center gap-2 truncate" title={w.error || undefined}>
-            <span className={w.status === 'completed' ? 'text-emerald-600' : 'text-red-600'}>
-              {WORKER_ICON[w.status]}
-            </span>
-            <span>{w.title}</span>
-            <span className="truncate text-zinc-400">{w.error || w.progress}</span>
-          </div>
-        ))}
+      {showDone && done.map(w => <WorkerRow key={w.id} worker={w} />)}
     </div>
   )
 }
@@ -1466,7 +1439,7 @@ function Requests({ requests, onAnswered }: { requests: DelegatedRequest[]; onAn
     }
   }
   return (
-    <div className="mx-4 mb-2 flex flex-col gap-2 rounded-card border border-teal/40 bg-teal-tint px-4 py-3 text-xs sm:mx-6">
+    <div className="mb-2 flex flex-col gap-2 rounded-card border border-teal/40 bg-teal-tint px-4 py-3 text-xs">
       {open.map(r => (
         <div key={r.id}>
           <div className="flex items-center gap-2 truncate">

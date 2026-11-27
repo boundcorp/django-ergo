@@ -867,6 +867,16 @@ export type WorkerLog = {
   error: string
 }
 
+// The coding agent a worker runs and its model (django_ergo.bots.workers.agent_info); empty
+// strings where an older worker never recorded one.
+export type WorkerAgent = {
+  agent: string // claude, codex or omp
+  model: string // as selected (a tier's pick or an explicit model)
+  effort: string
+  tier: string
+  launch_model: string // the model the agent was seen running, when the manager reports it
+}
+
 // Long-running work a chat started (django_ergo.bots.workers).
 export type Worker = {
   id: string
@@ -882,6 +892,7 @@ export type Worker = {
   completed_at: string | null
   prs?: PrLink[] // pull requests its result links
   activity?: WorkerActivity | null
+  agent?: WorkerAgent | null // null for workers that aren't coding agents
 }
 
 // One item of a chat's todo list (django_ergo.bots.todos).
