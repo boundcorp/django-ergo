@@ -1138,3 +1138,20 @@ it because they may be used by bot tools. Permanent chats cannot be resolved or 
 activity state, and clearing completed todos are independent. Configured
 `permanent_chats` IDs are initialized on bot load. An explicit user choice persists
 across subsequent configuration reloads and restarts.
+
+### Isolated analysis runtime settings
+
+Analysis remains off by default. After separately approved runtime acceptance,
+Ergonaut reads `ERGO_ANALYSIS_ENABLED`, `ERGO_ANALYSIS_CONTROLLER_URL`,
+`ERGO_ANALYSIS_CONTROLLER_KEY`, optional `ERGO_ANALYSIS_CONTROLLER_CA_FILE`, and
+`ERGO_ANALYSIS_RETENTION_DAYS` (1–365, default 30). The key is UTF-8 text matching
+the controller key bytes exactly. The CA setting names a mounted public PEM
+bundle; certificate and hostname verification remain required, with no ambient
+proxies or redirects. Invalid booleans, retention or CA configuration fail closed
+without including their contents in errors.
+
+Enabling adds a daily 03:00 Celery beat task using `cleanup_analysis`; disabling
+makes even an already queued cleanup task a no-op before database/network work.
+Cleanup requires controller-confirmed retirement and preserves active execution
+and transfer fences. See [the analysis rollout plan](isolated-analysis-plan.md)
+for the unresolved B7 container-log quota gate and all infrastructure approvals.

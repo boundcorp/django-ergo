@@ -83,3 +83,69 @@ Reference semantics: [DuckDB security configuration](https://www.duckdb.org/docs
 The independent review of `1078084` found and fixed unsafe disappearance-based fence release, loss of termination evidence across controller crashes, writable-workspace import shadowing, malformed dataset/select trust at the application boundary, a mid-import private-export flag race, and cancellation of an uncertain pre-launch submission. It also found an actual import-layer test failure; the integration service now lives in the plugin layer. See `artifacts/isolated-analysis-security-review.md` for severity, code locations, evidence and residual gates.
 
 Local HTTP harnesses exercise controller authentication and the installed generated Kubernetes client (37.0.3): PVC get/create/delete, Pod create/get/log/delete/patch, 404 deserialization, camelCase query parameters, JSON Patch media type and finalizer retention. These verify adapter wire semantics against an emulator; they do not verify Kubernetes admission, kubelet finalizer behavior, runtime process cleanup, CSI quota enforcement or TLS deployment. Target-runtime tests must validate finalizer preservation through deletion/node failure, reliable kubelet termination status, crash recovery and the operational fencing procedure. Do not enable until that separate acceptance succeeds. Kubernetes authorities: [Pod termination](https://kubernetes.io/docs/concepts/workloads/pods/pod-termination/), [Pod lifecycle](https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/), and [finalizers](https://kubernetes.io/docs/concepts/overview/working-with-objects/finalizers/).
+
+## Runtime integration follow-up (#408)
+
+Ergonaut now reads `ERGO_ANALYSIS_ENABLED` (default `false`),
+`ERGO_ANALYSIS_CONTROLLER_URL`, `ERGO_ANALYSIS_CONTROLLER_KEY`,
+`ERGO_ANALYSIS_CONTROLLER_CA_FILE` and `ERGO_ANALYSIS_RETENTION_DAYS` at startup.
+Boolean strings accept true/false, 1/0, yes/no and on/off, ignoring surrounding
+whitespace and case; empty is false and other values fail configuration with a
+content-free error. Retention must be an integer from 1 to 365 (default 30).
+Keys are UTF-8 encoded without stripping or base64 decoding; the controller's
+mounted key file must contain exactly the same bytes. No live key is supplied
+or created by this change.
+
+For an approved internal CA, mount its public PEM CA bundle and set
+`ERGO_ANALYSIS_CONTROLLER_CA_FILE` to its readable path. The app creates a
+verified SSLContext with that trust bundle, requiring certificate and hostname
+verification. Missing, unreadable or invalid bundles fail closed with a
+sanitized setting-specific error. With no CA setting, HTTPX retains its default
+verified public trust. HTTPS is required, redirects are refused, and ambient
+proxies and SSL trust environment variables remain ignored. Merely importing
+settings does not open the CA, contact the controller or allocate a workspace;
+the disabled client exits before reading configuration or creating TLS state.
+
+When enabled, Ergonaut beat schedules `ergonaut.cleanup_analysis` daily at
+03:00 in the project's configured Celery timezone. The autodiscovered task calls
+the existing `cleanup_analysis` management command. A queued task after disabling
+is a no-op before database/client access. When enabled, the command validates
+retention before contacting the controller and only deletes app receipts after
+an authenticated controller response explicitly reports `retired`. Controller
+active-job, ambiguous-termination and transfer-lease fences remain authoritative.
+Run exactly one beat scheduler as already required by the host project; no
+infrastructure or live scheduler was changed. Other host apps still need their
+own schedule for the management command.
+
+### B7 remains a rollout blocker
+
+Reviewed infra-octo PR #337 `docs/ergo-analysis-sandbox.md` at
+`20cd1b0eefee35f7053eda6640c09ece3516f17d`. The executor's `python_job` already
+uses PIPE for child stdin/stdout, merges stderr into bounded capture, and Python
+Popen closes other inherited descriptors by default. This does **not** remove
+access to the trusted executor parent's container stdout: the arbitrary child
+shares its UID and PID namespace and can reopen `/proc/1/fd/1`,
+`/proc/<executor-pid>/fd/1` or equivalent proc-root paths, bypassing capture.
+The executor retains that descriptor to send its bounded structured JSON result
+through container logs; the Kubernetes adapter reads those logs as the result
+channel. Therefore simply closing or redirecting container stdout would also
+break trusted results, and duplicating it to another descriptor leaves another
+proc-visible descriptor to reopen. The child may also interfere with the parent
+and forge results; existing output validation is not result attestation.
+
+A complete fix needs a reviewed boundary between child and result writer:
+separate UID plus restricted proc/process access, or a runtime-enforced proc/fd
+and syscall policy, together with protection against recovering inherited
+handles, ptrace/process-memory access and signaling. A parent-only dumpability
+change or `close_fds=True` alone is insufficient evidence across the proposed
+gVisor/runtime boundary. The current fixed nonroot single-UID pod, dropped
+capabilities and unprivileged Python executor cannot establish a new UID or
+mount namespace isolation boundary. No executor workaround is claimed or
+implemented here. No adversarial untrusted code was run on devbox.
+
+Kubelet 10Mi x5 log rotation and ephemeral-storage eviction remain periodic
+controls, **not a hard quota**. Keep the feature disabled and B7 open until an
+approved hard log-storage quota or independently reviewed process/result-channel
+boundary has passed target-runtime adversarial acceptance, including direct
+proc writes, parent access, descendants, cancellation and structured results.
+No runtime, host, admission or rollout gate was changed by this follow-up.
