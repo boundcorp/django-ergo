@@ -1,8 +1,7 @@
 import { useContext } from 'react'
 import { Link } from 'react-router-dom'
-import type { PrLink, SentCard, Session, ThreadSummary, Worker } from '../api'
+import type { PrLink, SentCard, Session, ThreadSummary } from '../api'
 import { BotBadge, DirectoryContext } from './BotIcon'
-import { WorkerActivityView, WorkerPulse } from './WorkerActivity'
 
 const PR_TONE: Record<PrLink['state'], string> = {
   '': 'border-stroke text-muted',
@@ -107,64 +106,6 @@ export function ThreadCard({ card }: { card: SentCard }) {
         </div>
       )}
     </Link>
-  )
-}
-
-const WORKER_STATUS: Record<Worker['status'], { label: string; tone: string }> = {
-  queued: { label: 'Queued', tone: 'text-muted' },
-  running: { label: 'Running', tone: 'text-accent' },
-  completed: { label: 'Done', tone: 'text-success' },
-  failed: { label: 'Failed', tone: 'text-danger' },
-  cancelled: { label: 'Cancelled', tone: 'text-muted' },
-}
-
-/** Semantic outcome is distinct from the polling worker's lifecycle. */
-export function workerStatus(worker: Worker): { label: string; tone: string } {
-  const needsNewRun =
-    worker.status === 'completed' &&
-    worker.result != null &&
-    typeof worker.result === 'object' &&
-    'status' in worker.result &&
-    worker.result.status === 'needs_new_run'
-  return needsNewRun
-    ? { label: 'Needs new run', tone: 'text-warning' }
-    : (WORKER_STATUS[worker.status] ?? WORKER_STATUS.queued)
-}
-
-/** A worker this chat started, including its semantic outcome and recent activity. */
-export function WorkerCard({ worker }: { worker: Worker }) {
-  const status = workerStatus(worker)
-  return (
-    <div className="w-full rounded-card border border-stroke bg-surface px-3 py-2 text-sm">
-      <div className="flex items-center gap-2">
-        <span>⚙</span>
-        <span className="truncate font-medium">{worker.title}</span>
-        <span className={`ml-auto flex shrink-0 items-center gap-1.5 text-xs ${status.tone}`}>
-          {worker.status === 'running' && <Spinner />}
-          {status.label}
-        </span>
-        {worker.step_claims != null && (
-          <span className="text-xs text-muted" title="Worker step claims include non-model checks">
-            {worker.step_claims} step claims
-          </span>
-        )}
-      </div>
-      {(worker.error || worker.progress || worker.activity) && (
-        <div className="mt-1 flex items-center gap-2 text-xs text-muted">
-          <span className="line-clamp-2">{worker.error || worker.progress}</span>
-          <span className="ml-auto" />
-          <WorkerPulse worker={worker} />
-        </div>
-      )}
-      <WorkerActivityView worker={worker} />
-      {!!worker.prs?.length && (
-        <div className="mt-1.5 flex flex-wrap gap-1.5">
-          {worker.prs.map(pr => (
-            <PrChip key={pr.url} pr={pr} />
-          ))}
-        </div>
-      )}
-    </div>
   )
 }
 
