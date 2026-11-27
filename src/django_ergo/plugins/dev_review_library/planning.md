@@ -4,8 +4,8 @@ aliases: [plan review, planning review, design review, second opinion]
 summary: A second model checks a plan or design before work starts.
 targets: [plan]
 reviewer:
-  policy: cross_model    # a different model family from the author
-  tier: same             # the author's tier; one step up is allowed, never down
+  policy: cross_model    # a different model from the author; another family preferred
+  tier: up               # author tier + 1 preferred; same tier if none; never fail (design doc section 6)
 swarm:
   n: 5
   tier: small

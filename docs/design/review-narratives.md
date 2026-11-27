@@ -7,8 +7,8 @@ Status: design, no runtime code yet. Starter definitions are in
 
 Lee wants to say any of these to any bot and get a useful review back:
 
-- "do a planning review": a **different model of similar capability** reads
-  the plan.
+- "do a planning review": a **different model, one tier up from the author
+  when available**, reads the plan.
 - "do a ponytail review", "security review", "UX review": a reviewer with a
   fixed personality and checklist.
 - "do a swarmed security review": split the target into 5-10 slices, send a
@@ -36,7 +36,8 @@ Goals:
 - Kind and **strategy** (single, cross-model, swarm) are independent:
   "swarmed security review" is `security` + `swarm`.
 - Model choice uses the installation's tiers when it has them and falls back
-  to a plain-text constraint when it does not.
+  to a plain-text constraint when it does not. A review never fails for lack
+  of a different model: it falls back and says so (section 6).
 - Every finding says which model produced it, so "a different model" can be
   audited.
 
@@ -82,8 +83,8 @@ aliases: [security review, sec review, appsec]
 summary: One line, shown in the tool description.
 targets: [diff, plan, app]     # what it can review; the first is the default
 reviewer:
-  policy: same_tier_any        # cross_model | same_tier_any | cheap
-  tier: same                   # same (as author) | small | medium | large | xlarge
+  policy: same_tier_any        # cross_model | same_tier_any | cheap (section 6)
+  tier: same                   # same (as author) | up (author tier + 1, preferred) | small | medium | large | xlarge
 swarm:
   n: 8                         # default slice count, clamped to 2..12
   tier: small                  # tier for swarm reviewers
@@ -102,15 +103,15 @@ Targets:
 - `diff`: a branch, commit range or PR (`owner/repo#123`).
 - `app`: a running app (URL plus the flows to try).
 
-Lookup order, later wins by `name`:
+Lookup order, later wins by `name` (decided, section 11):
 
 1. `src/django_ergo/plugins/dev_review_library/` (built in).
 2. Each directory in `DJANGO_ERGO["REVIEW_DIRS"]` (installation-wide, e.g.
    a shared directory in the bot config repo).
 3. The bot's own folder, `reviews/*.md`.
 
-A later file with the same `name` replaces the whole definition (no merging
-of checklists; copy and edit). `enabled: false` in an override hides a
+A later file with the same `name` fully replaces the built-in definition: no
+merging and no appending to a checklist (copy and edit). `enabled: false` in an override hides a
 built-in kind. An alias that collides with another kind's name or alias is
 a load error, so the tool description is never ambiguous.
 
@@ -136,14 +137,16 @@ review_brief(
 Its parts are:
 
 1. **How to run it.** The strategy, the number of reviewers, the model
-   constraint (resolved or as text, section 6), and the exact steps:
+   constraint (resolved or as text, section 6) with the fallback used, if
+   any, and the exact steps:
    "start one agent with brief B on model M" or "split the target into N
    slices as follows, start one agent per slice with brief B + slice".
    Includes a fallback: "if you cannot start agents, do the review
    yourself and say so in the report".
 2. **The reviewer brief**, ready to paste as an agent's `brief`: target,
-   personality and checklist, the findings format, and the instruction to
-   report its own model (section 9). For a swarm, it has a `{slice}` slot.
+   personality and checklist, the findings format, the fallback used (so the
+   report can note it), and the instruction to report its own model
+   (section 9). For a swarm, it has a `{slice}` slot.
 3. **Synthesis instructions** for the caller (section 7).
 
 `review_kinds(bot=None)` lists kinds with aliases, summary and targets; the
@@ -184,30 +187,43 @@ and `pick_agent`, filtered by the active pool in `bots/pools.py`).
 
 1. **Author tier.** Look up `author_model` in the tier lists; the lowest
    tier that lists it is its tier. Unknown model: assume `large` and say so.
-2. **Reviewer tier.** `same` means the author's tier; `cross_model` may go
-   one tier up when the same tier has no other family, never down.
+2. **Reviewer tier.** `same` means the author's tier. `up` (planning) means
+   author tier + 1, preferred; the author's own tier is acceptable when
+   one tier up is not available (no such tier, or no candidate in it). Never
+   below the author's tier unless every other step has failed (step 5).
    `cheap` and swarm reviewers use the named tier (default `small`).
-3. **Family.** The provider plus model line (`anthropic/claude-*`,
-   `openai/gpt-*`, `google/gemini-*`, `xai/grok-*`). `cross_model` excludes
-   the author's family; `same_tier_any` prefers another family and falls
-   back to the same one.
+3. **Different model.** `cross_model` requires a model other than the
+   author's and prefers another family. `same_tier_any` also prefers another
+   family. Family is the provider plus model line (`anthropic/claude-*`,
+   `openai/gpt-*`, `google/gemini-*`, `xai/grok-*`).
 4. **Candidates** come from `routing.agents[tier]` when the reviewer is a
    coding agent (`pick_agent`, subscription only) and from
    `routing.tiers[tier]` otherwise. Pool privacy and `switched_off()`
    providers are respected, so a private chat never gets a reviewer on a
    provider its pool forbids.
-5. **Output.** Resolved: "use `openai/gpt-6.1-sol` (medium, not anthropic)".
-   Unresolved (no providers, no candidate, or library used outside a bot):
-   the constraint as text, "use a medium-tier model from a family other than
-   anthropic/claude", plus the candidates the loader did find.
+5. **Fallback (decided).** If no different model of the target tier exists,
+   use the best available alternative, in this order: a different size or
+   family; the same tier; as a last resort the same model as the author.
+   The review never fails for lack of a different model. The brief states
+   which fallback was used, and the reviewer and the synthesized report
+   repeat it.
+6. **Output.** Resolved: "use `openai/gpt-6.1-sol` (medium, not anthropic)".
+   With a fallback: "use `anthropic/claude-opus-5-5` (same tier and same
+   model as the author; fallback: single-family install, no other model
+   available)". Unresolved (no providers, no candidate, or library used
+   outside a bot): the constraint as text, "use a medium-tier model from a
+   family other than anthropic/claude, or the best alternative you have and
+   say which", plus the candidates the loader did find.
 
 For swarms, the brief names a list of small models and asks the caller to
 rotate through them, so one model's blind spot does not cover every slice.
 
 ## 7. Swarms: decomposition and synthesis
 
-The loader does not split the target; it cannot read a PR or an app. It
-tells the caller how:
+The loader does not split the target; it cannot read a PR or an app. The bot
+that asked (the calling orchestrator) splits the work into the N slices
+using the loader's guidance below (decided; there is no separate planner
+agent by default). The loader tells the caller how:
 
 1. Collect the target (diff stat and files, plan sections, or app flows).
 2. Make N slices (default from the definition, 5-10, never more than the
@@ -274,9 +290,11 @@ Text cannot enforce "use a different model". We make violations visible:
   report, when it has them.
 - **Check.** Phase 2 adds `ergo_review_record(kind, author_model, report)`:
   it stores the review as a `StructuredCall`-style row (kind, strategy,
-  author model, reviewer models with their source, finding counts) and
-  flags a `cross_model` review whose reviewer shares the author's family,
-  or a model that does not match the worker's launch record.
+  author model, reviewer models with their source, fallback used, finding
+  counts) and
+  flags a `cross_model` review whose reviewer is the author's own model
+  (or shares its family, as information), a fallback that was used, and a
+  model that does not match the worker's launch record.
 
 ## 10. Phased plan
 
@@ -293,21 +311,43 @@ Text cannot enforce "use a different model". We make violations visible:
 4. **More kinds** as files: performance, migration safety, test coverage,
    docs.
 
-## 11. Open questions for Lee
+## 11. Decisions and open questions
 
-1. **Planning review tier.** Same tier only, or allow one tier up when the
-   other family has nothing at the author's tier (current proposal: allow
-   up, never down)?
-2. **Cross-family on a single-family installation.** Fall back to a
-   different model of the same family with a warning, or refuse?
-3. **Who decomposes a swarm.** The calling bot (proposed), or a cheap
-   planner agent whose slice plan the bot only checks?
-4. **Ponytail scope.** The source is an authoring skill; this definition
-   adapts it to review only. Should a "ponytail review" also allow the
-   reviewer to push back on the request itself (the upstream "ultra"
-   level)?
-5. **Override granularity.** Whole-file replace (proposed) or allow a bot to
-   append to a built-in checklist?
+Decided by Lee on 2026-11-27:
+
+1. **DECIDED: planning review reviewer tier.** Encourage one tier up from
+   the author (prefer author tier + 1). The same tier is acceptable when one
+   tier up is not available. The reviewer must still be a different model
+   from the author. (`planning.md`: `tier: up`.)
+2. **DECIDED: single-family and limited installs.** Fall back to whatever is
+   available. If no different model of the target tier exists, use the best
+   available alternative (a different size or family, the same tier, or as a
+   last resort the same model). The brief says which fallback was used so
+   the report can note it. A review never fails for lack of a different
+   model.
+3. **DECIDED: who splits a swarm.** The bot that asked (the calling
+   orchestrator) splits the work into the N slices using the loader's
+   splitting guidance. There is no separate planner agent by default.
+4. **DECIDED: ponytail may push back on the request.** A ponytail review may
+   question whether the request or plan was the right thing to build, not
+   only how it was done. (`ponytail.md`.)
+5. **DECIDED: installation overrides replace.** An installation's (or bot's)
+   definition with the same name fully replaces the built-in file; no
+   merging or appending.
+
+Open questions for Lee:
+
+1. **Planning review and family.** Decision 1 asks for a different model, not
+   a different family. The loader prefers another family but accepts the
+   same family. Should a planning review require another family when one is
+   available at an acceptable tier, even if that means same tier instead of
+   one tier up?
+2. **Fallback order.** Decision 2 lists "a different size or family" before
+   "the same tier". When both exist, should a different family at the same
+   tier beat a different model of the same family one tier down or up?
+3. **Request pushback reporting.** Should ponytail's request-level findings
+   be a separate section of the report, or ordinary findings with location
+   `request`? (Proposed: ordinary findings with that location.)
 
 ## Attribution
 
