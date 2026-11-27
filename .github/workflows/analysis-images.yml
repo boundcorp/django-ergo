@@ -63,7 +63,8 @@ jobs:
             -r infra/analysis/runner.requirements.txt \
             -r infra/analysis/controller.requirements.txt
           uv pip install --system --no-deps -e .
-          uv pip install --system httpx pytest
+          # The app-side analysis client validates settings with Django (#414).
+          uv pip install --system httpx pytest "django>=5.0"
       # --noconftest: the suite conftest needs Django settings; these do not.
       - name: Run analysis tests
         run: >-
