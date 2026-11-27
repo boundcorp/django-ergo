@@ -168,7 +168,9 @@ def _available_agents(bot, session):
     return result
 
 
-def _resolved_guidance(candidates, author_model, preferred, author_tier, swarm):
+def _resolved_guidance(  # noqa: PLR0913
+    candidates, author_model, preferred, author_tier, swarm, *, cross_model=True
+):
     def same(choice):
         return (
             bool(author_model)
@@ -198,7 +200,13 @@ def _resolved_guidance(candidates, author_model, preferred, author_tier, swarm):
             + "; ".join(choices)
             + ". Rotate when possible; disclose any fallback. "
         )
-    tier, choice = min(ranked, key=lambda pair: (same(pair[1]), order.index(pair[0])))
+    # Cross-model reviews take the author's model only as a last resort; other
+    # policies keep the tier order and only prefer a different model within it.
+    if cross_model:
+        rank = lambda pair: (same(pair[1]), order.index(pair[0]))  # noqa: E731
+    else:
+        rank = lambda pair: (order.index(pair[0]), same(pair[1]))  # noqa: E731
+    tier, choice = min(ranked, key=rank)
     fallback = []
     if tier != preferred:
         fallback.append(f"{preferred} tier unavailable for a different model")
@@ -245,7 +253,12 @@ def _model_guidance(bot, author_model, tier, policy, session=None, swarm=False):
         candidates = _available_agents(bot, session)
         if candidates is not None:
             resolved = _resolved_guidance(
-                candidates, author_model, preferred, author_tier, swarm
+                candidates,
+                author_model,
+                preferred,
+                author_tier,
+                swarm,
+                cross_model=policy == "cross_model",
             )
     return (
         resolved

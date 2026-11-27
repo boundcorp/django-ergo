@@ -141,6 +141,16 @@ def test_candidate_ranking_and_swarm():
     assert "same model as author" in text
     text = _resolved_guidance(candidates, "p/one", "small", "small", True)
     assert "p/one" in text and "p/two" in text and "Rotate" in text
+    # Same-tier policies keep the tier before switching model.
+    lower = AgentChoice(agent="omp", provider="p", model="p/cheap")
+    mixed = {"large": [author], "small": [lower]}
+    text = _resolved_guidance(mixed, "p/one", "large", "large", False)
+    assert "p/cheap" in text and "same model" not in text
+    text = _resolved_guidance(
+        mixed, "p/one", "large", "large", False, cross_model=False
+    )
+    assert "model p/one" in text and "tier large" in text
+    assert "same model as author" in text
     assert "No coding-agent candidate" in _resolved_guidance(
         {}, "p/one", "medium", "small", False
     )
