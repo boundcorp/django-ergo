@@ -503,6 +503,8 @@ CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 from celery.schedules import crontab  # noqa: E402
 
 CELERY_BEAT_SCHEDULE = {
+    "reconcile-inference-costs": {"task": "ergonaut.reconcile_inference_costs", "schedule": 60},
+    "expire-paid-agent-launches": {"task": "ergonaut.expire_paid_agent_launches", "schedule": 60},
     # Bot threads idle past their bot's sessions.archive_after_days.
     "archive-idle-threads": {"task": "ergonaut.archive_idle_threads", "schedule": 60 * 60},
     # Thread messages that waited for a busy recipient and were missed.

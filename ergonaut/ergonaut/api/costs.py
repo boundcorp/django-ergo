@@ -1004,6 +1004,7 @@ class LedgerCoverageEntry(Schema):
 
 
 class LedgerCoverage(Schema):
+    pending_inference_attempts: int
     live_ingestion: bool
     complete: bool
     note: str
@@ -1080,5 +1081,7 @@ def costs_ledger(request, days: int = 30, bot: str = ""):
         "bot": bot,
         "basis": LEDGER_BASIS,
         "buckets": buckets,
-        "coverage": coverage_manifest(),
+        "coverage": coverage_manifest(
+            owner=request.auth, bots=[bot] if bot else (None if request.auth.is_superuser else allowed)
+        ),
     }

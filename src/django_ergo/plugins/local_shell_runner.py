@@ -28,6 +28,7 @@ import signal
 import subprocess
 import sys
 import time
+import urllib.request
 from pathlib import Path
 
 BEAT_SECONDS = 5
@@ -62,7 +63,7 @@ def stop_group(proc: subprocess.Popen) -> None:
         return
 
 
-def main(folder: str, number: str) -> int:
+def run(folder: str, number: str) -> int:
     root = Path(folder)
     meta = root / ".ergo"
     spec = json.loads((meta / f"run-{number}.json").read_text(encoding="utf-8"))
@@ -112,6 +113,30 @@ def main(folder: str, number: str) -> int:
     )
     beat.touch()
     return 0
+
+
+def main(folder: str, number: str) -> int:
+    try:
+        return run(folder, number)
+    finally:
+        # Capability only, never a provider key. Failure retains expiry/holds;
+        # the durable watcher also revokes, and never retries inference.
+        token = os.environ.get("ERGO_PROXY_TOKEN")
+        url = os.environ.get("ERGO_PROXY_URL", "")
+        if token and url.startswith("https://"):
+            request = urllib.request.Request(  # noqa: S310 - validated HTTPS service URL
+                url + "/revoke",
+                data=b"{}",
+                method="POST",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            with (
+                contextlib.suppress(Exception),
+                urllib.request.build_opener(urllib.request.ProxyHandler({})).open(
+                    request, timeout=5
+                ),
+            ):
+                pass
 
 
 if __name__ == "__main__":

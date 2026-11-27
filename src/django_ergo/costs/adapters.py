@@ -1,4 +1,4 @@
-"""Explicit, passive source adapters. Nothing here is scheduled or auto-invoked.
+"""Passive source adapters; inference lifecycle hooks enqueue durable accounting.
 
 An adapter turns one already-durable local record into ledger observations. It
 never sends, retries, cancels or alters the financial operation: a ledger failure
@@ -41,7 +41,7 @@ def record_inference_request(*, actor, request):
     - estimate: priced `cost_usd` (list-price, never final), once finished
     - unknown: a finished attempt without a priced cost, not zero
 
-    Only `billing_mode == "api"` rows are ledger-billable; others return [] (that is
+    Both `api` and guarded `metered` attempts are billable; others return [] (that is
     not evidence of free usage). Returns [(CostObservation, created)].
     """
     from django_ergo.conversation.models import InferenceOutcome
@@ -64,11 +64,13 @@ def record_inference_request(*, actor, request):
         msg = "Request ownership changed"
         raise PermissionDenied(msg)
     require_owned(owner, request.session, request.structured_call)
-    if request.billing_mode != "api":
+    if request.billing_mode not in {"api", "metered"}:
         return []
     operation = OperationSpec(
         provider=request.provider,
-        account_ref=request.pool,
+        account_ref=request.paid_launch.account_ref
+        if request.paid_launch_id
+        else request.pool,
         operation_key=f"inference-request:{request.pk}",
         currency="USD",
         bot_name=request.bot_name,

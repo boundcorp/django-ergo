@@ -1293,6 +1293,11 @@ class SendAuthority:
     def __init__(self, source, *, session=None, decision=None):
         self.source = source
         self.session = session
+        self.coding_decision = (
+            decision
+            if isinstance(decision, Decision) and decision.consumer == CODING
+            else None
+        )
         self.ref = decision.route if decision else ""
         self.identity = decision.transport_identity if decision else ""
         self.privacy = decision.privacy if decision else None
@@ -2900,6 +2905,7 @@ def select_agent(  # noqa: C901, PLR0912, PLR0913, PLR0915
             provider=decision.provider,
             model=decision.model,
             amount=decision.per_launch_usd,
+            proxy_bound=spend_bounded and decision.provider == "openai",
             bot=bot.name,
             session_id=getattr(session, "pk", None),
             user_id=user_id,
@@ -2982,6 +2988,7 @@ def revalidate_launch(bot: Bot, session, confined: dict) -> Decision:
         provider=provider,
         model=model,
         amount=view.per_launch_usd,
+        proxy_bound=provider == "openai",
         bot=bot.name,
         session_id=getattr(session, "pk", None),
         user_id=getattr(session, "user_id", None),
@@ -3006,6 +3013,11 @@ def confinement(bot: Bot, decision: Decision) -> dict | None:
         return None
     provider = bot.providers.providers[decision.provider]
     return {
+        "grant_id": str(decision.grant_id) if decision.grant_id else "",
+        "reservation_id": str(decision.reservation_id)
+        if decision.reservation_id
+        else "",
+        "max_output_tokens": decision.max_output_tokens,
         "pool": decision.pool,
         "provider": provider.name,
         "engine": provider.type,

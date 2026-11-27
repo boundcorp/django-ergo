@@ -23,6 +23,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from asgiref.sync import sync_to_async
+from django.db import DatabaseError
 from django.db import connection
 from django.db import transaction
 from django.utils import timezone
@@ -31,7 +32,6 @@ from django_ergo.conversation.inference_policy import FIREWORKS_KEY_ENV
 from django_ergo.conversation.inference_policy import SpendCapError
 from django_ergo.pricing import ExactPrice
 from django_ergo.pricing import exact_price
-from django_ergo.settings import api_settings
 
 if TYPE_CHECKING:
     from django_ergo.conversation.inference_policy import PrivateGrant
@@ -61,7 +61,40 @@ def reconcile_cost_ledger(pk) -> bool:
         logger.error(  # noqa: TRY400 - exception details can be sensitive
             "Inference cost accounting failed for %s (%s)", pk, type(exc).__name__
         )
+        # Rotate failures behind older work so one poison row cannot starve
+        # the durable pending outbox. No provider request is ever retried.
+        try:
+            with transaction.atomic():
+                InferenceRequest.objects.filter(
+                    pk=pk, cost_ledger_state="pending"
+                ).update(updated_at=timezone.now())
+        except DatabaseError:
+            pass  # The committed pending marker survives a source DB outage too.
         return False
+
+
+def retry_pending_costs(batch_size=100):
+    """Bounded sweep; pending markers survive process/broker outages."""
+    from django_ergo.conversation.models import InferenceRequest
+
+    ids = list(
+        InferenceRequest.objects.filter(cost_ledger_state="pending")
+        .order_by("updated_at", "pk")
+        .values_list("pk", flat=True)[:batch_size]
+    )
+    failures = sum(not reconcile_cost_ledger(pk) for pk in ids)
+    return len(ids), failures
+
+
+def pending_cost_count(*, owner=None, bots=None):
+    from django_ergo.conversation.models import InferenceRequest
+
+    rows = InferenceRequest.objects.filter(cost_ledger_state="pending")
+    if owner is not None and not owner.is_superuser:
+        rows = rows.filter(user=owner)
+    if bots is not None:
+        rows = rows.filter(bot_name__in=bots)
+    return rows.count()
 
 
 def _schedule_accounting(row):
@@ -147,9 +180,7 @@ def _open(grant: PrivateGrant, kwargs: dict, attempt: int, call) -> LedgerEntry:
         "rates": price.snapshot() if price else {},
         "reserved_usd": reserved,
         "cost_status": "pending",
-        "cost_ledger_state": "pending"
-        if api_settings.INFERENCE_COST_LEDGER_ENABLED
-        else "",
+        "cost_ledger_state": "pending",
     }
     cap = pool.daily_usd_cap
     if cap is None:

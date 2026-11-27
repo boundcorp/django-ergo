@@ -116,18 +116,20 @@ def test_concurrent_pending_accounting(settings):
 
 
 @pytest.mark.django_db(transaction=True)
-def test_off_and_foreign_session_stays_pending(settings):
+def test_recorded_paid_attempts_cannot_opt_out_and_foreign_session_stays_pending(
+    settings,
+):
     settings.DJANGO_ERGO = {}
     user = get_user_model().objects.create_user("owner")
     other = get_user_model().objects.create_user("other")
-    assert coverage_manifest()["live_ingestion"] is False
+    assert coverage_manifest()["live_ingestion"] is True
     off = opened(user)
-    assert InferenceRequest.objects.get(pk=off.pk).cost_ledger_state == ""
+    assert InferenceRequest.objects.get(pk=off.pk).cost_ledger_state == "recorded"
     settings.DJANGO_ERGO = {"INFERENCE_COST_LEDGER_ENABLED": True}
     foreign = ConversationSession.objects.create(
         user=other, bot_name="personal", engine_type="openai"
     )
     bad = opened(user, foreign)
     assert InferenceRequest.objects.get(pk=bad.pk).cost_ledger_state == "pending"
-    assert not CostObservation.objects.exists()
+    assert CostObservation.objects.count() == 1
     assert coverage_manifest()["live_ingestion"] is True

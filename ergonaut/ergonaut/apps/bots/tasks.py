@@ -1272,3 +1272,17 @@ def cleanup_analysis():
     from django.core.management import call_command
 
     call_command("cleanup_analysis")
+
+
+@shared_task(name="ergonaut.reconcile_inference_costs")
+def reconcile_inference_costs():
+    from django_ergo.conversation.inference_ledger import retry_pending_costs
+
+    return retry_pending_costs(batch_size=100)
+
+
+@shared_task(name="ergonaut.expire_paid_agent_launches")
+def expire_paid_agent_launches():
+    from django.core.management import call_command
+
+    call_command("expire_paid_agent_launches")

@@ -146,7 +146,7 @@ Coverage varies by source and configuration; no historical import is authorized.
 
 | Source | Canonical identity and mapping | Coverage / authority |
 | --- | --- | --- |
-| InferenceRequest | one operation per request UUID; attempt UUID source event; reserved_usd is reservation; cost_usd derived from rates is estimate, never final | Private pool attempt hooks are opt-in; existing inference admission unchanged |
+| InferenceRequest | one operation per request UUID; attempt UUID source event; reserved_usd is reservation; cost_usd derived from rates is estimate, never final | New private API and guarded metered attempts always enqueue accounting; existing inference admission unchanged |
 | StructuredCall / AgentUsage | aggregate/cumulative projections, references only; do not ingest alongside constituent requests as new costs | Unsupported charge sources |
 | AgentUsageEvent / native CLI | canonical native request/delta key, not transcript/cumulative replay; API-equivalent and subscription funding explicitly distinct | Follow-on codex_cli owner; no chat extraction |
 | Native RunPod | provider/account/resource type/provider resource ID; native job UUID, worker UUID, attempt/create-intent references; component/resource-period economic key | Follow-on RunPod owner; durable rental ledger authoritative |
@@ -199,7 +199,7 @@ also smoke-checked.
 ## Adoption slice: projection, adapters and coverage (stacked)
 
 The following projection and adapters remain distinct from existing spend authorities.
-Automatic private inference accounting is opt-in; nothing is backfilled.
+Automatic recorded API/metered inference accounting is mandatory; nothing is backfilled.
 
 - `GET /api/costs/ledger?days=&bot=` (Ergonaut) returns `summarize_costs` for the
   authenticated user and registered bots they may use (superusers see every owner),
@@ -216,7 +216,7 @@ Automatic private inference accounting is opt-in; nothing is backfilled.
   operation per `InferenceRequest` id; `reserved_usd` is a reservation, a
   `priced` `cost_usd` is a list-price estimate (never final), and a finished
   request without both is `unknown`. A `not_sent` request also records a release;
-  non-`api` billing is skipped (not evidence of free). Cache-read tokens remain
+  billing other than `api`/`metered` is skipped (not evidence of free). Cache-read tokens remain
   nullable; uncached input is unknown because prompt includes cache writes that
   the source does not retain separately. Missing completion times remain undated.
   Owner, session and structured call ownership are validated, and all observations
@@ -237,15 +237,18 @@ Automatic private inference accounting is opt-in; nothing is backfilled.
   cleanup and the REST request budget are not money evidence. Does not touch
   lifecycle, budget or `native.py`.
 - `django_ergo.costs.coverage.coverage_manifest()` reports the private inference
-  hook's current configured state; all coverage is incomplete.
+  hook's coverage; all coverage is incomplete.
 
-### Private inference opt-in and recovery
+### Recorded paid inference and recovery
 
-Set `DJANGO_ERGO["INFERENCE_COST_LEDGER_ENABLED"] = True` to enroll new
-private-pool `InferenceRequest` attempts. The default is false. This covers only
-the existing private inference attempt lifecycle, not other API engines, native
-CLI, subscriptions or arbitrary bot tools. Enrolled attempts remain enrolled if
-the flag is disabled while in flight. No existing rows are backfilled.
+New `InferenceRequest` rows from private API pools and `MeteredGuard` always
+commit cost-ledger work. `billing_mode` `api` and `metered` are both billable;
+the former `INFERENCE_COST_LEDGER_ENABLED` opt-in no longer disables ingestion.
+Other engines without an `InferenceRequest` lifecycle, unproxied CLI runs and
+arbitrary paid tools remain outside this coverage. No historical rows are
+backfilled automatically. Use the adapter explicitly for an audited historical
+row; source identities make re-ingestion idempotent. Provider cost evidence is
+still required for final charges.
 
 Each enrolled admission/outcome transition commits a durable pending marker with
 the source row. After commit, the hook writes observations under a row lock and
@@ -255,8 +258,13 @@ replay. A process crash may also leave pending work; monitor pending rows and lo
 Run `python manage.py reconcile_inference_costs --batch-size 100` to retry a
 bounded batch of accounting only, or `--request-id UUID` for a specific pending
 row. A nonzero exit indicates failures; repair attribution or source data before
-retrying. Permanently failing oldest rows can occupy a batch, so inspect them
-and target later pending UUIDs explicitly. This is operator-driven, not scheduled.
+retrying. Failed rows rotate to the back of the pending queue so a poison row cannot
+permanently starve later work. Ergonaut Celery beat schedules a bounded 100-row
+retry sweep every minute; the manual command remains available without beat.
+Neither provider dispatch nor unknown-hold release is retried. The API coverage
+manifest exposes `pending_inference_attempts`, scoped to the authenticated owner
+and accessible bots; a nonzero count explicitly marks incomplete ledger ingestion.
+Live scheduler deployment has not been verified by this draft.
 Both pending and recorded states are local accounting state, not billing proof.
 
 Remaining gaps include other API engines, RunPod lifecycle, rental `Experiment`

@@ -25,7 +25,7 @@ class Command(BaseCommand):
         if options["request_id"]:
             pending = pending.filter(pk=options["request_id"])
         ids = list(
-            pending.order_by("created_at", "pk").values_list("pk", flat=True)[:size]
+            pending.order_by("updated_at", "pk").values_list("pk", flat=True)[:size]
         )
         failures = sum(not reconcile_cost_ledger(pk) for pk in ids)
         self.stdout.write(

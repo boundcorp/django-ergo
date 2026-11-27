@@ -974,6 +974,10 @@ def test_ledger_projection_is_owner_scoped_bot_filtered_and_keeps_unknown_null(c
     _ledger_row(ann, "a2", "unknown", None, currency="CREDITS", bot="ads")
     _ledger_row(ann, "a3", "reservation", "9", bot="ads")
     _ledger_row(bob, "b1", "estimate", "100")
+    from django_ergo.conversation.models import InferenceRequest
+
+    for owner, name in [(ann, "kitchen"), (ann, "private"), (bob, "kitchen")]:
+        InferenceRequest.objects.create(user=owner, bot_name=name, billing_mode="metered", cost_ledger_state="pending")
     client.post("/api/auth/login", json.dumps({"username": "ann", "password": "pw"}), content_type="application/json")
     data = client.get("/api/costs/ledger?days=7").json()
     rows = {(b["kind"], b["currency"]): b for b in data["buckets"]}
@@ -981,8 +985,10 @@ def test_ledger_projection_is_owner_scoped_bot_filtered_and_keeps_unknown_null(c
     assert rows[("unknown", "CREDITS")]["known_amount"] is None
     assert rows[("unknown", "CREDITS")]["unknown_count"] == 1
     assert rows[("reservation", "USD")]["known_amount"] == "9"
-    assert data["coverage"]["live_ingestion"] is False and data["coverage"]["complete"] is False
+    assert data["coverage"]["live_ingestion"] is True and data["coverage"]["complete"] is False
+    assert data["coverage"]["pending_inference_attempts"] == 1
     only_ads = client.get("/api/costs/ledger?bot=ads").json()
+    assert only_ads["coverage"]["pending_inference_attempts"] == 0
     assert {(b["kind"], b["currency"]) for b in only_ads["buckets"]} == {
         ("unknown", "CREDITS"),
         ("reservation", "USD"),
@@ -1085,3 +1091,35 @@ def test_ledger_window_excludes_rows_after_supersession_outside_window(client, l
     assert bucket["kind"] == "final"
     assert bucket["known_amount"] == "7"
     assert bucket["operation_count"] == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_pending_inference_maintenance_is_scheduled_and_idempotent(settings):
+    from django_ergo.conversation.models import InferenceRequest
+    from django_ergo.costs.models import CostObservation
+
+    from ergonaut.apps.bots.tasks import reconcile_inference_costs
+
+    schedule = settings.CELERY_BEAT_SCHEDULE
+    assert schedule["reconcile-inference-costs"]["schedule"] == 60
+    assert schedule["reconcile-inference-costs"]["task"] == reconcile_inference_costs.name
+    assert schedule["expire-paid-agent-launches"]["schedule"] == 60
+    owner = get_user_model().objects.create_user("outbox-owner")
+    row = InferenceRequest.objects.create(
+        user=owner,
+        provider="openai",
+        model="mock",
+        pool="grant:mock-outbox",
+        billing_mode="metered",
+        outcome="ok",
+        cost_status="priced",
+        cost_usd="0.01",
+        cost_ledger_state="pending",
+        finished_at=timezone.now(),
+    )
+    assert reconcile_inference_costs() == (1, 0)
+    assert reconcile_inference_costs() == (0, 0)
+    assert (
+        CostObservation.objects.filter(operation__operation_key=f"inference-request:{row.pk}", kind="estimate").count()
+        == 1
+    )

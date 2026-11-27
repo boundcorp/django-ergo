@@ -1864,6 +1864,10 @@ class InferenceRequest(TimeStampedMixin):
     purpose = models.CharField(max_length=32, blank=True, default="")
     billing_mode = models.CharField(max_length=16, default="api")
     attempt = models.PositiveIntegerField(default=1)  # within one engine (one turn)
+    paid_launch = models.ForeignKey(
+        "PaidAgentLaunch", on_delete=models.PROTECT, null=True, related_name="requests"
+    )
+    actual_model = models.CharField(max_length=200, blank=True, default="")
     upstream_request_id = models.CharField(max_length=200, blank=True, default="")
     prompt_tokens = models.IntegerField(null=True, blank=True)  # all input
     cached_tokens = models.IntegerField(null=True, blank=True)  # input read from cache
@@ -2054,3 +2058,26 @@ class RevisionAncestry(models.Model):
 
     def __str__(self):
         return f"{self.revision[:12]} {'contains' if self.contains else 'lacks'} {self.target[:12]}"
+
+
+class PaidAgentLaunch(TimeStampedMixin):
+    """One proxy capability; only its digest is durable. No provider secrets."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    budget_week = models.DateField(null=True)
+    token_digest = models.CharField(max_length=64, unique=True)
+    user = models.ForeignKey(User, on_delete=models.PROTECT)
+    grant = models.ForeignKey(SpendGrant, on_delete=models.PROTECT)
+    reservation = models.OneToOneField(InferenceRequest, on_delete=models.PROTECT)
+    provider = models.CharField(max_length=32)
+    account_ref = models.CharField(max_length=200)
+    allowed_models = models.JSONField(default=list)
+    authority = models.JSONField(default=dict)
+    expires_at = models.DateTimeField()
+    revoked_at = models.DateTimeField(null=True)
+    max_attempts = models.PositiveIntegerField()
+    attempts = models.PositiveIntegerField(default=0)
+    cap_usd = models.DecimalField(max_digits=16, decimal_places=10)
+    total_reserved_usd = models.DecimalField(
+        max_digits=16, decimal_places=10, default=0
+    )

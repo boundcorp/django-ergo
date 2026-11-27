@@ -3,9 +3,7 @@
 from dataclasses import asdict
 from dataclasses import dataclass
 
-from django_ergo.settings import api_settings
-
-INFERENCE_HOOK_ENABLED = "automatic_private_inference_opt_in"
+INFERENCE_HOOK_ENABLED = "automatic_recorded_paid_inference"
 INFERENCE_HOOK_DISABLED = "automatic_private_inference_disabled"
 
 # Statuses, strongest first. None of them means live or complete coverage.
@@ -30,7 +28,7 @@ class CoverageEntry:
 _ENTRIES = (
     CoverageEntry(
         "llm_inference_request",
-        INFERENCE_HOOK_DISABLED,
+        INFERENCE_HOOK_ENABLED,
         "per request",
         "cost_usd is a list-price estimate, never a provider bill; reservation is a ceiling",
         "operation per InferenceRequest id; StructuredCall/AgentUsage aggregates must not also be ingested",
@@ -130,20 +128,17 @@ _ENTRIES = (
 )
 
 
-def coverage_manifest() -> dict:
+def coverage_manifest(*, owner=None, bots=None) -> dict:
+    from django_ergo.conversation.inference_ledger import pending_cost_count
+
     return {
-        "live_ingestion": bool(api_settings.INFERENCE_COST_LEDGER_ENABLED),
+        "pending_inference_attempts": pending_cost_count(owner=owner, bots=bots),
+        "live_ingestion": True,
         "complete": False,
-        "note": "Private inference enrollment is configured per process; in-flight work and pending reconciliation may continue after disabling. Coverage is incomplete; an empty ledger is not zero spend.",
+        "note": "New recorded API and metered attempts are always ingested; historical rows are not backfilled. Coverage is incomplete; an empty ledger is not zero spend.",
         "sources": [
             {
                 **asdict(entry),
-                "status": (
-                    INFERENCE_HOOK_ENABLED
-                    if entry.source == "llm_inference_request"
-                    and api_settings.INFERENCE_COST_LEDGER_ENABLED
-                    else entry.status
-                ),
             }
             for entry in _ENTRIES
         ],
