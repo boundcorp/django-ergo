@@ -14,6 +14,8 @@ writable. The unpatched build of the same commit still fails with `EROFS`, as
 reported. Without the new variable, the patched build writes exactly the same
 paths as the baseline.
 
+Draft PR: https://github.com/boundcorp/django-ergo/pull/419.
+
 The django-ergo opt-in (`local_shell` `codex_runtime_home: true`) is
 implemented and tested. It is a draft PR only, and nothing is enabled or
 deployed. Turning it on in Ergonaut needs a reviewed, pinned build of this patch
