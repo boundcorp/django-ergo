@@ -81,7 +81,7 @@ jobs:
       - name: Read pinned base images
         run: |
           set -euo pipefail
-          grep -E '^[A-Z_]+=' infra/analysis/base-images.env >> "$GITHUB_ENV"
+          grep -E '^[A-Z][A-Z0-9_]*=' infra/analysis/base-images.env >> "$GITHUB_ENV"
           . infra/analysis/base-images.env
           for ref in "$PYTHON_BASE" "$NGINX_UNPRIVILEGED"; do
             [[ "$ref" =~ @sha256:[0-9a-f]{64}$ ]] || { echo "unpinned: $ref"; exit 1; }
