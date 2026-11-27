@@ -58,6 +58,8 @@ def test_invalid_funding_never_creates_consent(client, kitchen, change):  # noqa
         "budget_usd": "3",
         "expires_at": "2099-01-01T00:00:00Z",
         "accounts": [a["identity"] for a in details["accounts"]],
+        "budget_period": details["budget_period"],
+        "version": details["version"],
         **change,
     }
     assert send(client, "post", "/api/pools/paid/funding", body).status_code in (400, 422)
@@ -89,7 +91,13 @@ def test_other_user_and_grantee_cannot_read_funding_or_approve_it(client, kitche
             client,
             "post",
             "/api/pools/paid/funding",
-            {"budget_usd": "9", "expires_at": "2099-01-01T00:00:00Z", "accounts": []},
+            {
+                "budget_usd": "9",
+                "expires_at": "2099-01-01T00:00:00Z",
+                "accounts": [],
+                "budget_period": "cumulative",
+                "version": 1,
+            },
         ).status_code
         == 403
     )

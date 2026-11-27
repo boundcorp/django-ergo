@@ -219,18 +219,59 @@ export type GrantIssue = {
   routes?: string[]
 }
 
+export type FundingApproval = {
+  budget_usd: string
+  expires_at: string
+  accounts: string[]
+  note: string
+  budget_period: 'cumulative' | 'iso_week_utc'
+  version: number // the funding revision last inspected; a stale one is refused
+  convert_period?: boolean // explicit, audited cumulative <-> weekly conversion
+}
+
+export type WeeklyProviderBudget = {
+  family: string
+  owner_id: string
+  actor_id: string | null
+  timezone: 'UTC'
+  week: string // Monday (UTC date) of the current ISO week
+  version: number
+  weekly_usd: string | null
+  enabled: boolean
+  spent_usd: string
+  reserved_usd: string
+  valid_from: string | null
+  expires_at: string | null
+  history_problem: string
+  accounts: { id: number; identity: string; account_label: string; actor_id: string; assertion: string }[]
+}
+
+export type WeeklyConsentWrite = {
+  version: number
+  weekly_usd: string
+  enabled: boolean
+  valid_from: string
+  expires_at: string
+  timezone: 'UTC'
+  note: string
+}
+
 export type PoolFunding = {
+  version?: number
+  timezone?: string
+  budget_period?: string
   envelope_id: string | null
   pool: string
   owner: string
   pending: boolean
   configured_ceiling_usd: string | null
   configured_expires_at: string | null
-  accounts: { identity: string; label: string }[]
+  accounts: { identity: string; label: string; provider_type?: string }[]
   spent_usd: string
   reserved_usd: string
   approval: {
     id: number
+    budget_period?: string
     budget_usd: string
     valid_from: string
     expires_at: string
@@ -1233,8 +1274,20 @@ export const api = {
     request<BotModels>('GET', `/bots/${bot}/models${session ? `?session=${encodeURIComponent(session)}` : ''}`),
   pools: () => request<PoolSettings>('GET', '/pools'),
   poolFunding: (pool: string) => request<PoolFunding>('GET', `/pools/${encodeURIComponent(pool)}/funding`),
-  approveFunding: (pool: string, body: { budget_usd: string; expires_at: string; accounts: string[]; note: string }) =>
+  approveFunding: (pool: string, body: FundingApproval) =>
     request<PoolSettings>('POST', `/pools/${encodeURIComponent(pool)}/funding`, body),
+  weeklyProviderBudget: (family: string) =>
+    request<WeeklyProviderBudget>('GET', `/pools/weekly/${encodeURIComponent(family)}`),
+  setWeeklyProviderConsent: (family: string, body: WeeklyConsentWrite) =>
+    request<WeeklyProviderBudget>('PUT', `/pools/weekly/${encodeURIComponent(family)}`, body),
+  assertWeeklyMapping: (body: {
+    identity: string
+    owner: string
+    account_label: string
+    assertion: string
+    attempt_ids: string[]
+    family: string
+  }) => request<WeeklyProviderBudget>('POST', '/pools/weekly-mapping', body),
   poolEnvelopes: (pool: string) =>
     request<PoolEnvelopeCandidates>('GET', `/pools/${encodeURIComponent(pool)}/envelope`),
   linkPoolEnvelope: (pool: string, body: { envelope?: string; fund?: boolean; restore?: boolean; note: string }) =>

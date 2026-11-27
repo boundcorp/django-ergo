@@ -106,6 +106,8 @@ def approve(client, pool="paid", amount="5"):
             "expires_at": "2099-12-31T00:00:00Z",
             "accounts": [a["identity"] for a in details.json()["accounts"]],
             "note": "Explicit synthetic API test consent",
+            "budget_period": details.json()["budget_period"],
+            "version": details.json()["version"],
         },
     )
     assert response.status_code == 200, response.content

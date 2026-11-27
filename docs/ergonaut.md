@@ -1165,3 +1165,12 @@ makes even an already queued cleanup task a no-op before database/network work.
 Cleanup requires controller-confirmed retirement and preserves active execution
 and transfer fences. See [the analysis rollout plan](isolated-analysis-plan.md)
 for the unresolved B7 container-log quota gate and all infrastructure approvals.
+
+The Pools funding controls also inspect and set explicit recurring UTC weekly (ISO week)
+provider consent. Admin account assertions are separate from funding; provider
+caps aggregate every bot, thread, model and key. Existing cumulative grants stay
+cumulative unless new recurring funding is explicitly approved. See
+[Recurring provider budgets](model-pools.md#recurring-provider-budgets-utc-iso-weeks)
+for versioned API schemas, migration behavior and the conservative treatment of
+historical/unknown exposure. No provider consent or account state is created by
+installation or config alone.

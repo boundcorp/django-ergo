@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import type {
   ChatPools,
+  FundingApproval,
   PoolEnvelopeCandidates,
   PoolFunding,
   PoolGrant,
@@ -10,6 +11,7 @@ import type {
 } from '../api'
 import { api } from '../api'
 import { fromLocalInput, toLocalInput } from '../localTime'
+import { WeeklyFunding } from './WeeklyFunding'
 
 // Model pools (django_ergo.bots.pools, docs/model-pools.md): the Routing page's Pools section,
 // the chat's pool picker and the refusal a chat stops on. Every list here comes from the same
@@ -207,9 +209,15 @@ export function FundingForm({
 }: {
   details: PoolFunding
   busy: boolean
-  onApprove: (body: { budget_usd: string; expires_at: string; accounts: string[]; note: string }) => Promise<void>
+  onApprove: (body: FundingApproval) => Promise<void>
 }) {
   const [amount, setAmount] = useState('')
+  // With no approval yet the form offers the weekly recurring period; an existing approval keeps its own.
+  const approved = (details.approval?.budget_period ?? null) as 'cumulative' | 'iso_week_utc' | null
+  const current = approved ?? 'cumulative'
+  const [period, setPeriod] = useState<'cumulative' | 'iso_week_utc'>(approved ?? 'iso_week_utc')
+  const [convert, setConvert] = useState(false)
+  const converting = approved !== null && period !== current
   const [expiry, setExpiry] = useState('')
   const [accounts, setAccounts] = useState<string[]>([])
   const [note, setNote] = useState('')
@@ -221,7 +229,16 @@ export function FundingForm({
         e.preventDefault()
         try {
           setError('')
-          await onApprove({ budget_usd: amount.trim(), expires_at: fromLocalInput(expiry), accounts, note })
+          await onApprove({
+            budget_usd: amount.trim(),
+            expires_at: fromLocalInput(expiry),
+            accounts,
+            note,
+            budget_period: period,
+            version: details.version ?? 0,
+            ...(converting && convert ? { convert_period: true } : {}),
+          })
+          setConvert(false)
           setAmount('')
           setExpiry('')
           setAccounts([])
@@ -239,17 +256,43 @@ export function FundingForm({
       </p>
       {details.approval && (
         <p className="text-xs">
-          Approved cumulative cap {money(details.approval.budget_usd)} until{' '}
-          {new Date(details.approval.expires_at).toLocaleString()}.
+          Approved {details.approval.budget_period === 'iso_week_utc' ? 'recurring UTC weekly' : 'cumulative'} cap{' '}
+          {money(details.approval.budget_usd)} until {new Date(details.approval.expires_at).toLocaleString()}.
         </p>
       )}
       <p className="text-xs text-muted">
         Approve only the amount, expiry and accounts you authorize. Changing this approval keeps all prior use and
         holds.
       </p>
+      <label className="text-xs">
+        Funding period
+        <select aria-label="Funding period" value={period} onChange={e => setPeriod(e.target.value as typeof period)}>
+          <option value="cumulative">Cumulative lifetime cap</option>
+          <option value="iso_week_utc">Recurring ISO week (UTC, Monday 00:00 to Monday 00:00)</option>
+        </select>
+      </label>
+      {converting && (
+        <label className="text-xs">
+          <input
+            type="checkbox"
+            aria-label="Convert funding period"
+            checked={convert}
+            onChange={e => setConvert(e.target.checked)}
+          />{' '}
+          Convert this approval from {current === 'iso_week_utc' ? 'recurring weekly' : 'cumulative'} to{' '}
+          {period === 'iso_week_utc' ? 'recurring weekly' : 'cumulative'} (audited)
+        </label>
+      )}
+      {period === 'iso_week_utc' && (
+        <p className="text-xs">
+          Explicit recurring approval renews each UTC ISO week (Monday 00:00 UTC to the next Monday 00:00 UTC) until
+          expiry. Each provider also requires admin account mapping and independent recurring consent; prior unresolved
+          holds carry forward.
+        </p>
+      )}
       <div className="flex flex-wrap gap-2">
         <label className="flex flex-col text-xs">
-          Approve cumulative USD cap
+          {period === 'cumulative' ? 'Approve cumulative USD cap' : 'Approve recurring USD weekly cap'}
           <input
             aria-label="Approve cumulative USD cap"
             className="rounded-control border border-stroke bg-transparent px-2 py-1"
@@ -361,6 +404,7 @@ function FundingControls({
       {details && (
         <FundingForm details={details} busy={busy} onApprove={body => mutate(() => api.approveFunding(name, body))} />
       )}
+      {details && <WeeklyFunding details={details} admin={admin} />}
       {admin && candidates && (
         <div className="flex flex-col gap-2 text-xs">
           <p className="font-semibold">Admin: reconcile funding history</p>

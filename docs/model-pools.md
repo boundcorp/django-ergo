@@ -582,3 +582,144 @@ privacy:
 `private_pools.personal` stays as it is; it is already the personal privacy
 policy. Also update the stale comment above `private_pools` in providers.yaml
 (private routing is enforced).
+
+## Recurring provider budgets (UTC ISO weeks)
+
+The recurring period is the **ISO week in UTC**: Monday 00:00 UTC up to (not
+including) the next Monday 00:00 UTC. A week can contain the end of one month
+or year (ISO week 53, or the week with January 1) and is never split at that
+boundary. Weekly (`iso_week_utc`) is the only recurring period; the only other
+funding kind is `cumulative`.
+
+
+Recurring funding is a separate, explicit consent mode. Existing funding and
+issued grants remain **cumulative**; migration 0065 defaults every existing row
+to that mode and backfills only the attempt's original UTC ISO week (`budget_week`, the Monday it began). It creates no
+provider mapping or consent and never changes historical costs/reservations.
+Unmapped historical paid attempts, or unknown outcomes without a positive bound,
+block recurring activation until an admin maps and reconciles them. Unknown is
+never treated as zero.
+
+`ProviderBudgetFamily` has one immutable deployment-wide identity per vendor:
+`openai`, `google` (Gemini), and `anthropic`. Its owner is immutable. An admin
+asserts each non-secret account identity with an actor, billing-account label and
+assertion. Identity includes engine type, API transport, credential **source
+name**, account metadata and endpoint, but excludes provider aliases and model
+names. No key value is inspected, compared, hashed or stored. Different key source
+names and multiple billing accounts still draw from the same vendor bucket;
+a new source needs its own explicit mapping. Model/provider/pool renames, config
+removal/restoration, funding reapproval and key aliases never create fresh money.
+
+`ProviderWeeklyConsent` is append-only, versioned, authenticated recurring
+consent with its own enabled switch, USD cap per week (hard maximum **$100 per provider per week**; the actual cap is chosen in the consent write, never defaulted in code),
+UTC timezone, validity window and actor. Mapping alone grants nothing. Every send
+intersects consent with current config, privacy, grants, provider/pool switches
+and the paid pause. Subscription routes remain outside these metered buckets.
+Auto-rollover remains off and recurring funding never permits paid coding.
+
+A pool ceiling in providers.yaml is an overall configuration limit, separate
+from the weekly vendor caps: a ceiling smaller than the sum of the vendor caps
+additionally limits their combined spend. Ceilings are configuration only; they
+never grant or raise spending permission. Keep the primary three
+subscription routes and all existing personal privacy restrictions as configured.
+A schema example for a separate skillbuilder PR (synthetic prices; substitute
+reviewed exact tariffs, and omit Anthropic if no named key is available):
+
+```yaml
+auto_rollover: false
+providers:
+  # Existing claude, chatgpt and xai-oauth subscription definitions stay here.
+  api-openai:
+    type: openai
+    api_key_env: OPENAI_API_KEY
+    enabled: true
+    models:
+      - {name: gpt-6.1-sol, price: {input: "1", cached: "0.1", output: "10"}}
+  api-gemini:
+    type: google
+    api_key_env: GEMINI_API_KEY
+    enabled: true
+    models:
+      - {name: gemini-3-flash-preview, price: {input: "0.5", cached: "0.05", output: "3"}}
+  api-anthropic:
+    type: claude
+    api_key_env: ANTHROPIC_API_KEY
+    enabled: false
+    models:
+      - {name: claude-opus-5-5, price: {input: "5", cached: "0.5", cache_write: "6.25", output: "25"}}
+pools:
+  - name: subscriptions
+    routes: [claude, chatgpt, xai-oauth]
+  - name: secondary-api
+    owner: lee
+    routes: [api-openai, api-gemini, api-anthropic]
+    budget_usd: 300
+    expires: 2027-12-31
+    max_output_tokens: 16000
+    rollover_out: false
+    allow_auto_entry: false
+# Preserve the existing private_pools and privacy sections verbatim.
+```
+
+Use the Funding UI to perform three distinct explicit actions, after any
+separately authorized rollout; this implementation authorizes no activation:
+
+1. An admin selects each configured account identity, names its actual billing
+   account, and asserts the vendor/account mapping and stable owner. Historical
+   paid attempt UUIDs may be mapped explicitly in this step; mapping retains
+   their costs, holds and original weeks. It does not invent missing billing
+   evidence or release unknown holds.
+2. The family owner or an admin inspects `GET /api/pools/weekly/openai` (similarly
+   `google`/`anthropic`) and explicitly saves recurring terms with the version it
+   read. `PUT` body example below. Each provider has an independent enabled switch.
+3. The pool owner/admin inspects `GET /api/pools/secondary-api/funding`, chooses
+   the exact accounts/models, and explicitly approves pool funding with
+   `budget_period: iso_week_utc` (UTC ISO week, Monday 00:00 to Monday 00:00), an amount, expiry and that response's
+   `version`. Every funding write must state `version` and `budget_period`;
+   a stale version returns 409, and a change of kind (cumulative <-> weekly)
+   is refused unless the request also sets `convert_period: true`, which is
+   recorded in the audit trail (`converted_from`). Without this explicit recurring pool approval a cumulative grant
+   stays cumulative, even when provider-level recurring consent exists.
+
+```json
+{
+  "version": 0,
+  "weekly_usd": "25",
+  "enabled": true,
+  "valid_from": "2026-11-26T00:00:00Z",
+  "expires_at": "2027-12-31T00:00:00Z",
+  "timezone": "UTC",
+  "note": "Explicit recurring consent, $25 per UTC ISO week until expiry (example amount)"
+}
+```
+
+`POST /api/pools/weekly-mapping` requires admin authentication and a currently
+configured exact transport identity (returned by the funding inspection). Its
+body contains `identity`, `owner` (username), `account_label`, `assertion`, and
+optional `attempt_ids` and `family`. The vendor family is part of the audited
+assertion, not read from the wire type: it must agree with the endpoint host
+(`api.openai.com`, `generativelanguage.googleapis.com`, `api.anthropic.com`),
+native `google`/`claude` wires only map to their own vendor, an OpenAI-compatible
+endpoint of any other vendor can't join a family, and one credential source
+and account can belong to a single family, so an alias or endpoint never opens
+a second cap. The history gate is per vendor: unmapped or unbounded history
+recorded against vendor X (or of unknown vendor) blocks only X's recurring
+budget (unknown-vendor rows block every family), and private-pool ledger rows
+(for example the personal Fireworks pool) never block or need mapping.
+That mapping is permanent; corrections cannot rewrite
+its vendor, owner or prior attempt attribution. Consent/funding stale versions
+return 409, and malformed or unapproved terms fail closed. Funding inspection
+shows its period, actor, version and timezone. Provider inspection shows the
+week (its Monday), global spend, outstanding exposure and each account assertion's actor.
+
+Every attempt takes the vendor lock **before** its owner-family and child-envelope
+locks, re-reads authority, and atomically records the exact adapter's worst-case
+reservation. Settlement takes the same locks and uses the existing adapter's
+exact usage pricing. The attempt keeps its original `budget_week`: an attempt
+that starts Sunday 23:59:59 UTC and settles after Monday 00:00 UTC charges the
+week it started. Outstanding/unknown exposure from an earlier week reduces every
+later week's availability until reconciled; it is not discarded at the
+Sunday/Monday boundary. An explicitly recurring root uses weekly totals; existing cumulative
+owner grants, queued revisions and issued child grants keep their additional
+lifetime caps. All prior revisions, revocations, holds and priced costs remain
+in the ledger. Increasing config ceilings alone cannot increase explicit consent.

@@ -1114,10 +1114,10 @@ def test_r13_one_migration_leaf_after_the_launch_journal():
     assert ("django_ergo", "0062_explicit_funding_and_paid_latch") in after.dependencies
     analysis = loader.disk_migrations[("django_ergo", "0064_isolated_analysis")]
     assert ("django_ergo", "0063_google_engine_signatures") in analysis.dependencies
-    # Allow later additive migrations while requiring analysis in the sole chain.
     assert ("django_ergo", "0064_isolated_analysis") in loader.graph.forwards_plan(
         leaves[0]
     )
+    assert leaves == [("django_ergo", "0065_provider_weekly_budgets")]
 
 
 @pytest.mark.django_db(transaction=True)
