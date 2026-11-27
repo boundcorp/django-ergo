@@ -69,6 +69,7 @@ from django_ergo.conversation.attachments import read_text
 from django_ergo.conversation.attachments import replace_session_file
 from django_ergo.conversation.attachments import save_session_file
 from django_ergo.conversation.context import TextContextSource
+from django_ergo.conversation.text_window import read_window
 from django_ergo.conversation.video import is_video
 from django_ergo.plugins._common import fetch_file
 
@@ -102,6 +103,8 @@ def describe_row(row: ConversationAttachment) -> dict:
         "filename": row.filename,
         "media_type": row.media_type,
         "size": row.size,
+        "sha256": row.sha256,
+        "version": (row.metadata or {}).get("version", 1),
         "source": row.source,
         "updated_at": row.updated_at.isoformat(timespec="seconds"),
     }
@@ -250,9 +253,37 @@ class AttachmentsPlugin(BotPlugin):
             rows = rows.filter(archived_at__isnull=True)
         return [describe_row(r) for r in rows.order_by("-updated_at")[:MAX_LISTED]]
 
-    def read(self, ctx: ToolContext, attachment_id: str, session_id: str = "") -> str:
+    def read(
+        self,
+        ctx: ToolContext,
+        attachment_id: str,
+        session_id: str = "",
+        start_line: int | None = None,
+        end_line: int | None = None,
+    ) -> str:
         row = self.file_for(ctx, attachment_id, session_id)
-        text = f"# {row.filename} ({row.media_type})\n\n{read_text(row)}"
+        if is_text(row.media_type) and row.file:
+            with row.file.open("rb") as handle:
+                data = handle.read(self.max_bytes + 1)
+            if len(data) > self.max_bytes:
+                if start_line is not None or end_line is not None:
+                    msg = f"File exceeds the {self.max_bytes}-byte ranged read limit"
+                    raise ValueError(msg)
+                # Preserve the legacy bounded preview for larger uploads.
+                content = read_text(row)
+            else:
+                content = data.decode("utf-8", errors="replace")
+                content = read_window(
+                    content,
+                    row.filename,
+                    start_line=start_line,
+                    end_line=end_line,
+                    sha256=row.sha256,
+                    version=(row.metadata or {}).get("version", 1),
+                )
+        else:
+            content = read_text(row)
+        text = f"# {row.filename} ({row.media_type})\n\n{content}"
         if not is_text(row.media_type):
             text += "\n\nThis isn't a text file; use ergo_attachments_look to see what's in it."
         return text
@@ -667,7 +698,8 @@ class AttachmentsPlugin(BotPlugin):
             takes_context=True,
             description=(
                 "Read a file: its text, or a description of an image, audio clip or "
-                "binary file. By id, or by filename in this chat or another (session_id)."
+                "binary file. By id, or by filename in this chat or another (session_id). "
+                "Text is capped at 50,000 characters; use line ranges to continue."
             ),
             parameters={
                 "attachment_id": {
@@ -678,11 +710,19 @@ class AttachmentsPlugin(BotPlugin):
                     "type": "string",
                     "description": "The chat a filename is in (default: this one)",
                 },
+                "start_line": {"type": "integer", "description": "First line, 1-based"},
+                "end_line": {"type": "integer", "description": "Last line, inclusive"},
             },
             required=["attachment_id"],
         )
-        def read(ctx: ToolContext, attachment_id: str, session_id: str = "") -> str:
-            return plugin.read(ctx, attachment_id, session_id)
+        def read(
+            ctx: ToolContext,
+            attachment_id: str,
+            session_id: str = "",
+            start_line: int | None = None,
+            end_line: int | None = None,
+        ) -> str:
+            return plugin.read(ctx, attachment_id, session_id, start_line, end_line)
 
         @bot_tool(
             name="ergo_attachments_create",

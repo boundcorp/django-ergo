@@ -42,6 +42,14 @@ Its `attachments` skill gives:
 | `ergo_attachments_create`, `ergo_attachments_update` | write or replace a text file in this chat |
 | `ergo_attachments_archive`, `ergo_attachments_unarchive` | clear old files out of the working set (below) |
 
+Text reads accept optional 1-based inclusive `start_line` and `end_line`.
+Ranged or large reads return numbered lines, a content hash prefix and version,
+and a continuation line when more lines fit in the selected range. Attachment
+list and write receipts expose the full SHA-256 and version. Text output
+is limited to 50,000 characters; a single longer line is cut explicitly.
+Ranged reads are available for files up to `max_bytes`; larger uploads retain
+the legacy bounded preview. Short, un-ranged text keeps its existing format.
+
 While the skill is loaded, each turn's context lists the chat's files; while
 it isn't, the skill list shows how many there are, so the bot knows to load
 it when someone uploads something. The bot writes only into its own chat

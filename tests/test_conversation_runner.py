@@ -1,6 +1,9 @@
 """Tests for run_conversation_turn and the shared tool dispatch."""
 
+import json
 from unittest.mock import MagicMock
+
+import pytest
 
 from django_ergo.conversation.runner import PendingApproval
 from django_ergo.conversation.tool_dispatch import collect_toolkit_schemas
@@ -40,7 +43,44 @@ class TestDispatchTool:
 
     def test_any_tool_failure_goes_back_as_an_error(self):
         broken = toolkit("boom", error=LookupError("no such row"))
-        assert dispatch_tool("boom", {}, [broken]) == ("no such row", True)
+        result, is_error = dispatch_tool("boom", {}, [broken])
+        assert is_error
+        assert json.loads(result)["category"] == "internal"
+        assert "no such row" not in result
+
+    def test_legacy_value_error_and_structured_failures(self):
+        assert dispatch_tool(
+            "bad", {}, [toolkit("bad", error=ValueError("bad input"))]
+        ) == ("bad input", True)
+        result, is_error = dispatch_tool(
+            "denied", {}, [toolkit("denied", error=PermissionError("secret"))]
+        )
+        assert is_error and json.loads(result)["category"] == "permission_denied"
+        assert "secret" not in result
+        result, is_error = dispatch_tool(
+            "timeout", {}, [toolkit("timeout", error=TimeoutError())]
+        )
+        assert is_error and json.loads(result)["state_changed"] == "unknown"
+
+    def test_tool_error_fields_and_retry_safety(self):
+        from django_ergo.conversation.tool_dispatch import ToolError
+
+        result, is_error = dispatch_tool(
+            "bad", {}, [toolkit("bad", error=ToolError("missing", item="x"))]
+        )
+        assert is_error and json.loads(result)["item"] == "x"
+        assert json.loads(result)["state_changed"] == "no"
+        with pytest.raises(ValueError, match="retryable requires"):
+            ToolError("uncertain", retryable=True, state_changed="unknown")
+
+    def test_requests_errors_do_not_leak_details(self):
+        import requests
+
+        result, is_error = dispatch_tool(
+            "remote", {}, [toolkit("remote", error=requests.RequestException("secret"))]
+        )
+        assert is_error and json.loads(result)["category"] == "upstream_unavailable"
+        assert "secret" not in result
 
     def test_unknown_tool(self):
         assert dispatch_tool("nope", {}, []) == ("Unknown tool: nope", True)

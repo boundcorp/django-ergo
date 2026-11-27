@@ -2340,6 +2340,9 @@ gets `ergo_attachments_list`, `ergo_attachments_read`,
 `ergo_attachments_create` and `ergo_attachments_update`. It writes text
 files only in its own session, reads files in the same user's other
 sessions, and sees the session's file list in every turn's context.
+`ergo_attachments_read` supports inclusive line ranges, with a 50,000-character
+text budget and a version/hash marker. Ranges require a file no larger than the
+plugin's `max_bytes`; larger uploads retain the existing bounded preview.
 When `import_roots` is configured, `ergo_attachments_import(host, path)` asks
 for approval, then copies one file from the configured absolute root on the
 named SSH host (`local` means this host) into this chat. It rejects paths

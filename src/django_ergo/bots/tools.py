@@ -67,6 +67,9 @@ from django_ergo.conversation.adapters import OpenAIToolAdapter
 from django_ergo.conversation.images import ToolResult
 from django_ergo.conversation.images import as_tool_result
 from django_ergo.conversation.inference_policy import PolicyError
+from django_ergo.conversation.tool_dispatch import (
+    ToolError as ToolError,  # noqa: PLC0414
+)
 from django_ergo.conversation.toolkit import ApprovalPreview
 from django_ergo.conversation.toolkit import Toolkit
 from django_ergo.conversation.toolkit import approval_decision
