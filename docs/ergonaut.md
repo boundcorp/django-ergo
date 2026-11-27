@@ -468,7 +468,13 @@ unscoped devbox drafts are not migrated because their owner is unknown.
   and pages open as tabs above the transcript. The transcript follows new
   messages only while you're at the bottom; scrolled up, it stays put and a
   "Jump to bottom" button (or "New messages") takes you back. Sending a
-  message always scrolls to the bottom. When a thread this chat asked for
+  message always scrolls to the bottom. A long chat loads the newest page
+  and keeps a See more button for older ones. Scrolling until that button
+  is in the transcript (the same scroller on a phone and on a wide screen)
+  loads the next older page; the messages you were reading stay put, and
+  the button moves up as they arrive. It stays clickable, shows Loading…
+  while a page is in flight, and does not retry a failed load until you
+  press it. When there is no older page, the button goes away. When a thread this chat asked for
   something is paused on an approval, the "Waiting on" banner shows the tool
   calls with Approve and Reject, and the chat sits under Waiting on you as
   Blocked, so the approval is answered without opening the other thread.

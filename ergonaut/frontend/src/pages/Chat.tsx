@@ -51,6 +51,16 @@ import { useSessionUsage } from '../components/UsageSparkline'
 import { UsageHistory } from '../components/UsageHistory'
 import { agoLong } from '../time'
 import { linkedLine, messageAnchor } from '../messageLink'
+import {
+  captureScrollAnchor,
+  elementVisibleInRoot,
+  historyScrollRoot,
+  nearBottom,
+  restoreScrollAnchor,
+  shouldLoadOlder,
+  type OlderLoadTrigger,
+  type ScrollAnchor,
+} from '../seeMore'
 
 /** Fold a live update into the transcript: messages replace by line, calls by id. */
 function merge(detail: SessionDetail, messages: Message[], calls: Call[]): SessionDetail {
@@ -224,9 +234,11 @@ export function Chat({ onChange }: { onChange: () => void }) {
     })
   }, [id])
 
-  // Older messages of a long chat, a page at a time; the view stays where it was.
+  // Older messages of a long chat, a page at a time. The view stays on the message that was in
+  // frame; See more loads itself when that button scrolls into the transcript, and stays clickable.
   const transcript = useRef<HTMLDivElement>(null)
-  const keepScroll = useRef<number | null>(null)
+  const seeMore = useRef<HTMLButtonElement>(null)
+  const keepScroll = useRef<ScrollAnchor | null>(null)
   const skipScroll = useRef(false)
   // The view follows new messages only while it's at the bottom; scrolled up, it stays put.
   const atBottom = useRef(true)
@@ -234,16 +246,38 @@ export function Chat({ onChange }: { onChange: () => void }) {
   const [unseen, setUnseen] = useState(false)
   // The newest line the reader has had in view; older pages loading in don't count as new.
   const seenLine = useRef(-1)
+  // One older-page request at a time. `flight` drops a response after a chat switch or unmount.
+  const flight = useRef(0)
+  const olderInFlight = useRef(false)
+  const olderFailed = useRef(false)
+  const placed = useRef(false)
+  const seeMoreInView = useRef(false)
+  const [loadingOlder, setLoadingOlder] = useState(false)
+  const [olderError, setOlderError] = useState(false)
+  const loadOlderRef = useRef<(trigger: OlderLoadTrigger) => Promise<void>>(async () => {})
+
+  function buttonVisible(): boolean {
+    const root = transcript.current
+    const button = seeMore.current
+    if (!root || !button) return false
+    const view = root.getBoundingClientRect()
+    const box = button.getBoundingClientRect()
+    // Not laid out yet (or hidden): the observer flag is the visibility signal.
+    if (view.height === 0 || box.height === 0) return seeMoreInView.current
+    return elementVisibleInRoot(historyScrollRoot(root), button)
+  }
   function onTranscriptScroll() {
     const el = transcript.current
     if (!el) return
-    atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80
+    atBottom.current = nearBottom(el)
     setScrolledUp(!atBottom.current)
     if (atBottom.current) setUnseen(false)
     if (window.matchMedia('(max-width: 640px)').matches) {
       const next = el.scrollTop > 32 ? '1' : ''
       if (document.documentElement.dataset.chatScrolled !== next) document.documentElement.dataset.chatScrolled = next
     }
+    // The observer can report the button before this scroll updates atBottom.
+    if (!atBottom.current) void loadOlderRef.current('auto')
   }
   // Scrolls the message list itself. scrollIntoView would also scroll every ancestor, including the
   // page, which is how the composer used to end up at the top of the screen with the chat above it.
@@ -257,39 +291,97 @@ export function Chat({ onChange }: { onChange: () => void }) {
     setUnseen(false)
     pinToBottom(behavior)
   }
-  const [loadingOlder, setLoadingOlder] = useState(false)
-  async function loadOlder() {
-    if (!detail?.has_more || detail.first_line == null || loadingOlder) return
+  async function loadOlder(trigger: OlderLoadTrigger = 'manual') {
+    const current = latest.current
+    const visible = trigger === 'manual' ? true : buttonVisible()
+    if (
+      !shouldLoadOlder({
+        hasMore: Boolean(current?.session.id === id && current.has_more && current.first_line != null),
+        inFlight: olderInFlight.current,
+        failed: olderFailed.current,
+        placed: placed.current,
+        atBottom: atBottom.current,
+        visible,
+        trigger,
+      }) ||
+      !current ||
+      current.first_line == null ||
+      current.session.id !== id
+    )
+      return
+    if (trigger === 'manual') {
+      olderFailed.current = false
+      setOlderError(false)
+    }
+    const sessionId = id
+    const before = current.first_line
+    const ticket = flight.current
+    olderInFlight.current = true
     setLoadingOlder(true)
     const el = transcript.current
     try {
-      const page = await api.session(id, detail.first_line)
-      keepScroll.current = el ? el.scrollHeight - el.scrollTop : null
+      const page = await api.session(sessionId, before)
+      if (ticket !== flight.current || latest.current?.session.id !== sessionId) return
+      if (latest.current.first_line !== before) return
+      if (page.has_more && (page.first_line == null || page.first_line >= before)) {
+        throw new Error('History pagination did not advance.')
+      }
+      if (el && transcript.current === el) keepScroll.current = captureScrollAnchor(el)
+      olderFailed.current = false
+      setOlderError(false)
       setDetail(d =>
-        d ? { ...merge(d, page.messages, page.calls), first_line: page.first_line, has_more: page.has_more } : d,
+        d && d.session.id === sessionId && d.first_line === before
+          ? { ...merge(d, page.messages, page.calls), first_line: page.first_line, has_more: page.has_more }
+          : d,
       )
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      if (ticket !== flight.current || latest.current?.session.id !== sessionId) return
+      olderFailed.current = true
+      setOlderError(true)
+      const message = e instanceof Error ? e.message : String(e)
+      setError(`${message} Press See more to try again.`)
     } finally {
-      setLoadingOlder(false)
+      if (ticket === flight.current) {
+        olderInFlight.current = false
+        setLoadingOlder(false)
+      }
     }
   }
+  loadOlderRef.current = loadOlder
   useLayoutEffect(() => {
     const el = transcript.current
-    if (keepScroll.current == null || !el) return
-    el.scrollTop = el.scrollHeight - keepScroll.current
+    const anchor = keepScroll.current
+    if (!anchor || !el) return
+    restoreScrollAnchor(el, anchor)
     keepScroll.current = null
     skipScroll.current = true
+    atBottom.current = nearBottom(el)
+    setScrolledUp(!atBottom.current)
   }, [detail])
 
   useEffect(() => {
+    flight.current += 1
+    olderInFlight.current = false
+    olderFailed.current = false
+    seeMoreInView.current = false
+    placed.current = false
+    setLoadingOlder(false)
+    setOlderError(false)
+    setError('')
     setDetail(null)
     atBottom.current = true
     setScrolledUp(false)
     setUnseen(false)
     setOpenPin(null)
     setFiles([])
-    load().catch(e => setError(String(e.message ?? e)))
+    const ticket = flight.current
+    load().catch(e => {
+      if (ticket === flight.current) setError(String(e.message ?? e))
+    })
+    return () => {
+      flight.current += 1
+      olderInFlight.current = false
+    }
   }, [load])
 
   // A bot's new file is saved while its tool runs; the tool's result message arrives right after.
@@ -401,23 +493,54 @@ export function Chat({ onChange }: { onChange: () => void }) {
     if (target == null || !loaded) return
     atBottom.current = false
     let cancelled = false
+    const sessionId = id
+    const start = latest.current
+    const needsPages = Boolean(start?.has_more && start.first_line != null && start.first_line > target)
+    const ticket = needsPages ? ++flight.current : flight.current
+    if (needsPages) {
+      olderInFlight.current = true
+      setLoadingOlder(true)
+    }
     ;(async () => {
-      let d = latest.current
-      while (d && d.has_more && d.first_line != null && d.first_line > target) {
-        const page = await api.session(id, d.first_line, 200)
-        if (cancelled) return
-        const add = (prev: SessionDetail) => ({
-          ...merge(prev, page.messages, page.calls),
-          first_line: page.first_line,
-          has_more: page.has_more,
-        })
-        d = add(d)
-        setDetail(prev => (prev ? add(prev) : prev))
+      try {
+        let d = latest.current
+        while (d && d.session.id === sessionId && d.has_more && d.first_line != null && d.first_line > target) {
+          const before = d.first_line
+          const page = await api.session(sessionId, before, 200)
+          if (cancelled || ticket !== flight.current) return
+          if (latest.current?.session.id !== sessionId) return
+          if (page.has_more && (page.first_line == null || page.first_line >= before)) {
+            throw new Error('History pagination did not advance.')
+          }
+          const add = (prev: SessionDetail) => ({
+            ...merge(prev, page.messages, page.calls),
+            first_line: page.first_line,
+            has_more: page.has_more,
+          })
+          d = add(d)
+          setDetail(prev => (prev && prev.session.id === sessionId && prev.first_line === before ? add(prev) : prev))
+        }
+        if (!cancelled && ticket === flight.current) setReveal(target)
+      } catch (e) {
+        if (cancelled || ticket !== flight.current) return
+        olderFailed.current = true
+        setOlderError(true)
+        const message = e instanceof Error ? e.message : String(e)
+        setError(`${message} Press See more to try again.`)
+      } finally {
+        if (needsPages && ticket === flight.current) {
+          olderInFlight.current = false
+          setLoadingOlder(false)
+        }
       }
-      if (!cancelled) setReveal(target)
-    })().catch(e => setError(e instanceof Error ? e.message : String(e)))
+    })()
     return () => {
       cancelled = true
+      if (needsPages) {
+        flight.current += 1
+        olderInFlight.current = false
+        setLoadingOlder(false)
+      }
     }
   }, [id, loaded, target])
   useLayoutEffect(() => {
@@ -441,13 +564,41 @@ export function Chat({ onChange }: { onChange: () => void }) {
   useEffect(() => {
     if (skipScroll.current) {
       skipScroll.current = false
+      placed.current = true
       return
     }
+    // Opening a chat pins to the latest message. A scroll event before that must not look like
+    // the reader scrolled up and start paging history. A message link opts out: it stays put.
+    if (!placed.current && target == null) {
+      atBottom.current = true
+      setScrolledUp(false)
+    }
     if (atBottom.current) pinToBottom()
+    placed.current = true
     const newest = detail?.messages[detail.messages.length - 1]?.line ?? -1
     if (!atBottom.current && newest > seenLine.current && seenLine.current >= 0) setUnseen(true)
     seenLine.current = newest
-  }, [detail, busy])
+  }, [detail, busy, target])
+
+  // See more loads itself once it is inside the transcript scroller. Phone and desktop both scroll
+  // that element, not the page; a scrollable ancestor is used if the layout ever moves the root.
+  useEffect(() => {
+    const box = transcript.current
+    const button = seeMore.current
+    if (!box || !button || !detail?.has_more || openPin) return
+    if (typeof IntersectionObserver === 'undefined') return
+    const root = historyScrollRoot(box)
+    const observer = new IntersectionObserver(
+      entries => {
+        const visible = entries.some(entry => entry.isIntersecting && entry.target === button)
+        seeMoreInView.current = visible
+        if (visible) void loadOlderRef.current('auto')
+      },
+      { root, rootMargin: '0px', threshold: 0 },
+    )
+    observer.observe(button)
+    return () => observer.disconnect()
+  }, [id, detail?.has_more, detail?.first_line, loadingOlder, openPin])
 
   // The list keeps its place at the bottom when its own height changes (the phone keyboard opening,
   // the composer growing, the options sheet closing), but only if the reader was already there.
@@ -885,12 +1036,24 @@ export function Chat({ onChange }: { onChange: () => void }) {
           {detail.has_more && (
             <div className="mb-4 flex justify-center">
               <button
+                ref={seeMore}
+                type="button"
+                data-see-more
                 disabled={loadingOlder}
+                aria-busy={loadingOlder}
+                title={olderError ? 'Could not load older messages. Press to try again.' : 'Load older messages'}
                 className="rounded-full border border-stroke px-3 py-1 text-xs text-muted hover:bg-raised disabled:opacity-50"
-                onClick={loadOlder}
+                onClick={() => void loadOlder('manual')}
               >
                 {loadingOlder ? 'Loading…' : 'See more'}
               </button>
+              <span className="sr-only" aria-live="polite">
+                {loadingOlder
+                  ? 'Loading older messages'
+                  : olderError
+                    ? 'Could not load older messages. Press See more to try again.'
+                    : ''}
+              </span>
             </div>
           )}
           <Transcript
