@@ -1,0 +1,13 @@
+# Must match [project.optional-dependencies] analysis-runner in pyproject.toml
+# (tests/test_analysis_images.py checks). Regenerate runner.requirements.txt with:
+#   uv pip compile infra/analysis/runner.requirements.in --generate-hashes \
+#     --python-version 3.12 --python-platform x86_64-manylinux_2_28 \
+#     -o infra/analysis/runner.requirements.txt
+# setuptools/wheel build the package itself without network build isolation.
+pandas>=2.2,<3
+duckdb==1.4.4
+pyarrow>=18
+openpyxl>=3.1
+matplotlib>=3.8
+setuptools
+wheel

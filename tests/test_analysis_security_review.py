@@ -1,6 +1,7 @@
 """Independent adversarial regression tests; no live runtime or untrusted execution."""
 
 import copy
+import hashlib
 import json
 import queue
 import threading
@@ -26,6 +27,8 @@ from tests.test_analysis_runtime import KEY
 from tests.test_analysis_runtime import Runtime
 from tests.test_analysis_runtime import broker as runtime_broker
 from tests.test_analysis_runtime import uid
+
+LOG_RECORD = b'{"ok":true,"result":{"output":"fixture"}}'
 
 
 @pytest.fixture
@@ -208,13 +211,23 @@ def test_adapter_with_generated_kubernetes_client_over_http():  # noqa: C901
                                         "exitCode": 0,
                                         "reason": "Completed",
                                         "finishedAt": "2026-11-27T01:00:00Z",
+                                        # The executor's digest of its record.
+                                        "message": json.dumps(
+                                            {
+                                                "v": 1,
+                                                "bytes": len(LOG_RECORD),
+                                                "sha256": hashlib.sha256(
+                                                    LOG_RECORD
+                                                ).hexdigest(),
+                                            }
+                                        ),
                                     }
                                 },
                             }
                         ],
                     }
             elif path.endswith("/log"):
-                value = {"ok": True, "result": {"output": "fixture"}}
+                value = json.loads(LOG_RECORD)
             elif path not in objects:
                 status, value = (
                     404,
@@ -239,7 +252,7 @@ def test_adapter_with_generated_kubernetes_client_over_http():  # noqa: C901
                 assert body[1]["value"] == "1"
                 assert body[2]["value"] == []
                 objects.pop(path)
-            data = json.dumps(value).encode()
+            data = LOG_RECORD if path.endswith("/log") else json.dumps(value).encode()
             self.send_response(status)
             self.send_header(
                 "Content-Type",

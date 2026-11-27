@@ -1,6 +1,7 @@
 """Offline protocol/runtime tests. Fake Kubernetes is NOT an isolation smoke test."""
 
 import base64
+import hashlib
 import json
 import time
 import uuid
@@ -225,6 +226,8 @@ def test_kubernetes_spec_contains_boundary_constraints():
         "capabilities": {"drop": ["ALL"]},
     }
     assert container["resources"]["limits"]["memory"] == "512Mi"
+    assert container["terminationMessagePath"] == "/dev/termination-log"
+    assert container["terminationMessagePolicy"] == "File"
     assert {e["name"] for e in container["env"]} == {
         "ANALYSIS_REQUEST",
         "HOME",
@@ -270,6 +273,13 @@ def executor(tmp_path, monkeypatch):
     from django_ergo.analysis import executor
 
     monkeypatch.setattr(executor, "ROOT", tmp_path)
+    # In-process fixtures stand in for an isolated executor; the real isolation
+    # (non-dumpable PID 1 holding the only log descriptor) is exercised in
+    # test_analysis_log_isolation.py.
+    monkeypatch.setattr(executor, "LOG_FD", 1)
+    monkeypatch.setattr(executor, "log_stream_unreachable", lambda fd: True)
+    # Parsing runs in-process here; the forked parser child is covered there too.
+    monkeypatch.setattr(executor, "parse_in_child", lambda fn, request: fn(request))
     return executor
 
 
@@ -511,14 +521,56 @@ def test_malformed_or_lost_pod_result_cannot_block_reaping(broker, monkeypatch):
     ],
 )
 def test_kubernetes_rejects_malformed_pod_outputs(raw):
-    runtime = KubernetesRuntime(
-        core=SimpleNamespace(read_namespaced_pod_log=lambda *args, **kwargs: raw),
+    runtime = log_runtime(raw, termination_message(raw))
+    assert runtime.result(uid())["ok"] is False
+
+
+def termination_message(raw):
+    data = raw.encode()
+    return json.dumps(
+        {"v": 1, "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+    )
+
+
+def log_runtime(raw, message):
+    terminated = SimpleNamespace(message=message)
+    pod = SimpleNamespace(
+        status=SimpleNamespace(
+            container_statuses=[
+                SimpleNamespace(state=SimpleNamespace(terminated=terminated))
+            ]
+        )
+    )
+    return KubernetesRuntime(
+        core=SimpleNamespace(
+            read_namespaced_pod_log=lambda *args, **kwargs: raw,
+            read_namespaced_pod=lambda *args, **kwargs: pod,
+        ),
         namespace="analysis",
         image="registry/runner@sha256:" + "a" * 64,
         storage_class="hard-quota",
         runtime_class="gvisor",
     )
-    assert runtime.result(uid())["ok"] is False
+
+
+def test_kubernetes_result_requires_matching_termination_digest():
+    record = '{"ok":true,"result":{"output":"1\\n"}}'
+    assert log_runtime(record, termination_message(record)).result(uid()) == {
+        "ok": True,
+        "result": {"output": "1\n"},
+    }
+    forged = "ESCAPED" + record
+    for message in (
+        termination_message(record),  # user bytes ahead of the record
+        "",
+        None,
+        "{}",
+        '{"v":1,"bytes":1,"sha256":"zz"}',
+    ):
+        assert log_runtime(forged, message).result(uid()) == {
+            "ok": False,
+            "error": "Executor record failed integrity check",
+        }
 
 
 def test_cleanup_crash_retries_storage_without_resurrecting_workspace(

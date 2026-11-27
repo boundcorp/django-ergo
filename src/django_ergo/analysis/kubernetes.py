@@ -5,6 +5,8 @@ Requires an approved namespace with deny-all ingress/egress, hard PVC quotas,
 a sandbox RuntimeClass and kubelet podPidsLimit <= 64. Refuse unpinned images.
 """
 
+import hashlib
+import hmac
 import json
 import re
 
@@ -12,6 +14,12 @@ from django_ergo.analysis.protocol import MAX_RESPONSE
 from django_ergo.analysis.protocol import encode
 
 TERMINATION_FINALIZER = "analysis.ergonaut.dev/termination-observed"
+# The executor overwrites this file with {"v":1,"bytes":N,"sha256":...} for its
+# one log record. The kubelet keeps at most 4096 bytes of it, which is why the
+# result itself stays in the log. Admission (infra-octo ergo-analysis-job-pod)
+# must pin both fields; FallbackToLogsOnError would copy user-influenced bytes.
+TERMINATION_MESSAGE_PATH = "/dev/termination-log"
+TERMINATION_MESSAGE_POLICY = "File"
 
 
 class KubernetesRuntime:
@@ -95,6 +103,8 @@ class KubernetesRuntime:
                         "name": "executor",
                         "image": self.image,
                         "imagePullPolicy": "IfNotPresent",
+                        "terminationMessagePath": TERMINATION_MESSAGE_PATH,
+                        "terminationMessagePolicy": TERMINATION_MESSAGE_POLICY,
                         "command": [
                             "python",
                             "-I",
@@ -229,6 +239,27 @@ class KubernetesRuntime:
             if exc.status != 404:
                 raise
 
+    def termination_record(self, job):
+        pod = self.core.read_namespaced_pod(
+            "analysis-" + job, self.namespace, _request_timeout=(5, 15)
+        )
+        statuses = pod.status.container_statuses or []
+        terminated = statuses[0].state.terminated if len(statuses) == 1 else None
+        try:
+            record = json.loads((terminated and terminated.message) or "")
+        except ValueError:
+            return None
+        if (
+            not isinstance(record, dict)
+            or set(record) != {"v", "bytes", "sha256"}
+            or record["v"] != 1
+            or type(record["bytes"]) is not int
+            or not isinstance(record["sha256"], str)
+            or not re.fullmatch(r"[a-f0-9]{64}", record["sha256"])
+        ):
+            return None
+        return record
+
     def result(self, job):
         # Never log pod output: this is untrusted user data, not controller telemetry.
         raw = self.core.read_namespaced_pod_log(
@@ -239,6 +270,19 @@ class KubernetesRuntime:
         )
         if len(raw.encode()) > 64 * 1024:
             return {"ok": False, "error": "Output cap exceeded"}
+        # The executor writes exactly one record and then a digest of it to the
+        # termination message after every other process in the pod is dead. A
+        # log that does not match was not written (only) by the executor.
+        record = self.termination_record(job)
+        data = raw.encode()
+        if (
+            record is None
+            or record["bytes"] != len(data)
+            or not hmac.compare_digest(
+                record["sha256"], hashlib.sha256(data).hexdigest()
+            )
+        ):
+            return {"ok": False, "error": "Executor record failed integrity check"}
         try:
             value = json.loads(raw)
             if (
