@@ -206,6 +206,7 @@ def test_cleanup_preserves_export_and_retains_active_receipts(
         "django_ergo.management.commands.cleanup_analysis.configured_client",
         lambda: service.client,
     )
+    settings.ERGO_ANALYSIS_ENABLED = True
     stale = timezone.now() - timedelta(days=31)
     AnalysisWorkspace.objects.filter(pk=workspace.id).update(touched_at=stale)
     call_command("cleanup_analysis")

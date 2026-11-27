@@ -31,6 +31,15 @@ DEBUG = os.environ.get("DJANGO_DEBUG", "") == "true"
 HINDSIGHT_URL = os.environ.get("HINDSIGHT_URL", "")
 HINDSIGHT_API_KEY = os.environ.get("HINDSIGHT_API_KEY", "")
 
+# Analysis remains off until separately approved runtime acceptance.
+from django_ergo.analysis.config import controller_key, enabled_value, retention_days
+
+ERGO_ANALYSIS_ENABLED = enabled_value(os.environ.get("ERGO_ANALYSIS_ENABLED", "false"))
+ERGO_ANALYSIS_CONTROLLER_URL = os.environ.get("ERGO_ANALYSIS_CONTROLLER_URL", "")
+ERGO_ANALYSIS_CONTROLLER_KEY = controller_key(os.environ.get("ERGO_ANALYSIS_CONTROLLER_KEY", ""))
+ERGO_ANALYSIS_CONTROLLER_CA_FILE = os.environ.get("ERGO_ANALYSIS_CONTROLLER_CA_FILE", "")
+ERGO_ANALYSIS_RETENTION_DAYS = retention_days(os.environ.get("ERGO_ANALYSIS_RETENTION_DAYS", "30"))
+
 # Composer voice transcription is opt-in and uses the existing OpenAI key.
 VOICE_TRANSCRIPTION_ENABLED = env_variable_truthy("VOICE_TRANSCRIPTION_ENABLED")
 VOICE_TRANSCRIPTION_PROVIDER = os.environ.get("VOICE_TRANSCRIPTION_PROVIDER", "openai")
@@ -517,6 +526,12 @@ CELERY_BEAT_SCHEDULE = {
     # Pull request outcomes into Hindsight memory, for bots with pr_events set.
     "hindsight-pr-sync": {"task": "ergonaut.hindsight_sync_pull_requests", "schedule": 30 * 60},
 }
+if ERGO_ANALYSIS_ENABLED:
+    CELERY_BEAT_SCHEDULE["cleanup-analysis"] = {
+        "task": "ergonaut.cleanup_analysis",
+        "schedule": crontab(hour=3, minute=0),
+    }
+
 # Subscription usage windows (omp usage): the Routing page and the router read
 # them. 0 turns the periodic sync off (the Routing page's Refresh still works).
 USAGE_SYNC_SECONDS = float(os.environ.get("ERGONAUT_USAGE_SYNC_SECONDS") or 300)

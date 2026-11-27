@@ -1264,3 +1264,11 @@ def recover_stopped_session(session_id) -> int:
     return fail_dead_calls(
         StructuredCall.objects.filter(status="in_progress", updated_at__lt=old, session_id=session_id)
     )
+
+
+@shared_task(name="ergonaut.cleanup_analysis", ignore_result=True)
+def cleanup_analysis():
+    """Daily app receipt reconciliation; the command enforces the off switch."""
+    from django.core.management import call_command
+
+    call_command("cleanup_analysis")

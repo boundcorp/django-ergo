@@ -1,8 +1,10 @@
 # ruff: noqa: TRY003, EM101, PLR2004
 """Application-side HTTP broker client. No process or runtime access."""
 
+import ssl
 from urllib.parse import urlparse
 
+from django_ergo.analysis.config import controller_key
 from django_ergo.analysis.protocol import MAX_RESPONSE
 from django_ergo.analysis.protocol import ProtocolError
 from django_ergo.analysis.protocol import open_envelope
@@ -11,7 +13,7 @@ from django_ergo.analysis.runner import RunnerUnavailableError
 
 
 class ControllerClient:
-    def __init__(self, url, key, *, transport=None):
+    def __init__(self, url, key, *, ca_file=None, transport=None):
         parsed = urlparse(url)
         if (
             parsed.scheme != "https"
@@ -28,6 +30,14 @@ class ControllerClient:
             raise RunnerUnavailableError(
                 "Controller authentication key is not configured"
             )
+        self.verify = True
+        if ca_file:
+            try:
+                self.verify = ssl.create_default_context(cafile=ca_file)
+            except (OSError, ValueError, TypeError):
+                raise RunnerUnavailableError(
+                    "Cannot load ERGO_ANALYSIS_CONTROLLER_CA_FILE; mount a readable PEM CA bundle"
+                ) from None
         self.url = url.rstrip("/") + "/v1"
         self.key = key
         self.transport = transport
@@ -40,7 +50,7 @@ class ControllerClient:
         try:
             with httpx.Client(  # noqa: SIM117 — stream lifetime contained by client
                 timeout=15,
-                verify=True,
+                verify=self.verify,
                 trust_env=False,
                 follow_redirects=False,
                 transport=self.transport,
@@ -83,6 +93,6 @@ def configured_client():
         raise RunnerUnavailableError("Isolated analysis is disabled")
     url = getattr(settings, "ERGO_ANALYSIS_CONTROLLER_URL", "")
     key = getattr(settings, "ERGO_ANALYSIS_CONTROLLER_KEY", b"")
-    if isinstance(key, str):
-        key = key.encode()
-    return ControllerClient(url, key)
+    key = controller_key(key)
+    ca_file = getattr(settings, "ERGO_ANALYSIS_CONTROLLER_CA_FILE", "")
+    return ControllerClient(url, key, ca_file=ca_file)
