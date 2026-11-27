@@ -30,8 +30,8 @@ on:
   workflow_dispatch:
 
 # Actions are pinned by commit SHA (version in the trailing comment). Checkouts
-# do not persist the token, so PR code (Dockerfiles, smoke tests) cannot read
-# the images job's packages:write token from .git/config.
+# do not persist the token. PR jobs have read-only permissions; only the
+# main-push publishing job receives packages: write.
 permissions:
   contents: read
 
@@ -77,9 +77,7 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
-      packages: write
     env:
-      PUBLISH: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       RUNNER: ghcr.io/boundcorp/ergo-analysis-runner
       CONTROLLER: ghcr.io/boundcorp/ergo-analysis-controller
     steps:
@@ -98,12 +96,6 @@ jobs:
       - name: Resolve the pinned nginx-unprivileged digest
         run: docker buildx imagetools inspect "$NGINX_UNPRIVILEGED" > /dev/null
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
-      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
-        if: env.PUBLISH == 'true'
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build the runner image
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
@@ -113,7 +105,6 @@ jobs:
           load: true
           tags: ${{ env.RUNNER }}:sha-${{ github.sha }}
           cache-from: type=gha,scope=analysis-runner
-          cache-to: ${{ env.PUBLISH == 'true' && 'type=gha,mode=max,scope=analysis-runner' || '' }}
       - name: Build the controller image
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
@@ -123,7 +114,6 @@ jobs:
           load: true
           tags: ${{ env.CONTROLLER }}:sha-${{ github.sha }}
           cache-from: type=gha,scope=analysis-controller
-          cache-to: ${{ env.PUBLISH == 'true' && 'type=gha,mode=max,scope=analysis-controller' || '' }}
       - name: Controller image imports its entrypoint
         run: >-
           docker run --rm --network none --read-only --cap-drop ALL
@@ -145,42 +135,68 @@ jobs:
           docker info --format '{{json .Runtimes}}' | grep -q runsc
       - name: Runner smoke test under gVisor
         run: python3 infra/analysis/smoke_test.py "$RUNNER:sha-${{ github.sha }}" --runtime runsc
-      # sha-<commit> tags, then the digests infra-octo must pin. There is no
-      # moving tag: the cluster only ever runs a reviewed digest.
-      - name: Publish
-        if: env.PUBLISH == 'true'
-        run: |
-          set -euo pipefail
-          for image in "$RUNNER" "$CONTROLLER"; do
-            docker push "$image:sha-${{ github.sha }}"
-          done
+  publish:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [test, images]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    env:
+      RUNNER: ghcr.io/boundcorp/ergo-analysis-runner
+      CONTROLLER: ghcr.io/boundcorp/ergo-analysis-controller
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Read pinned base images
+        run: grep -E '^[A-Z][A-Z0-9_]*=' infra/analysis/base-images.env >> "$GITHUB_ENV"
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish runner
+        id: runner
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: .
+          file: infra/analysis/runner.Dockerfile
+          build-args: PYTHON_BASE=${{ env.PYTHON_BASE }}
+          push: true
+          tags: ${{ env.RUNNER }}:sha-${{ github.sha }}
+          cache-from: type=gha,scope=analysis-runner
+          cache-to: type=gha,mode=max,scope=analysis-runner
+      - name: Publish controller
+        id: controller
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: .
+          file: infra/analysis/controller.Dockerfile
+          build-args: PYTHON_BASE=${{ env.PYTHON_BASE }}
+          push: true
+          tags: ${{ env.CONTROLLER }}:sha-${{ github.sha }}
+          cache-from: type=gha,scope=analysis-controller
+          cache-to: type=gha,mode=max,scope=analysis-controller
       - name: Job summary
-        if: always()
+        env:
+          RUNNER_DIGEST: ${{ steps.runner.outputs.digest }}
+          CONTROLLER_DIGEST: ${{ steps.controller.outputs.digest }}
         run: |
-          set -euo pipefail
-          digest() {
-            if [ "$PUBLISH" = true ]; then
-              docker buildx imagetools inspect "$1:sha-${{ github.sha }}" --format '{{json .Manifest.Digest}}' | tr -d '"'
-            fi
-          }
-          runner=$(digest "$RUNNER" || true)
-          controller=$(digest "$CONTROLLER" || true)
           {
             echo "### Analysis images (${{ github.sha }})"
             echo
-            if [ "$PUBLISH" = true ]; then
-              echo "| Image | Pinned reference |"
-              echo "| --- | --- |"
-              echo "| runner (admission \`runnerImage\`, controller \`ANALYSIS_IMAGE\`) | \`$RUNNER@$runner\` |"
-              echo "| controller | \`$CONTROLLER@$controller\` |"
-            else
-              echo "Built and smoke-tested (runc and gVisor $GVISOR_RELEASE); not pushed (${{ github.event_name }})."
-            fi
+            echo "| Image | Pinned reference |"
+            echo "| --- | --- |"
+            echo "| runner | $RUNNER@$RUNNER_DIGEST |"
+            echo "| controller | $CONTROLLER@$CONTROLLER_DIGEST |"
             echo
             echo "| Base | Pinned reference |"
             echo "| --- | --- |"
-            echo "| python | \`$PYTHON_BASE\` |"
-            echo "| nginx-unprivileged (controller TLS sidecar) | \`$NGINX_UNPRIVILEGED\` |"
+            echo "| python | $PYTHON_BASE |"
+            echo "| nginx-unprivileged | $NGINX_UNPRIVILEGED |"
             echo
             echo "No dependency vulnerability scan: the repository has no scanner configured yet."
           } >> "$GITHUB_STEP_SUMMARY"

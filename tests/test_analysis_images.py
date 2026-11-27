@@ -100,11 +100,16 @@ def test_workflow_pins_actions_and_drops_checkout_token():
         assert re.fullmatch(r"[\w.-]+/[\w.-]+@[0-9a-f]{40}", ref), ref
     checkouts = workflow.count("uses: actions/checkout@")
     assert workflow.count("persist-credentials: false") == checkouts
-    # Publishing (and the registry login) only from main, never on PRs.
+    # Only the main-push publishing job receives a package-writing token.
     assert "pull_request_target" not in workflow
+    images = workflow.split("\n  images:\n", 1)[1].split("\n  publish:\n", 1)[0]
+    publish = workflow.split("\n  publish:\n", 1)[1]
+    assert "packages: write" not in images
+    assert workflow.count("packages: write") == 2  # comment and publish job
     assert (
-        "PUBLISH: ${{ github.event_name == 'push' && "
-        "github.ref == 'refs/heads/main' }}" in workflow
+        "if: github.event_name == 'push' && github.ref == 'refs/heads/main'" in publish
     )
-    assert workflow.count("if: env.PUBLISH == 'true'") == 2
+    assert "needs: [test, images]" in publish
+    assert "packages: write" in publish
+    assert "docker/login-action@" not in images
     assert not re.search(r"\|\s*(sudo\s+)?(ba)?sh\b", workflow)
