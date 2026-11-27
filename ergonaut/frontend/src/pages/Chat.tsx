@@ -46,7 +46,6 @@ import { TodoButton, TodoList } from '../components/TodoList'
 import { WakeNotice } from '../components/WakeNotice'
 import { RecurringWakeNotice } from '../components/RecurringWakeNotice'
 import { usePersistedFlag } from '../persistedFlag'
-import { WorkerRow } from '../components/WorkerActivity'
 import { useSessionUsage } from '../components/UsageSparkline'
 import { UsageHistory } from '../components/UsageHistory'
 import { agoLong } from '../time'
@@ -1019,7 +1018,6 @@ export function Chat({ onChange }: { onChange: () => void }) {
         </MobileSessionBar>
         <ActivityStrip sessionId={id} requests={detail.requests ?? []} workers={detail.workers ?? []}>
           <Requests requests={detail.requests ?? []} onAnswered={load} />
-          <Workers workers={detail.workers ?? []} />
         </ActivityStrip>
         <PinnedDashboard
           pin={openPin}
@@ -1387,33 +1385,6 @@ const REQUEST_STATUS: Record<DelegatedRequest['status'], string> = {
 }
 
 // Delegated work still open: what this chat is waiting on, and what it's doing for others.
-// Long-running work this chat started, one compact row each (its output a click away), and
-// the last few that finished behind a toggle (their results also arrive as messages).
-function Workers({ workers }: { workers: Worker[] }) {
-  const [showDone, setShowDone] = useState(false)
-  const running = workers.filter(w => w.status === 'queued' || w.status === 'running')
-  const done = workers.filter(w => !running.includes(w))
-  if (!workers.length) return null
-  return (
-    <div className="mb-2 flex flex-col divide-y divide-stroke/60 rounded-card border border-stroke bg-surface px-3 py-0.5">
-      {running.map(w => (
-        <WorkerRow key={w.id} worker={w} />
-      ))}
-      {!!done.length && (
-        <button
-          type="button"
-          className="self-start py-1 text-xs text-muted hover:text-ink"
-          aria-expanded={showDone}
-          onClick={() => setShowDone(s => !s)}
-        >
-          {showDone ? '▾' : '▸'} {done.length} finished worker{done.length === 1 ? '' : 's'}
-        </button>
-      )}
-      {showDone && done.map(w => <WorkerRow key={w.id} worker={w} />)}
-    </div>
-  )
-}
-
 function Requests({ requests, onAnswered }: { requests: DelegatedRequest[]; onAnswered: () => void }) {
   const [answering, setAnswering] = useState('')
   const [failed, setFailed] = useState('')

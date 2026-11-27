@@ -1204,3 +1204,14 @@ body {
     padding: 12px;
   }
 }
+
+/* The activity line's worker badges scroll sideways without a scrollbar; a fade marks more. */
+.activity-chips {
+  scrollbar-width: none;
+}
+.activity-chips::-webkit-scrollbar {
+  display: none;
+}
+.activity-chips-fade {
+  mask-image: linear-gradient(to right, black calc(100% - 1.5rem), transparent);
+}

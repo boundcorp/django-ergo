@@ -2,12 +2,16 @@ import { describe, expect, test } from 'bun:test'
 import type { Worker, WorkerAgent } from './api'
 import {
   agentLabel,
+  chipModel,
+  chipTitles,
   cleanLine,
   latestLine,
   modelName,
   stripAnsi,
+  stripOrder,
   workerState,
   workerTitle,
+  workersCount,
   workersSummary,
 } from './workerDisplay'
 
@@ -99,4 +103,42 @@ describe('worker state', () => {
     expect(workersSummary(agents, now)).toBe('2 agents running · 1 failed')
     expect(workersSummary([worker()], now)).toBe('1 worker running')
   })
+})
+
+describe('the one-line strip', () => {
+  test('orders people first, then trouble, then work, then the finished, keeping ties in order', () => {
+    const list = [
+      worker({ id: 'done', status: 'completed' }),
+      worker({ id: 'run1' }),
+      worker({ id: 'fail', status: 'failed' }),
+      worker({ id: 'run2' }),
+      worker({
+        id: 'ask',
+        activity: { entries: [], source: '', at: 0, checked_at: 0, waiting: 'ok?', liveness: '', stall_after: 0 },
+      }),
+    ]
+    expect(stripOrder(list, 0).map(w => w.id)).toEqual(['ask', 'fail', 'run1', 'run2', 'done'])
+    expect(list[0].id).toBe('done') // not sorted in place
+  })
+
+  test('chips show the short model, "?" when unrecorded, nothing for plain workers', () => {
+    expect(chipModel(worker({ agent: agent({ model: 'claude-haiku-5-5' }) }))).toBe('Haiku 5.5')
+    expect(chipModel(worker({ agent: agent({ model: 'openai/gpt-5.2-codex' }) }))).toBe('gpt-5.2-codex')
+    expect(chipModel(worker({ agent: agent() }))).toBe('?')
+    expect(chipModel(worker())).toBe('')
+  })
+
+  test('counts agents or workers', () => {
+    expect(workersCount([worker({ agent: agent() }), worker({ agent: agent() })])).toBe('2 agents')
+    expect(workersCount([worker()])).toBe('1 worker')
+  })
+})
+
+test('badge titles drop a "Topic: " every worker shares', () => {
+  const a = worker({ id: 'a', title: 'claude: Tooling audit: PDS tools' })
+  const b = worker({ id: 'b', title: 'Tooling audit: Storytime', agent: undefined })
+  const c = worker({ id: 'c', title: 'Fix the build', agent: undefined })
+  expect([...chipTitles([{ ...a, agent: agent() }, b]).values()]).toEqual(['PDS tools', 'Storytime'])
+  expect([...chipTitles([b, c]).values()]).toEqual(['Tooling audit: Storytime', 'Fix the build'])
+  expect([...chipTitles([b]).values()]).toEqual(['Tooling audit: Storytime'])
 })

@@ -82,14 +82,14 @@ function WorkerTimes({ worker, now }: { worker: Worker; now: number }) {
 }
 
 /** What to show as a worker's one line of news: its question, error, output or progress. */
-function headline(worker: Worker): string {
+export function headline(worker: Worker): string {
   if (worker.status === 'running' && worker.activity?.waiting) return `asks: ${worker.activity.waiting}`
   if (worker.status === 'failed' && worker.error) return latestLine([{ kind: 'error', text: worker.error, at: null }])
   return latestLine(worker.activity?.entries) || latestLine([{ kind: 'progress', text: worker.progress, at: null }])
 }
 
 /** Whether a worker's output can be read (now or as last kept). */
-function hasLog(worker: Worker): boolean {
+export function hasLog(worker: Worker): boolean {
   const kind = (worker.function ?? '').split(':')[0]
   return (!!worker.session_id && (kind === 'orca' || kind === 'agent')) || !!worker.activity?.entries?.length
 }
@@ -233,7 +233,11 @@ export function WorkerTerminal({ worker, onClose }: { worker: Worker; onClose: (
     setFollowing(true)
   }
 
-  const source = log ? `${log.source || 'output'}${log.live ? '' : ' · as of the last check'}` : 'Reading…'
+  const source = log
+    ? `${log.source || 'output'}${log.live ? '' : ' · as of the last check'}`
+    : sessionId
+      ? 'Reading…'
+      : 'No terminal kept for this worker'
   return (
     <dialog
       ref={dialog}
@@ -275,7 +279,7 @@ export function WorkerTerminal({ worker, onClose }: { worker: Worker; onClose: (
           {entries.map((entry, i) => (
             <TerminalEntry key={i} entry={entry} />
           ))}
-          {!entries.length && <div className="text-muted">{log ? 'No output yet.' : 'Reading…'}</div>}
+          {!entries.length && <div className="text-muted">{log || !sessionId ? 'No output yet.' : 'Reading…'}</div>}
         </div>
         {!following && (
           <button

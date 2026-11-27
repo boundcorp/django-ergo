@@ -159,3 +159,49 @@ export function workersSummary(workers: Worker[], now: number): string {
     .filter(Boolean)
     .join(' · ')
 }
+
+// Which worker to show first in a one-line strip: the ones that need a person, then trouble,
+// then work in progress, then the finished.
+const STATE_ORDER: WorkerState[] = [
+  'waiting',
+  'failed',
+  'stalled',
+  'needs_run',
+  'running',
+  'queued',
+  'done',
+  'cancelled',
+]
+
+/** Workers in strip order (by state, then oldest first), without changing the list. */
+export function stripOrder(workers: Worker[], now: number): Worker[] {
+  const rank = (w: Worker) => STATE_ORDER.indexOf(workerState(w, now))
+  return workers
+    .map((worker, i) => ({ worker, i, rank: rank(worker) }))
+    .sort((a, b) => a.rank - b.rank || a.i - b.i)
+    .map(x => x.worker)
+}
+
+/** The short model a chip shows ("Haiku 5.5", "gpt-5.2-codex"), or ''. */
+export function chipModel(worker: Worker): string {
+  if (!worker.agent) return ''
+  const model = workerModel(worker.agent)
+  return model ? modelName(model) : '?'
+}
+
+/** "4 agents", "1 worker": the strip's leading count. */
+export function workersCount(workers: Worker[]): string {
+  const noun = workers.length && workers.every(w => w.agent) ? 'agent' : 'worker'
+  return `${workers.length} ${noun}${workers.length === 1 ? '' : 's'}`
+}
+
+/**
+ * Titles for the strip's badges: when every worker's title starts with the same "Topic: ", the
+ * badges drop it so the part that tells them apart survives truncation.
+ */
+export function chipTitles(workers: Worker[]): Map<string, string> {
+  const titles = workers.map(w => [w.id, workerTitle(w)] as const)
+  const prefix = /^([^:]{1,40}): \S/.exec(titles[0]?.[1] ?? '')?.[1]
+  const shared = !!prefix && titles.length > 1 && titles.every(([, t]) => t.startsWith(`${prefix}: `))
+  return new Map(titles.map(([id, t]) => [id, shared ? t.slice(prefix!.length + 2) : t]))
+}
