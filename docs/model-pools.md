@@ -593,7 +593,7 @@ funding kind is `cumulative`.
 
 
 Recurring funding is a separate, explicit consent mode. Existing funding and
-issued grants remain **cumulative**; migration 0064 defaults every existing row
+issued grants remain **cumulative**; migration 0065 defaults every existing row
 to that mode and backfills only the attempt's original UTC ISO week (`budget_week`, the Monday it began). It creates no
 provider mapping or consent and never changes historical costs/reservations.
 Unmapped historical paid attempts, or unknown outcomes without a positive bound,

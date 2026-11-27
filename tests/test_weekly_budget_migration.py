@@ -11,8 +11,8 @@ from django.db.migrations.executor import MigrationExecutor
 @pytest.mark.django_db(transaction=True)
 def test_weekly_upgrade_and_reverse_preserve_ambiguous_paid_history(settings):
     settings.USE_TZ = True
-    before = ("django_ergo", "0063_google_engine_signatures")
-    after = ("django_ergo", "0064_provider_weekly_budgets")
+    before = ("django_ergo", "0064_isolated_analysis")
+    after = ("django_ergo", "0065_provider_weekly_budgets")
     try:
         executor = MigrationExecutor(connection)
         executor.migrate([before])

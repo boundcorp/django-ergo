@@ -23,7 +23,7 @@ def original_weeks(apps, schema_editor):
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("django_ergo", "0063_google_engine_signatures"),
+        ("django_ergo", "0064_isolated_analysis"),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
 
