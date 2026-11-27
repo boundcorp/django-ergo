@@ -268,6 +268,8 @@ dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
 # Observability: messages are model-facing text carried by ObservabilityError; tool signatures mirror their JSON schemas.
 "src/django_ergo/observability/*.py" = ["TRY003", "EM101", "EM102", "C901", "PLR0911", "PLR0912", "PLR0913", "PLR0915"]
 "src/django_ergo/plugins/observability.py" = ["TRY003", "EM101", "EM102", "C901", "PLR0913", "PLR0915"]
+# Analysis sandbox CI scripts: the image smoke test and the probe it submits as user code.
+"infra/analysis/*.py" = ["INP001", "T201", "S603", "S607", "S108", "PT018", "PLR2004", "UP031", "PTH"]
 "tests/*.py" = ["PT018", "FBT003", "PLR2004", "SLF001", "S603", "S607"]
 # Standalone scripts for agents (the ergo client, the skill installer) and the client's bot tools.
 "src/django_ergo/bots/skill_library/**/*.py" = ["T201", "S310", "PLR2004", "C901", "PLR0912", "PLR0915", "EM101", "EM102", "TRY003", "PLW0603", "INP001", "FBT001", "FBT002"]
