@@ -821,6 +821,28 @@ def activity(worker: Worker) -> dict | None:
     return found if isinstance(found, dict) else None
 
 
+def agent_info(worker: Worker) -> dict | None:
+    """Which coding agent a worker runs and on what model, from the state
+    ``bots.agents`` keeps (``agent``, ``model``, ``effort`` and the dispatch
+    receipt's requested tier and observed launch model). ``None`` for workers
+    that don't run a coding agent; empty strings where an older worker never
+    recorded a value."""
+    state = worker.state or {}
+    if not state.get("agent") and not worker.function.startswith(("agent:", "orca:")):
+        return None
+    receipt = state.get("dispatch_receipt")
+    receipt = receipt if isinstance(receipt, dict) else {}
+    requested = receipt.get("requested")
+    requested = requested if isinstance(requested, dict) else {}
+    return {
+        "agent": str(state.get("agent") or ""),
+        "model": str(state.get("model") or ""),
+        "effort": str(state.get("effort") or ""),
+        "tier": str(requested.get("tier") or ""),
+        "launch_model": str(receipt.get("launch_model") or ""),
+    }
+
+
 def log(bot: Bot, worker: Worker) -> dict:
     """A worker's recent output, read now from its plugin (``BotPlugin.worker_log``) when
     the plugin can, else the activity kept at its last check (``live`` says which)."""

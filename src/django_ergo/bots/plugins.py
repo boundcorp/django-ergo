@@ -42,6 +42,7 @@ if TYPE_CHECKING:
 
 OFFICIAL_PLUGINS = {
     "analysis": "django_ergo.plugins.analysis.AnalysisPlugin",
+    "dev": "django_ergo.plugins.dev.DevPlugin",
     "ergo_kb": "django_ergo.plugins.kb.ErgoKBPlugin",
     "hindsight_memory": "django_ergo.plugins.hindsight_memory.HindsightMemoryPlugin",
     "bot_management": "django_ergo.plugins.bot_management.BotManagementPlugin",

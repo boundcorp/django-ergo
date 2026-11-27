@@ -1,0 +1,356 @@
+# Review narratives
+
+Status: phase 1 implemented; see [review briefs](../reviews.md) for current usage. Starter definitions are in
+`src/django_ergo/plugins/dev_review_library/`.
+
+## 1. Problem
+
+Lee wants to say any of these to any bot and get a useful review back:
+
+- "do a planning review": a **different model, one tier up from the author
+  when available**, reads the plan.
+- "do a ponytail review", "security review", "UX review": a reviewer with a
+  fixed personality and checklist.
+- "do a swarmed security review": split the target into 5-10 slices, send a
+  cheap model at each, then merge the results into one report.
+
+Today each of these is a hand-written brief. They drift between bots, never
+say which model reviewed, and a "second opinion" often runs on the same
+model that wrote the work.
+
+Not every Ergonaut installation has Orca. Some bots have only the generic
+`ergo_agent_start` (`bots/agents.py`, backed by whatever `AgentManager` a
+plugin provides: Orca or `plugins/local_shell`); some have no agent tool at
+all; and agents outside Ergo (Claude Code, Codex) should be able to use the
+same reviews. So the core must not start anything itself.
+
+## 2. Goals and non-goals
+
+Goals:
+
+- A review **kind** is a data file. Adding a kind is adding a file; an
+  installation or a bot can add or override kinds without a code change.
+- One loader returns **text**: how to run the review, the brief for each
+  reviewer, and how to merge the results. The calling bot runs it with
+  whatever agent tool it has, or does the review itself.
+- Kind and **strategy** (single, cross-model, swarm) are independent:
+  "swarmed security review" is `security` + `swarm`.
+- Model choice uses the installation's tiers when it has them and falls back
+  to a plain-text constraint when it does not. A review never fails for lack
+  of a different model: it falls back and says so (section 6).
+- Every finding says which model produced it, so "a different model" can be
+  audited.
+
+Non-goals (for now):
+
+- A phrase parser. The model maps "ponytail review" to the call.
+- Running reviewers from the library, or a new worker type. A programmatic
+  fan-out helper is phase 3 and optional.
+- Enforcing model choice at launch. We record it and audit it (section 9).
+- Replacing Claude Code's `/code-review` or `/security-review`; the briefs
+  are compatible with being pasted into either.
+
+## 3. Where it lives
+
+Lee decided on 2026-11-27 to put first-class review tooling in the official
+`dev` plugin proposed by [PR #398](https://github.com/boundcorp/django-ergo/pull/398),
+section 7. That proposal describes one plugin, `plugins/dev.py`, enabled with
+`plugins: [{name: dev}]`. Its possible future extension pack is separate from
+this decision; it does not currently bundle or enable other plugins.
+
+| Piece | Proposed path | Role |
+| --- | --- | --- |
+| Definitions | `src/django_ergo/plugins/dev_review_library/*.md` | Packaged data beside the single-file plugin; installation and bot overrides still apply. |
+| Loader and tool | `src/django_ergo/plugins/dev.py` | `review_brief` and `review_kinds` return data; the dev plugin exposes `ergo_review_brief`. |
+| CLI | `python -m django_ergo.plugins.dev reviews brief ...` | Proposed text entry point for callers without Ergo tools. |
+
+The loader uses bots' routing facilities when available but does not depend on
+Orca or launch agents. The plugin exposes the tool when enabled; a caller with
+no Ergo tool can invoke the proposed CLI or import the loader. External agents
+can use the resulting text and their own subagent tools. No standalone
+`reviews` skill or plugin is proposed.
+
+## 4. Data format
+
+A definition is Markdown with YAML front matter, like `SKILL.md`. The body
+is the reviewer's personality and checklist, pasted into each reviewer's
+brief as is.
+
+```yaml
+---
+name: security                 # unique; file name without .md
+aliases: [security review, sec review, appsec]
+summary: One line, shown in the tool description.
+targets: [diff, plan, app]     # what it can review; the first is the default
+reviewer:
+  policy: same_tier_any        # cross_model | same_tier_any | cheap (section 6)
+  tier: same                   # same (as author) | up (author tier + 1, preferred) | small | medium | large | xlarge
+swarm:
+  n: 8                         # default slice count, clamped to 2..12
+  tier: small                  # tier for swarm reviewers
+  slice_by: [file, risk]       # hints for decomposition, in preference order
+findings: default              # findings schema name (section 8)
+source:                        # optional provenance for adapted text
+  url: ...
+  license: MIT
+---
+Personality and checklist in plain Markdown.
+```
+
+Targets:
+
+- `plan`: a plan or design doc (path, URL, or pasted text).
+- `diff`: a branch, commit range or PR (`owner/repo#123`).
+- `app`: a running app (URL plus the flows to try).
+
+Lookup order, later wins by `name` (decided, section 11):
+
+1. `src/django_ergo/plugins/dev_review_library/` (built in).
+2. Each directory in `DJANGO_ERGO["REVIEW_DIRS"]` (installation-wide, e.g.
+   a shared directory in the bot config repo).
+3. The bot's own folder, `reviews/*.md`.
+
+A later file with the same `name` fully replaces the built-in definition: no
+merging and no appending to a checklist (copy and edit). `enabled: false` in an override hides a
+built-in kind. An alias that collides with another kind's name or alias is
+a load error, so the tool description is never ambiguous.
+
+## 5. Loader API
+
+```python
+from django_ergo.plugins.dev import review_brief, review_kinds
+
+review_brief(
+    kind: str,                # name or alias
+    *,
+    target: str = "",         # path, URL, PR ref or pasted text
+    target_kind: str = "",    # plan | diff | app; default: definition's first
+    strategy: str = "",       # single | cross_model | swarm; default from policy
+    n: int | None = None,     # swarm size; default from definition
+    author_model: str = "",   # e.g. "anthropic/claude-opus-5-5"
+    bot: Bot | None = None,   # for overrides and the tier catalog
+    focus: str = "",          # free text from the user ("only the auth code")
+) -> ReviewBrief
+```
+
+`ReviewBrief` is a dataclass with a `text` property; tools return `text`.
+Its parts are:
+
+1. **How to run it.** The strategy, the number of reviewers, the model
+   constraint (resolved or as text, section 6) with the fallback used, if
+   any, and the exact steps:
+   "start one agent with brief B on model M" or "split the target into N
+   slices as follows, start one agent per slice with brief B + slice".
+   Includes a fallback: "if you cannot start agents, do the review
+   yourself and say so in the report".
+2. **The reviewer brief**, ready to paste as an agent's `brief`: target,
+   personality and checklist, the findings format, the fallback used (so the
+   report can note it), and the instruction to report its own model
+   (section 9). For a swarm, it has a `{slice}` slot.
+3. **Synthesis instructions** for the caller (section 7).
+
+`review_kinds(bot=None)` lists kinds with aliases, summary and targets; the
+tool description is built from it.
+
+The tool, exposed by the `dev` plugin:
+
+```
+ergo_review_brief(kind, target, target_kind?, swarmed?, n?, focus?)
+```
+
+`swarmed=true` selects the swarm strategy; otherwise the definition's
+policy decides. `author_model` is filled from the calling chat's current
+model (`ToolContext`), not by the model, so it cannot be guessed wrong. The
+tool description reads, for example:
+
+> Get instructions for a review. Kinds: planning (plan review, design
+> review, second opinion), security (sec review, appsec), ux (usability
+> review, ui review), ponytail (lazy review, yagni review). Say
+> swarmed=true for "swarmed ... review".
+
+Entry points:
+
+| Caller | What it does with the brief |
+| --- | --- |
+| Bot with Orca or local shell | `ergo_agent_start(brief=..., model=... or tier=...)` per reviewer, waits for worker reports, then synthesizes. |
+| Bot with another start-agent tool | Same steps with its own tool; the brief is plain text. |
+| Bot with no agent tool | Does a single review itself, says that the strategy was downgraded and which model ran it. |
+| Claude Code / Codex | Calls the proposed CLI for text and uses its own subagents. |
+| Library code | Calls `review_brief()` directly. |
+
+## 6. Model selection
+
+The only non-text part. Inputs: the author model, the definition's
+`reviewer.policy` and `tier`, and the bot's providers (`bots/providers.py`
+tiers and `DEFAULT_TIER_MODELS`, `bots/routing.py` `tier_of`, `pick_model`
+and `pick_agent`, filtered by the active pool in `bots/pools.py`).
+
+1. **Author tier.** Look up `author_model` in the tier lists; the lowest
+   tier that lists it is its tier. Unknown model: assume `large` and say so.
+2. **Reviewer tier.** `same` means the author's tier. `up` (planning) means
+   author tier + 1, preferred; the author's own tier is acceptable when
+   one tier up is not available (no such tier, or no candidate in it). Never
+   below the author's tier unless every other step has failed (step 5).
+   `cheap` and swarm reviewers use the named tier (default `small`).
+3. **Different model.** `cross_model` and `same_tier_any` prefer a model other than the
+   author's. A different company or family is welcome but not required;
+   a same-model review is allowed as a disclosed last resort.
+4. **Candidates** come from `routing.agents[tier]` when the reviewer is a
+   coding agent (`pick_agent`, subscription only) and from
+   `routing.tiers[tier]` otherwise. Pool privacy and `switched_off()`
+   providers are respected, so a private chat never gets a reviewer on a
+   provider its pool forbids.
+5. **Fallback (decided).** If no different model of the target tier exists,
+   use the best available alternative, in this order: a different size or
+   family; the same tier; as a last resort the same model as the author.
+   The review never fails for lack of a different model. The brief states
+   which fallback was used, and the reviewer and the synthesized report
+   repeat it.
+6. **Output.** Resolved: "use `openai/gpt-6.1-sol` (medium, not anthropic)".
+   With a fallback: "use `anthropic/claude-opus-5-5` (same tier and same
+   model as the author; fallback: single-family install, no other model
+   available)". Unresolved (no providers, no candidate, or library used
+   outside a bot): the constraint as text, "use a medium-tier model from a
+   family other than anthropic/claude, or the best alternative you have and
+   say which", plus the candidates the loader did find.
+
+For swarms, the brief names a list of small models and asks the caller to
+rotate through them, so one model's blind spot does not cover every slice.
+
+## 7. Swarms: decomposition and synthesis
+
+The loader does not split the target; it cannot read a PR or an app. The bot
+that asked (the calling orchestrator) splits the work into the N slices
+using the loader's guidance below (decided; there is no separate planner
+agent by default). The loader tells the caller how:
+
+1. Collect the target (diff stat and files, plan sections, or app flows).
+2. Make N slices (default from the definition, 5-10, never more than the
+   number of natural units). Prefer `slice_by` in order: by **file** (group
+   small files; one big file can be its own slice), by **concern** (auth,
+   data, API, UI), by **risk** (what can lose data or money first), by
+   **flow** or **screen** for apps. Every slice says what it owns and lists
+   the rest of the change in one line each for context.
+3. Write the slice plan in the chat before starting agents, so the user can
+   see and correct it.
+4. Start one reviewer per slice with the brief and its slice.
+5. Synthesize:
+   - drop findings outside the reviewer's slice unless they are blockers;
+   - merge duplicates (same location and same claim), keeping the best
+     evidence and listing every reviewer that found it;
+   - rank by severity, then by how many reviewers agree;
+   - re-check every blocker and major against the code yourself before
+     reporting it, and mark unconfirmed ones;
+   - one report: verdict, findings table, then what was not reviewed
+     (failed slices, skipped files, a downgraded strategy).
+
+A failed or silent reviewer does not block the report; its slice is listed
+as not reviewed.
+
+## 8. Findings format
+
+Each reviewer ends its report with a fenced JSON block, so synthesis does
+not have to parse prose:
+
+```json
+{
+  "review": "security",
+  "slice": "auth views",
+  "reviewer": {"model": "openai/gpt-6.1-sol", "agent": "codex", "self_reported": true},
+  "verdict": "proceed_after_fixes",
+  "findings": [
+    {
+      "severity": "major",
+      "location": "src/app/views.py:120",
+      "claim": "Session list does not filter by owner.",
+      "evidence": "Query at line 120 has no owner filter; /sessions?bot=x returns all users' rows.",
+      "fix": "Filter by request.user as list_sessions does.",
+      "confidence": "high"
+    }
+  ],
+  "not_checked": ["websocket consumers"]
+}
+```
+
+Severity: `blocker`, `major`, `minor`, `nit`. Verdicts: `proceed`,
+`proceed_after_fixes`, `rethink`. A definition can name another schema
+later; `default` is the only one in phase 1. The synthesized report uses the
+same shape with `reviewers: [...]` per finding.
+
+## 9. Audit and enforcement
+
+Text cannot enforce "use a different model". We make violations visible:
+
+- **Self-report.** The brief tells each reviewer to fill `reviewer.model`
+  with the model it runs on.
+- **Launch record.** When the caller used `ergo_agent_start`, the worker's
+  `state` already holds `agent`, `model`, `effort` and `tier`
+  (`bots/agents.py`). The synthesized report quotes those, not the self-
+  report, when it has them.
+- **Check.** Phase 2 adds `ergo_review_record(kind, author_model, report)`:
+  it stores the review as a `StructuredCall`-style row (kind, strategy,
+  author model, reviewer models with their source, fallback used, finding
+  counts) and
+  flags a `cross_model` review whose reviewer is the author's own model
+  (or shares its family, as information), a fallback that was used, and a
+  model that does not match the worker's launch record.
+
+## 10. Phased plan
+
+1. **Dev plugin review tooling.** Add the loader (parse, lookup order, alias
+   check, tier resolution, `ReviewBrief`), `ergo_review_brief`, and the CLI
+   to `plugins/dev.py`; package `plugins/dev_review_library/*.md`; add tests
+   and document the plugin and reviews in `docs/bots.md` and `docs/reviews.md`.
+2. **Audit.** `ergo_review_record`, the stored row, and a family-mismatch
+   flag shown in the thread report.
+3. **Optional fan-out.** `run_review(...)` for bots with an
+   `AgentManager`: starts the reviewers, waits on their workers and runs
+   synthesis as a structured call. Only if phase 1 shows bots doing the
+   fan-out badly.
+4. **More kinds** as files: performance, migration safety, test coverage,
+   docs.
+
+## 11. Decisions and open questions
+
+Decided by Lee on 2026-11-27:
+
+1. **DECIDED: planning review reviewer tier.** Encourage one tier up from
+   the author (prefer author tier + 1). The same tier is acceptable when one
+   tier up is not available. The reviewer must still be a different model
+   from the author. (`planning.md`: `tier: up`.)
+2. **DECIDED: single-family and limited installs.** Fall back to whatever is
+   available. If no different model of the target tier exists, use the best
+   available alternative (a different size or family, the same tier, or as a
+   last resort the same model). The brief says which fallback was used so
+   the report can note it. A review never fails for lack of a different
+   model.
+3. **DECIDED: who splits a swarm.** The bot that asked (the calling
+   orchestrator) splits the work into the N slices using the loader's
+   splitting guidance. There is no separate planner agent by default.
+4. **DECIDED: ponytail may push back on the request.** A ponytail review may
+   question whether the request or plan was the right thing to build, not
+   only how it was done. (`ponytail.md`.)
+5. **DECIDED: installation overrides replace.** An installation's (or bot's)
+   definition with the same name fully replaces the built-in file; no
+   merging or appending.
+
+Open questions for Lee:
+
+1. **Planning review and family.** Decision 1 asks for a different model, not
+   a different family. The loader prefers another family but accepts the
+   same family. Should a planning review require another family when one is
+   available at an acceptable tier, even if that means same tier instead of
+   one tier up?
+2. **Fallback order.** Decision 2 lists "a different size or family" before
+   "the same tier". When both exist, should a different family at the same
+   tier beat a different model of the same family one tier down or up?
+3. **Request pushback reporting.** Should ponytail's request-level findings
+   be a separate section of the report, or ordinary findings with location
+   `request`? (Proposed: ordinary findings with that location.)
+
+## Attribution
+
+`src/django_ergo/plugins/dev_review_library/ponytail.md` is adapted, in paraphrase, from
+[DietrichGebert/ponytail `skills/ponytail/SKILL.md`](https://github.com/DietrichGebert/ponytail/blob/df9e89941d50419fd5bcf1de41e28097f1db49b2/skills/ponytail/SKILL.md),
+MIT License, Copyright (c) 2026 DietrichGebert. Its front matter records
+the source.

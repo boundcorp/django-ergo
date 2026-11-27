@@ -293,7 +293,7 @@ def workers_out(session: ConversationSession) -> list[dict]:
     the pull requests its result links (``prs``)."""
     import json
 
-    from django_ergo.bots.workers import activity, describe
+    from django_ergo.bots.workers import activity, agent_info, describe
 
     active = list(session.workers.filter(status__in=["queued", "running"]))
     done = list(session.workers.exclude(status__in=["queued", "running"])[:5])
@@ -301,7 +301,13 @@ def workers_out(session: ConversationSession) -> list[dict]:
     for worker in active + done:
         urls = [url for url, _, _ in pull_request_urls(json.dumps(worker.result, default=str))]
         out.append(
-            {**describe(worker), "session_id": str(session.id), "prs": prs_by_url(urls), "activity": activity(worker)}
+            {
+                **describe(worker),
+                "session_id": str(session.id),
+                "prs": prs_by_url(urls),
+                "activity": activity(worker),
+                "agent": agent_info(worker),
+            }
         )
     return out
 

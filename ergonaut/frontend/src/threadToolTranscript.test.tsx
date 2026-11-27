@@ -220,7 +220,7 @@ describe('tool result presentation', () => {
   })
 
   test.each(['ergo_agent_start', 'orca_start_worker', 'ergo_worker_start'])(
-    '%s renders its returned worker as a specialized card',
+    '%s renders its returned worker as a badge',
     name => {
       const worker: Worker = {
         id: 'worker',
@@ -237,7 +237,8 @@ describe('tool result presentation', () => {
       const html = renderTool(name, {}, worker)
       expect(html).toContain('Delegated task')
       expect(html).toContain('Queued')
-      expect(html).toContain('<summary')
+      expect(html).toContain('data-testid="worker-chip"') // opens the same terminal as the header badges
+      expect(html).not.toContain('data-testid="worker-row"')
       expect(html).not.toContain(`title="${name}"`)
     },
   )

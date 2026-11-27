@@ -513,12 +513,22 @@ unscoped devbox drafts are not migrated because their owner is unknown.
   live request card shows that a queued message has moved on, the call no longer
   shows its old queue position; without live request data the original status
   remains. Workers (`ergo_agent_start`, `orca_start_worker`, `ergo_worker_start`)
-  get a card with their status, progress and PRs. An Orca worker's card also
-  shows the agent's last few tool calls and output lines, how long ago it
-  last did something ("stalled" past the plugin's `stall_minutes`, or
-  "waiting on you" when it's parked on a prompt), and "Open full log", which
-  reads its recent transcript or screen from Orca and refreshes while it
-  runs. A reply from another chat
+  show as badges, never as full-width rows: workers started one after another
+  share one line, side by side. A badge has a state dot (running, waiting on
+  you in amber, stalled past the plugin's `stall_minutes`, queued, done,
+  failed), a short title and the short model ("Haiku 5.5"; "?" for workers
+  that never recorded one). Its tooltip has the rest: agent, model, effort and
+  tier, how long it has run and since its last output, its latest line, error
+  or progress, and PRs. Clicking it opens a terminal view that reads the
+  agent's recent transcript or screen from Orca: monospace, escape codes
+  stripped, line breaks kept and long lines scrolling sideways, refreshed
+  every 5 seconds while it runs and following the end unless you scroll up,
+  with the worker's PRs underneath.
+- **Activity**: under the chat's title (on a phone, under the session bar,
+  which no longer counts workers), one line holds a badge per worker, side by
+  side, waiting-on-you first, the same badges as in the transcript. When they
+  don't fit, the line scrolls sideways and a "+N" lists every worker. Open
+  requests sit behind a toggle on the same line. A reply from another chat
   is one row you can open, the user message whose turn sent work on says
   "Sent to" the chat, and chat ids in a bot's text are links with a status
   dot.
