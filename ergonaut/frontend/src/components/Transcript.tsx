@@ -16,7 +16,8 @@ import { api } from '../api'
 import { adapterMeta, toChatMessages } from '../chatAdapter'
 import { DirectoryContext } from './BotIcon'
 import Markdown from './Markdown'
-import { ThreadCard, ThreadLink, WorkerCard, linkThreads } from './Threads'
+import { ThreadCard, ThreadLink, linkThreads } from './Threads'
+import { WorkerBadges } from './WorkerBadges'
 import { ToolCard, copyText } from './ToolCard'
 import { pretty, resultText } from '../toolFormat'
 import { clock } from '../time'
@@ -65,6 +66,8 @@ type Folds = {
   rows: Map<string, FoldRow> // by the id of the run's first call: where its "+N more" row goes
   durations: Map<string, number> // tool call id -> ms until its result
   toggle: (key: string) => void
+  workerRuns: Map<string, ToolUse[]> // by the id of a run's first worker start: the run's starts
+  inWorkerRun: Set<string> // later starts of a run, drawn with its first
 }
 const FoldContext = createContext<Folds>({
   hidden: new Set(),
@@ -72,6 +75,8 @@ const FoldContext = createContext<Folds>({
   rows: new Map(),
   durations: new Map(),
   toggle: () => {},
+  workerRuns: new Map(),
+  inWorkerRun: new Set(),
 })
 
 /** "penpot_apply ×12, penpot_render ×4": the commonest tools in a fold. */
@@ -81,6 +86,28 @@ function foldSummary(names: string[]): string {
   const top = [...counts.entries()].sort((a, b) => b[1] - a[1])
   const shown = top.slice(0, 3).map(([name, n]) => (n > 1 ? `${name} ×${n}` : name))
   return shown.join(', ') + (top.length > 3 ? ', …' : '')
+}
+
+/** Worker starts that follow each other (results between them don't count) form one run, shown
+ *  as one line of badges where the first start was. Anything else in between breaks the run. */
+function workerStartRuns(messages: Message[], starts: Map<number, Call>): Pick<Folds, 'workerRuns' | 'inWorkerRun'> {
+  const workerRuns = new Map<string, ToolUse[]>()
+  const inWorkerRun = new Set<string>()
+  let run: ToolUse[] = []
+  const close = () => {
+    if (run.length) workerRuns.set(run[0].id, run)
+    for (const use of run.slice(1)) inWorkerRun.add(use.id)
+    run = []
+  }
+  for (const message of messages) {
+    if (starts.has(message.line)) close()
+    for (const block of message.blocks) {
+      if (block.type === 'tool_use' && WORKER_TOOLS.has(block.name)) run.push(block)
+      else if (block.type !== 'tool_result' && block.type !== 'thinking' && block.type !== 'context') close()
+    }
+  }
+  close()
+  return { workerRuns, inWorkerRun }
 }
 
 /** Split each turn's tool calls into runs (broken by text, a reply, a user message or a new turn)
@@ -357,16 +384,47 @@ function MessagingCall({ use, result, pending }: { use: ToolUse; result?: ToolRe
   )
 }
 
-/** A tool call: a card for work sent to another chat or a worker, otherwise the call itself. */
-function ToolCall({ use, result, pending }: { use: ToolUse; result?: ToolResult; pending: boolean }) {
+/**
+ * Worker starts in a row: the workers they started as badges side by side on one line (each
+ * opens its terminal), never a full-width row each. A start whose worker isn't known yet shows
+ * as its tool call.
+ */
+function WorkerRun({
+  uses,
+  results,
+  pending,
+}: {
+  uses: ToolUse[]
+  results: Map<string, ToolResult>
+  pending: Set<string>
+}) {
   const { workers } = useContext(DelegatedContext)
+  const started: Worker[] = []
+  const unknown: ToolUse[] = []
+  for (const use of uses) {
+    const data = resultJson(results.get(use.id))
+    const worker = data && (workers.get(String(data.id ?? '')) ?? (data.title && data.status ? (data as Worker) : null))
+    if (worker && !started.some(w => w.id === worker.id)) started.push(worker)
+    else if (!worker) unknown.push(use)
+  }
+  return (
+    <>
+      {!!started.length && (
+        <div className="relative flex h-7 min-w-0 items-center gap-1.5" data-testid="worker-run">
+          <WorkerBadges workers={started} />
+        </div>
+      )}
+      {unknown.map(use => (
+        <ToolCall key={use.id} use={use} result={results.get(use.id)} pending={pending.has(use.id)} />
+      ))}
+    </>
+  )
+}
+
+/** A tool call: a card for work sent to another chat, otherwise the call itself. */
+function ToolCall({ use, result, pending }: { use: ToolUse; result?: ToolResult; pending: boolean }) {
   const { durations, folded } = useContext(FoldContext)
   if (THREAD_TOOLS[use.name]) return <MessagingCall use={use} result={result} pending={pending} />
-  if (WORKER_TOOLS.has(use.name)) {
-    const data = resultJson(result)
-    const worker = data && (workers.get(String(data.id ?? '')) ?? (data.title && data.status ? (data as Worker) : null))
-    if (worker) return <WorkerCard worker={worker} />
-  }
   return (
     <>
       <ToolCard
@@ -818,6 +876,14 @@ function renderBlock(message: Message, block: Block, blocks: Block[], env: PartE
         return <ReplyBubble reply={block.input as Reply} message={message} />
       }
       if (hidden.has(block.id) && !rows.has(block.id)) return null
+      if (folds.inWorkerRun.has(block.id)) return null
+      const run = folds.workerRuns.get(block.id)
+      if (run)
+        return (
+          <div className="w-full max-w-[85%]">
+            <WorkerRun uses={run} results={results} pending={pending} />
+          </div>
+        )
       return (
         <>
           {rows.has(block.id) && (
@@ -1001,6 +1067,7 @@ export function Transcript({
   const sentFrom = sentNotes(messages, calls, results, delegated.cards)
   const folds: Folds = {
     ...foldRuns(messages, results, pending, starts, replies, openFolds),
+    ...workerStartRuns(messages, starts),
     durations: toolDurations(messages),
     toggle: key =>
       setOpenFolds(open => {

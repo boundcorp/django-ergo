@@ -1,11 +1,11 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { Worker, WorkerEntry, WorkerLog } from '../api'
 import { api } from '../api'
+import { PrChip } from './Threads'
 import {
   WORKER_STATE,
   agentDetail,
   agentLabel,
-  elapsed,
   isLive,
   latestLine,
   span,
@@ -14,8 +14,8 @@ import {
   workerTitle,
 } from '../workerDisplay'
 
-// A chat's workers, compact: one row each (state, agent and model, title, latest output and
-// times) and their full output in a terminal view opened on demand.
+// A worker's pieces shared by its badges (WorkerBadges): state, model, its one line of news, and
+// its full output in a terminal view opened on demand.
 
 const LOG_REFRESH_MS = 5_000
 
@@ -65,86 +65,11 @@ export function WorkerModel({ worker, withAgent = true }: { worker: Worker; with
   )
 }
 
-/** How long it has run, and how long since its last output. */
-function WorkerTimes({ worker, now }: { worker: Worker; now: number }) {
-  const ran = elapsed(worker, now)
-  const at = worker.activity?.at
-  return (
-    <span className="shrink-0 whitespace-nowrap text-[11px] tabular-nums text-muted">
-      {ran != null && <span title={isLive(worker) ? 'Running for' : 'Ran for'}>{span(ran)}</span>}
-      {isLive(worker) && at && (
-        <span title={worker.activity?.checked_at ? `Checked ${span(now - worker.activity.checked_at)} ago` : undefined}>
-          {ran != null ? ' · ' : ''}out {span(now - at)} ago
-        </span>
-      )}
-    </span>
-  )
-}
-
 /** What to show as a worker's one line of news: its question, error, output or progress. */
 export function headline(worker: Worker): string {
   if (worker.status === 'running' && worker.activity?.waiting) return `asks: ${worker.activity.waiting}`
   if (worker.status === 'failed' && worker.error) return latestLine([{ kind: 'error', text: worker.error, at: null }])
   return latestLine(worker.activity?.entries) || latestLine([{ kind: 'progress', text: worker.progress, at: null }])
-}
-
-/** Whether a worker's output can be read (now or as last kept). */
-export function hasLog(worker: Worker): boolean {
-  const kind = (worker.function ?? '').split(':')[0]
-  return (!!worker.session_id && (kind === 'orca' || kind === 'agent')) || !!worker.activity?.entries?.length
-}
-
-/**
- * One worker in one row (two on a phone): state, title, agent and model, its latest line of
- * output and its times, with a button that opens its terminal.
- */
-export function WorkerRow({ worker, showLatest = true }: { worker: Worker; showLatest?: boolean }) {
-  const now = useNow()
-  const [open, setOpen] = useState(false)
-  const line = showLatest ? headline(worker) : ''
-  return (
-    <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 py-1 text-xs" data-testid="worker-row">
-      <span className="order-1">
-        <WorkerBadge worker={worker} now={now} />
-      </span>
-      <span
-        className="order-2 min-w-0 flex-1 truncate font-medium text-ink sm:max-w-[34%] sm:flex-none"
-        title={worker.title}
-      >
-        {workerTitle(worker)}
-      </span>
-      <span className="order-5 sm:order-3">
-        <WorkerModel worker={worker} />
-      </span>
-      {line ? (
-        <span className="order-7 min-w-0 flex-1 truncate font-mono text-[11px] text-muted sm:order-4" title={line}>
-          {line}
-        </span>
-      ) : (
-        <span className="order-7 flex-1 sm:order-4" />
-      )}
-      <span className="order-6 sm:order-5">
-        <WorkerTimes worker={worker} now={now} />
-      </span>
-      {hasLog(worker) && (
-        <button
-          type="button"
-          className="order-3 shrink-0 rounded-control border border-stroke px-1.5 py-px font-mono text-[11px] text-muted hover:bg-raised hover:text-ink sm:order-6"
-          title="Open its terminal output"
-          aria-label={`Open output of ${workerTitle(worker)}`}
-          onClick={e => {
-            e.stopPropagation()
-            setOpen(true)
-          }}
-        >
-          &gt;_ log
-        </button>
-      )}
-      {/* On a phone the row breaks here: model, times and output on the second line. */}
-      <span className="order-4 h-0 basis-full sm:hidden" aria-hidden="true" />
-      {open && <WorkerTerminal worker={worker} onClose={() => setOpen(false)} />}
-    </div>
-  )
 }
 
 const MARK: Record<string, { mark: string; tone: string }> = {
@@ -295,7 +220,15 @@ export function WorkerTerminal({ worker, onClose }: { worker: Worker; onClose: (
         <span>{source}</span>
         {live && log?.live && <span>· refreshes every {LOG_REFRESH_MS / 1000}s</span>}
         {(error || log?.error) && <span className="text-danger">· {error || log?.error}</span>}
+        {worker.error && <span className="text-danger">· {worker.error}</span>}
       </div>
+      {!!worker.prs?.length && (
+        <div className="flex flex-wrap gap-1.5 border-t border-stroke px-3 py-1.5" data-testid="worker-prs">
+          {worker.prs.map(pr => (
+            <PrChip key={pr.url} pr={pr} />
+          ))}
+        </div>
+      )}
     </dialog>
   )
 }

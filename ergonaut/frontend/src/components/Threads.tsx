@@ -1,8 +1,7 @@
 import { useContext } from 'react'
 import { Link } from 'react-router-dom'
-import type { PrLink, SentCard, Session, ThreadSummary, Worker } from '../api'
+import type { PrLink, SentCard, Session, ThreadSummary } from '../api'
 import { BotBadge, DirectoryContext } from './BotIcon'
-import { WorkerRow } from './WorkerActivity'
 
 const PR_TONE: Record<PrLink['state'], string> = {
   '': 'border-stroke text-muted',
@@ -107,28 +106,6 @@ export function ThreadCard({ card }: { card: SentCard }) {
         </div>
       )}
     </Link>
-  )
-}
-
-/**
- * A worker in the transcript: one compact row (state, agent and model, times) opening the
- * same terminal as the activity panel, with its error or progress and pull requests.
- * Its live output is in the activity panel, not repeated here.
- */
-export function WorkerCard({ worker }: { worker: Worker }) {
-  const note = worker.error || (worker.status === 'running' ? '' : worker.progress)
-  return (
-    <div className="w-full rounded-card border border-stroke bg-surface px-3 py-1">
-      <WorkerRow worker={worker} showLatest={false} />
-      {note && <div className={`mb-1 line-clamp-2 text-xs ${worker.error ? 'text-danger' : 'text-muted'}`}>{note}</div>}
-      {!!worker.prs?.length && (
-        <div className="mb-1 flex flex-wrap gap-1.5">
-          {worker.prs.map(pr => (
-            <PrChip key={pr.url} pr={pr} />
-          ))}
-        </div>
-      )}
-    </div>
   )
 }
 

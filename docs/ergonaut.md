@@ -513,20 +513,22 @@ unscoped devbox drafts are not migrated because their owner is unknown.
   live request card shows that a queued message has moved on, the call no longer
   shows its old queue position; without live request data the original status
   remains. Workers (`ergo_agent_start`, `orca_start_worker`, `ergo_worker_start`)
-  get a one-row card: a state badge (running, waiting on you, stalled past
-  the plugin's `stall_minutes`, queued, done, failed), the coding agent with
-  its model and effort (or tier; "model unknown" for workers that never
-  recorded one), how long it has run and since its last output, its error or
-  progress, and PRs. Its "log" button opens a terminal view that reads the
+  show as badges, never as full-width rows: workers started one after another
+  share one line, side by side. A badge has a state dot (running, waiting on
+  you in amber, stalled past the plugin's `stall_minutes`, queued, done,
+  failed), a short title and the short model ("Haiku 5.5"; "?" for workers
+  that never recorded one). Its tooltip has the rest: agent, model, effort and
+  tier, how long it has run and since its last output, its latest line, error
+  or progress, and PRs. Clicking it opens a terminal view that reads the
   agent's recent transcript or screen from Orca: monospace, escape codes
   stripped, line breaks kept and long lines scrolling sideways, refreshed
-  every 5 seconds while it runs and following the end unless you scroll up.
-- **Activity**: above the transcript, a chat's open requests and workers sit
-  behind one summary chip ("2 agents running · 1 waiting on you", with a
-  coloured dot per worker), open or closed per chat. Open, each worker is one
-  row (two on a phone) with the same badge, model and log button plus its
-  latest line of output, and the list scrolls inside a short panel instead
-  of pushing the chat down. A reply from another chat
+  every 5 seconds while it runs and following the end unless you scroll up,
+  with the worker's PRs underneath.
+- **Activity**: under the chat's title (on a phone, under the session bar,
+  which no longer counts workers), one line holds a badge per worker, side by
+  side, waiting-on-you first, the same badges as in the transcript. When they
+  don't fit, the line scrolls sideways and a "+N" lists every worker. Open
+  requests sit behind a toggle on the same line. A reply from another chat
   is one row you can open, the user message whose turn sent work on says
   "Sent to" the chat, and chat ids in a bot's text are links with a status
   dot.

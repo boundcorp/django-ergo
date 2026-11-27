@@ -785,13 +785,8 @@ export function Chat({ onChange }: { onChange: () => void }) {
                 : detail.messages.filter(m => m.line >= lastCall.first_sequence!),
             ),
         )
-  const summary = statusSummary(
-    detail.requests ?? [],
-    detail.workers ?? [],
-    pinCount,
-    detail.todos ?? [],
-    detail.wakes ?? [],
-  )
+  // Workers show as badges on the activity line under this bar, so the bar doesn't count them too.
+  const summary = statusSummary(detail.requests ?? [], [], pinCount, detail.todos ?? [], detail.wakes ?? [])
   const archived = detail.session.status === 'completed' && detail.session.role === 'thread'
   // A turn doesn't touch the session row, so its updated_at stays at creation.
   const lastActivity = [detail.session.updated_at, detail.messages[detail.messages.length - 1]?.timestamp]
