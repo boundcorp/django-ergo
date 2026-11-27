@@ -3511,6 +3511,15 @@ def test_attachments_access_rules(tmp_path, settings):
     updated = plugin.update(ctx, made["id"], "- eggs\n- milk")
     assert updated["size"] == len("- eggs\n- milk")
     assert plugin.read(ctx, made["id"]).endswith("- eggs\n- milk")
+    window = plugin.read(ctx, made["id"], start_line=2, end_line=2)
+    assert "lines 2-2 of 2" in window and "2: - milk" in window
+    assert "sha256 " in window and "version 2" in window
+    with pytest.raises(ValueError, match="No file"):
+        plugin.read(ctx, str(secret.id), start_line=1)
+    large = save_session_file(mine, "large.txt", b"x" * 101)
+    assert plugin.read(ctx, str(large.id)).endswith("x" * 101)
+    with pytest.raises(ValueError, match="ranged read limit"):
+        plugin.read(ctx, str(large.id), start_line=1)
 
 
 @pytest.mark.django_db
