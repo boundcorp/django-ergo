@@ -245,9 +245,6 @@ def revise(  # noqa: PLR0913
             .only("pk", "reply_updates", "bot_name")
             .get(pk=session.pk)
         )
-        if not locked.reply_updates:
-            msg = "Reply updates are off in this chat; send a new reply."
-            raise ToolError(msg, code="disabled")
         prior = ReplyRevision.objects.filter(
             session=locked, tool_use_id=tool_use_id
         ).first()
@@ -259,7 +256,11 @@ def revise(  # noqa: PLR0913
                     code="replay_mismatch",
                     reply_id=prior.reply_id,
                 )
+            # Before the switch check: a resumed turn replays calls already made.
             return _receipt(reply_id, prior.revision, "update", replayed=True)
+        if not locked.reply_updates:
+            msg = "Reply updates are off in this chat; send a new reply."
+            raise ToolError(msg, code="disabled")
         target = _target(locked, reply_id)
         now, shown = current(locked, reply_id, target.tool_input or {})
         if revision != now:

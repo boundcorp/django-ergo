@@ -339,6 +339,8 @@ def test_scope_author_questions_and_toggle():
     assert exc.value.fields == {"code": "is_update", "reply_id": "r1"}
     ConversationSession.objects.filter(pk=chat.pk).update(reply_updates=False)
     assert _code(lambda: _revise(chat, "u7", "r1", 1)) == "disabled"
+    # A resumed turn replaying an accepted call still gets its receipt.
+    assert _revise(chat, "u4", "r1", 0)["replayed"] is True
 
 
 @pytest.mark.django_db

@@ -630,9 +630,10 @@ def test_control_migration_main_leaf_0064_to_0065_and_back(settings):
     main = ("django_ergo", "0064_isolated_analysis")
     leaf = ("django_ergo", "0065_provider_weekly_budgets")
     executor = MigrationExecutor(connection)
-    assert [n for n in executor.loader.graph.leaf_nodes() if n[0] == "django_ergo"] == [
-        leaf
-    ]
+    # Later migrations chain after 0065 (0066 reply updates), linearly.
+    leaves = [n for n in executor.loader.graph.leaf_nodes() if n[0] == "django_ergo"]
+    assert len(leaves) == 1
+    assert leaf in executor.loader.graph.forwards_plan(leaves[0])
     assert main in {p.key for p in executor.loader.graph.node_map[leaf].parents}
     try:
         executor.migrate([main])
