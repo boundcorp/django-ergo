@@ -14,6 +14,7 @@ from django_ergo.bots.tools import ToolContext
 from django_ergo.conversation.images import ToolResult
 from django_ergo.conversation.models import ConversationAttachment
 from django_ergo.conversation.models import ConversationSession
+from django_ergo.conversation.tool_dispatch import ToolError
 from django_ergo.observability import charts
 from django_ergo.plugins.observability import ObservabilityPlugin
 from tests.observability_server import FakeServer
@@ -117,7 +118,7 @@ def test_models_cannot_supply_urls_headers_or_credentials(server, token):
     plugin = make_plugin(server)
     ctx = ToolContext()
     for arg in ("url", "headers", "token", "token_env", "grafana_url"):
-        with pytest.raises(TypeError):
+        with pytest.raises(ToolError, match="unknown argument"):
             call(plugin, ctx, "ergo_prom_query", expr="up", tz="UTC", **{arg: "x"})
     assert server.requests == []
 

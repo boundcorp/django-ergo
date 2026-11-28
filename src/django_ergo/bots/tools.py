@@ -43,6 +43,7 @@ PolicyError: they belong to private inference, not tools.
 from __future__ import annotations
 
 import copy
+import difflib
 import hashlib
 import importlib.util
 import inspect
@@ -67,6 +68,7 @@ from django_ergo.conversation.adapters import OpenAIToolAdapter
 from django_ergo.conversation.images import ToolResult
 from django_ergo.conversation.images import as_tool_result
 from django_ergo.conversation.inference_policy import PolicyError
+from django_ergo.conversation.tool_dispatch import ToolError
 from django_ergo.conversation.toolkit import ApprovalPreview
 from django_ergo.conversation.toolkit import Toolkit
 from django_ergo.conversation.toolkit import approval_decision
@@ -213,6 +215,94 @@ class BotTool:
             "properties": self.parameters,
             "required": self.required,
         }
+
+
+def check_arguments(tool: BotTool, arguments: dict) -> None:
+    """Refuse a call that can't bind, before the function runs.
+
+    Missing required arguments always fail. Unknown names fail only when the
+    function takes no ``**kwargs`` and the name isn't declared either, so a
+    tool that accepts extras keeps working. Types are not checked.
+    """
+    if not isinstance(arguments, dict):
+        msg = "arguments must be an object"
+        raise ToolError(
+            msg,
+            tool=tool.name,
+            category="invalid_arguments",
+            retryable=True,
+            state_changed=False,
+        )
+    defaulted = _defaulted_names(tool)
+    missing = [
+        name
+        for name in tool.required
+        if name not in arguments and name not in defaulted
+    ]
+    problems = []
+    fields: dict[str, Any] = {}
+    if missing:
+        problems.append(f"missing required argument(s): {', '.join(missing)}")
+        fields["missing"] = missing
+    unknown = _unknown_arguments(tool, arguments)
+    if unknown:
+        known = _accepted_names(tool)
+        notes = []
+        for name in unknown:
+            close = difflib.get_close_matches(name, known, n=1)
+            notes.append(f"{name} (did you mean {close[0]}?)" if close else name)
+        problems.append(f"unknown argument(s): {', '.join(notes)}")
+        fields["unknown"] = unknown
+    if problems:
+        if known_names := sorted(tool.parameters):
+            problems.append(f"{tool.name} takes: {', '.join(known_names)}")
+        raise ToolError(
+            "; ".join(problems),
+            tool=tool.name,
+            category="invalid_arguments",
+            retryable=True,
+            state_changed=False,
+            **fields,
+        )
+
+
+def _defaulted_names(tool: BotTool) -> set[str]:
+    """Parameters the function fills in itself, even if the schema lists them.
+
+    A schema's ``required`` can be wider than the signature (an explicit
+    ``parameters=`` with no ``required=`` lists every parameter), and calls
+    that omit those have always worked, so they stay valid.
+    """
+    try:
+        params = inspect.signature(tool.function).parameters.values()
+    except (TypeError, ValueError):
+        return set()
+    return {p.name for p in params if p.default is not p.empty}
+
+
+def _accepted_names(tool: BotTool) -> list[str]:
+    names = set(tool.parameters)
+    try:
+        params = list(inspect.signature(tool.function).parameters.values())
+    except (TypeError, ValueError):
+        return sorted(names)
+    if tool.takes_context and params:
+        params = params[1:]
+    names.update(
+        p.name for p in params if p.kind in (p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY)
+    )
+    return sorted(names)
+
+
+def _unknown_arguments(tool: BotTool, arguments: dict) -> list[str]:
+    try:
+        params = inspect.signature(tool.function).parameters.values()
+    except (TypeError, ValueError):
+        return []  # can't inspect it: leave it to the function
+    if any(p.kind is p.VAR_KEYWORD for p in params):
+        return []
+    accepted = set(_accepted_names(tool))
+    return sorted(name for name in arguments if name not in accepted)
 
 
 @dataclass
@@ -532,8 +622,10 @@ class FunctionToolkit(Toolkit):
         if tool is None:
             msg = f"Unknown tool: {tool_name}"
             raise ValueError(msg)
+        arguments = arguments or {}
+        check_arguments(tool, arguments)
         args = [self.context] if tool.takes_context else []
-        result = as_tool_result(tool.function(*args, **(arguments or {})))
+        result = as_tool_result(tool.function(*args, **arguments))
         if isinstance(result, str | ToolResult):
             return result
         return json.dumps(result, default=str)
