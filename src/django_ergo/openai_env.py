@@ -28,6 +28,25 @@ def register_openai_alias(name) -> None:
         _NAMES.add(name.upper())
 
 
+def default_engine_is_openai() -> bool:
+    """Whether a bot that names no engine type inherits the OpenAI engine.
+
+    Reads the raw setting (no imports), so it is safe at bot load time.
+    """
+    from django.conf import settings
+
+    from django_ergo.settings import DEFAULTS
+
+    config = {}
+    if settings.configured:
+        raw = getattr(settings, "DJANGO_ERGO", {})
+        config = raw if isinstance(raw, Mapping) else {}
+    return (
+        config.get("CONVERSATION_ENGINE_TYPE", DEFAULTS["CONVERSATION_ENGINE_TYPE"])
+        == "openai"
+    )
+
+
 def openai_credential_names() -> frozenset[str]:
     from django.conf import settings
 

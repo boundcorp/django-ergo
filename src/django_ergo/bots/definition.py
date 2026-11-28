@@ -266,9 +266,13 @@ class BotDefinition:
     use_default_skills: bool = True
 
     def __post_init__(self):
-        if self.engine_type == "openai":
-            from django_ergo.openai_env import register_openai_alias
+        from django_ergo.openai_env import default_engine_is_openai
+        from django_ergo.openai_env import register_openai_alias
 
+        # The effective type: a bot naming no engine inherits the host default.
+        if self.engine_type == "openai" or (
+            not self.engine_type and default_engine_is_openai()
+        ):
             register_openai_alias(self.api_key_env)
             register_openai_alias(self.engine_config.get("api_key_env"))
 
