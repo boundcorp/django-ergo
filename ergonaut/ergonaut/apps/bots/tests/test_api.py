@@ -2611,19 +2611,19 @@ def test_reply_updates_toggle_is_per_chat_and_owner_only(client, cook, bot_folde
     thread = post(client, "/api/bots/kitchen/threads", {"title": "Task"}).json()
     other_thread = post(client, "/api/bots/kitchen/threads", {"title": "Other"}).json()
     url = f"/api/sessions/{thread['id']}"
-    assert thread["reply_updates"] is False
-    assert post(client, f"{url}/reply-updates", {"enabled": True}).json()["reply_updates"] is True
+    assert thread["reply_updates"] is True
+    assert post(client, f"{url}/reply-updates", {"enabled": False}).json()["reply_updates"] is False
     # Persisted, and only for this chat.
-    assert client.get(url).json()["session"]["reply_updates"] is True
-    assert client.get(f"/api/sessions/{other_thread['id']}").json()["session"]["reply_updates"] is False
+    assert client.get(url).json()["session"]["reply_updates"] is False
+    assert client.get(f"/api/sessions/{other_thread['id']}").json()["session"]["reply_updates"] is True
     from django_ergo.conversation.models import ConversationSession
 
     # A stale full save of the chat (any metadata writer) cannot undo it.
     stale = ConversationSession.objects.get(pk=thread["id"])
-    stale.reply_updates = False
+    stale.reply_updates = True
     stale.metadata = {**stale.metadata, "note": "x"}
     stale.save()
-    assert ConversationSession.objects.get(pk=thread["id"]).reply_updates is True
+    assert ConversationSession.objects.get(pk=thread["id"]).reply_updates is False
     other = get_user_model().objects.create_user("other-updates", password="pw")
     client.force_login(other)
     assert post(client, f"{url}/reply-updates", {"enabled": False}).status_code in (403, 404)

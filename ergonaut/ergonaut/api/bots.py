@@ -151,7 +151,7 @@ class SessionOut(Schema):
     status_line: str = ""
     pinned: bool = False
     is_permanent: bool = False
-    reply_updates: bool = False  # the bot may revise its replies in place (opt-in per chat)
+    reply_updates: bool = True  # owners can turn off in-place replies per chat
     last_activity: datetime | None = None  # when its latest turn moved
     workers_running: int = 0
     workers_total: int = 0

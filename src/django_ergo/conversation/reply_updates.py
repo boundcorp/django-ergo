@@ -1,4 +1,4 @@
-"""Reply updates: a bot revises its replies in place, in chats that opt in.
+"""Reply updates: a bot revises its replies in place, unless the chat owner turns updates off.
 
 A chat with ``ConversationSession.reply_updates`` on gets one more tool and
 two more ``send_reply`` fields:
@@ -22,7 +22,7 @@ the transcript, so every version is kept. The server checks every change:
 - a replayed tool call (same tool_use id) returns its first receipt.
 
 Separate replies are always allowed; the instructions only prefer updates.
-Off (the default), none of this is offered and every reply is a new message.
+When turned off, none of this is offered and every reply is a new message.
 """
 
 from __future__ import annotations

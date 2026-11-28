@@ -80,6 +80,7 @@ function detail(id: string, messages: Message[], hasMore: boolean, first = messa
     debug_shortcut: false,
     session: {
       id,
+      reply_updates: true,
       bot: 'helper',
       title: id,
       role: 'thread',
@@ -272,17 +273,17 @@ test('the thread options switch reply updates for this chat', async () => {
       ;(container.querySelector('[data-options-button]') as HTMLButtonElement).click()
     })
   }
-  expect(toggle().getAttribute('aria-pressed')).toBe('false')
-  expect(toggle().textContent).toContain('Turn on reply updates')
+  expect(toggle().getAttribute('aria-pressed')).toBe('true')
+  expect(toggle().textContent).toContain('Turn off reply updates')
   await act(async () => {
     toggle().click()
     await Promise.resolve()
   })
-  expect(sent).toEqual([{ id: 'thread', enabled: true }])
+  expect(sent).toEqual([{ id: 'thread', enabled: false }])
   if (!toggle()) {
     await act(async () => {
       ;(container.querySelector('[data-options-button]') as HTMLButtonElement).click()
     })
   }
-  expect(toggle().getAttribute('aria-pressed')).toBe('true')
+  expect(toggle().getAttribute('aria-pressed')).toBe('false')
 })

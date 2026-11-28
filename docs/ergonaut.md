@@ -28,8 +28,9 @@ Resuming is manual, including after a repeated output-limit failure.
 
 ## Reply updates
 
-Each chat has a **Reply updates** switch in its options, off by default. When
-it is on, the bot can revise one of its replies in place instead of adding a
+Each chat has a **Reply updates** switch in its options, on by default for
+new and existing chats. Owners can switch it off per chat; that choice stays
+off. When it is on, the bot can revise one of its replies in place instead of adding a
 new bubble: the reply shows its latest version where it was posted, and
 **Updated · N earlier versions** opens every earlier version with its files.
 Only updates the server accepted change a reply; separate replies and

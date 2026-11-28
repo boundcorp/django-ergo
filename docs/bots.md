@@ -1110,10 +1110,12 @@ any chat session, not only bots.
 
 ### Reply updates
 
-A chat can opt in to **reply updates** (`ConversationSession.reply_updates`,
-off by default; Ergonaut has a switch in the thread options and
-`POST /api/sessions/{id}/reply-updates {"enabled": true}`). With it on, the
-turn also gets:
+**Reply updates** are on by default (`ConversationSession.reply_updates`)
+for new chats and existing chats upgraded by migration 0066. That migration
+introduces the preference; it does not repeatedly overwrite saved choices.
+Owners can turn updates off for each chat in Ergonaut thread options or with
+`POST /api/sessions/{id}/reply-updates {"enabled": false}`; an explicit off
+choice stays off. With updates on, the turn also gets:
 
 - `ergo_interim_reply`, which never ends the turn. `action: "append"` posts a
   new reply; `action: "update"` revises one of the bot's replies, given its

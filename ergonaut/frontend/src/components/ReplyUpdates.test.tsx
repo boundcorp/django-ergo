@@ -183,3 +183,52 @@ test('loading older history keeps the reply node; an update whose reply is unloa
   expect(container.querySelector('[data-reply-id="r1"]')).toBe(r1)
   expect(container.querySelector('[data-reply-id="r2"]')).toBe(r2)
 })
+
+test('intervening tool calls keep their cards, results and open state through updates and reload', () => {
+  const initial = [append(1, 'i1', 'Starting'), result(2, 'i1', '{"reply_id":"i1","revision":0}')]
+  const tools = [
+    use(3, 't1', 'ergo_bash', { command: 'printf tool-one' }),
+    result(4, 't1', 'tool-one-result'),
+    append(5, 'i2', 'Separate note'),
+    result(6, 'i2', '{"reply_id":"i2","revision":0}'),
+    use(7, 't2', 'ergo_lookup', { query: 'tool-two' }),
+    result(8, 't2', 'tool-two-result'),
+  ]
+  render([...initial, ...tools])
+  const node = bubbles()[0]
+  const toolNode = container.querySelector('#m-3')!
+  const toggle = toolNode.querySelector('button[aria-expanded]') as HTMLButtonElement
+  act(() => toggle.click())
+  const changed = [
+    update(9, 'u1', 'i1', 0, 'Half done'),
+    receipt(10, 'u1', 'i1', 1),
+    reply(11, 'f1', 'All done', { update_reply_id: 'i1', update_revision: 1 }),
+    result(12, 'f1'),
+  ]
+  const history = [...initial, ...tools, ...changed]
+  render(history)
+  expect(bubbles()[0]).toBe(node)
+  expect(container.querySelector('#m-3')).toBe(toolNode)
+  expect(toggle.getAttribute('aria-expanded')).toBe('true')
+  const check = () => {
+    expect(bubbles().map(b => b.getAttribute('data-reply-id'))).toEqual(['i1', 'i2'])
+    expect(container.querySelectorAll('#m-3')).toHaveLength(1)
+    expect(container.querySelectorAll('#m-7')).toHaveLength(1)
+    for (const id of ['m-3', 'm-7']) {
+      const button = container.querySelector(`#${id} button[aria-expanded]`) as HTMLButtonElement
+      if (button.getAttribute('aria-expanded') === 'false') act(() => button.click())
+    }
+    expect(container.textContent).toContain('tool-one-result')
+    expect(container.textContent).toContain('tool-two-result')
+    expect(text(bubbles()[0])).toContain('All done')
+    expect(text(bubbles()[0].querySelector('.reply-revisions')!)).toContain('Starting')
+    expect(text(bubbles()[0].querySelector('.reply-revisions')!)).toContain('Half done')
+    expect(text(bubbles()[1])).toContain('Separate note')
+  }
+  check()
+  act(() => root.unmount())
+  const { createRoot } = require('react-dom/client')
+  root = createRoot(container)
+  render(history)
+  check()
+})

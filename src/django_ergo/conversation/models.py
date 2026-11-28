@@ -95,9 +95,9 @@ class ConversationSession(TimeStampedMixin):
     permanence_initialized = models.BooleanField(
         default=False, db_default=False, editable=False
     )
-    # Opt-in per chat: the bot may revise its replies in place
+    # On by default per chat: the bot may revise its replies in place
     # (conversation.reply_updates). Off keeps every reply a new message.
-    reply_updates = models.BooleanField(default=False, db_default=False)
+    reply_updates = models.BooleanField(default=True, db_default=True)
     # Kept separate from metadata so stale metadata writers cannot undo a rename.
     user_title = models.CharField(max_length=200, null=True, blank=True)  # noqa: DJ001 - NULL means automatic
     # Overrides workflow.instructions when set.

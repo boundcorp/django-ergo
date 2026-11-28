@@ -1,4 +1,4 @@
-"""Reply updates: the per-chat opt-in, ergo_interim_reply and send_reply updates.
+"""Reply updates: the per-chat preference, ergo_interim_reply and send_reply updates.
 
 These tests establish the server contract (scope, preconditions, replay,
 history). They say nothing about how well a model uses the tools.
@@ -50,13 +50,15 @@ def _tools(call):
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_off_by_default_offers_nothing_new(tmp_path):
+async def test_explicit_off_offers_nothing_new(tmp_path):
     user = await User.objects.acreate(username="plain")
     bot, engine = make_bot(
         tmp_path, claude_tool("send_reply", {"text": "Hi"}, tool_id="r0")
     )
     root = await bot.root_session(user)
-    assert root.reply_updates is False
+    assert root.reply_updates is True
+    await ConversationSession.objects.filter(pk=root.pk).aupdate(reply_updates=False)
+    await root.arefresh_from_db()
     await bot.ask(root, "Hello")
     tools = _tools(engine._client.calls[0])
     assert reply_updates.INTERIM_REPLY_TOOL not in tools
@@ -71,6 +73,7 @@ async def test_append_update_then_final_update_keeps_every_version(tmp_path):
     bot, engine = make_bot(
         tmp_path,
         claude_tool(tool, {"action": "append", "text": "Starting"}, tool_id="i1"),
+        claude_tool("pantry_count", {"item": "eggs"}, tool_id="t1"),
         claude_tool(
             tool,
             {
@@ -84,6 +87,7 @@ async def test_append_update_then_final_update_keeps_every_version(tmp_path):
         ),
         # A deliberate separate reply is still allowed.
         claude_tool(tool, {"action": "append", "text": "Side note"}, tool_id="i2"),
+        claude_tool("pantry_count", {"item": "beans"}, tool_id="t2"),
         claude_tool(
             "send_reply",
             {"text": "All done", "update_reply_id": "i1", "update_revision": 1},
@@ -91,8 +95,7 @@ async def test_append_update_then_final_update_keeps_every_version(tmp_path):
         ),
     )
     root = await bot.root_session(user)
-    await ConversationSession.objects.filter(pk=root.pk).aupdate(reply_updates=True)
-    await root.arefresh_from_db()
+    assert root.reply_updates is True
 
     result = await bot.ask(root, "Do the work")
 
@@ -104,9 +107,11 @@ async def test_append_update_then_final_update_keeps_every_version(tmp_path):
     # The final reply is still the turn's terminal answer.
     assert result.text == "All done"
     assert result.reply.update_reply_id == "i1"
-    assert len(engine._client.calls) == 4
+    assert len(engine._client.calls) == 6
 
     results = _results(engine)
+    assert json.loads(results["t1"][0]) == {"item": "eggs", "count": 4}
+    assert json.loads(results["t2"][0]) == {"item": "beans", "count": 0}
     assert json.loads(results["i1"][0]) == {
         "reply_id": "i1",
         "revision": 0,
@@ -134,8 +139,10 @@ async def test_append_update_then_final_update_keeps_every_version(tmp_path):
     ]
     assert stored == [
         ("i1", "Starting"),
+        ("t1", None),
         ("u1", "Half done"),
         ("i2", "Side note"),
+        ("t2", None),
         ("f1", "All done"),
     ]
 

@@ -11,11 +11,13 @@ class Migration(migrations.Migration):
         ("django_ergo", "0065_provider_weekly_budgets"),
     ]
 
+    # New preference: enable existing chats once when adding the column.
+    # No data backfill runs later, so explicit off choices remain untouched.
     operations = [
         migrations.AddField(
             model_name="conversationsession",
             name="reply_updates",
-            field=models.BooleanField(db_default=False, default=False),
+            field=models.BooleanField(db_default=True, default=True),
         ),
         migrations.CreateModel(
             name="ReplyRevision",

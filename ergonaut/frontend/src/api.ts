@@ -42,7 +42,7 @@ export type Session = {
   status_line?: string // the bot's one line from its latest reply (a resolved thread's summary)
   pinned?: boolean
   is_permanent?: boolean
-  reply_updates?: boolean // the bot may revise its replies in place (opt-in per chat)
+  reply_updates?: boolean // the bot may revise its replies in place (on by default)
   last_activity?: string | null // when its latest turn moved
   workers_running?: number
   workers_total?: number
