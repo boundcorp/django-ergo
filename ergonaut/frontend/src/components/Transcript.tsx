@@ -1003,6 +1003,45 @@ function uniqueToolIds(messages: Message[]): Message[] {
   }))
 }
 
+type ReplyUpdate = { message: Message; block: Extract<Block, { type: 'tool_use' }> }
+
+/** Group ordinary replies within one human interval. Tool-result rows are not human messages. */
+function replyUpdates(messages: Message[], results: Map<string, ToolResult>): ReplyUpdate[][] {
+  const groups: ReplyUpdate[][] = []
+  let current: ReplyUpdate[] = []
+  let author = ''
+  const close = () => {
+    if (current.length) groups.push(current)
+    current = []
+    author = ''
+  }
+  for (const message of messages) {
+    if (
+      message.provenance?.kind ||
+      (message.role !== 'assistant' && message.blocks.some(b => b.type !== 'tool_result'))
+    ) {
+      close()
+      continue
+    }
+    if (message.role !== 'assistant') continue
+    const identity = JSON.stringify(message.author ?? {})
+    if (current.length && identity !== author) close()
+    for (const block of message.blocks) {
+      if (block.type !== 'tool_use' || block.name !== REPLY_TOOL || results.get(block.id)?.is_error) continue
+      const reply = block.input as Reply
+      // Questions remain in the transcript as separate, immediately visible requests.
+      if (reply.type === 'question') {
+        close()
+        continue
+      }
+      author = identity
+      current.push({ message, block })
+    }
+  }
+  close()
+  return groups
+}
+
 export function Transcript({
   messages: rawMessages,
   calls,
@@ -1028,12 +1067,23 @@ export function Transcript({
 }) {
   const { sessions } = useContext(DirectoryContext)
   const messages = useMemo(() => uniqueToolIds(rawMessages), [rawMessages])
-  const chatMessages = useMemo(() => toChatMessages(messages), [messages])
   const contexts = useMemo(() => contextPlacement(messages, calls), [messages, calls])
   const [openFolds, setOpenFolds] = useState<Set<string>>(new Set())
   const results = new Map<string, ToolResult>()
   for (const message of messages)
     for (const block of message.blocks) if (block.type === 'tool_result') results.set(block.tool_use_id, block)
+  const groups = replyUpdates(messages, results)
+  const groupedIds = new Set(groups.flatMap(group => group.map(update => update.block.id)))
+  const groupById = new Map(groups.map(group => [`reply-updates:${group[0].message.line}:${group[0].block.id}`, group]))
+  const afterLine = new Map<number, string[]>()
+  for (const [id, group] of groupById) {
+    const line = group[group.length - 1].message.line
+    afterLine.set(line, [...(afterLine.get(line) ?? []), id])
+  }
+  const chatMessages = toChatMessages(messages).flatMap(chat => [
+    chat,
+    ...(afterLine.get(adapterMeta(chat).source.line) ?? []).map(id => ({ ...chat, id, parts: [] })),
+  ])
   const pending = new Set(
     calls.flatMap(c => (c.status === 'awaiting_approval' ? c.pending_approvals.map(a => a.id) : [])),
   )
@@ -1082,11 +1132,35 @@ export function Transcript({
   // Parts: every Ergonaut block is drawn by its own card (renderBlock); the package supplies the list, keys and slots.
   const renderPart: RenderPart = (_part, { message, index }) => {
     const meta = adapterMeta(message)
-    return renderBlock(meta.source, meta.blocks[index], meta.blocks, env, folds)
+    const block = meta.blocks[index]
+    if (block.type === 'tool_use' && groupedIds.has(block.id)) return null
+    return renderBlock(meta.source, block, meta.blocks, env, folds)
   }
   // Messages: the shell around a message's parts (event and attributed messages, ids for links, call headers,
   // sent-to notes, files a bot made, context panels, compaction dividers, voice sessions).
   const renderMessage: RenderMessage = (chat, { parts }) => {
+    const group = groupById.get(chat.id)
+    if (group) {
+      const latest = group[group.length - 1]
+      return (
+        <div className="mt-6" data-reply-updates={chat.id}>
+          {group.length > 1 && (
+            <details className="mb-2 max-w-[85%] text-xs text-muted">
+              <summary className="cursor-pointer">
+                {group.length - 1} earlier {group.length === 2 ? 'update' : 'updates'}
+              </summary>
+              <div className="mt-2 flex flex-col items-start gap-2">
+                {group.slice(0, -1).map(update => (
+                  <ReplyBubble key={update.block.id} reply={update.block.input as Reply} message={update.message} />
+                ))}
+              </div>
+            </details>
+          )}
+          {group.length > 1 && <div className="mb-1 text-xs text-muted">Latest update</div>}
+          <ReplyBubble reply={latest.block.input as Reply} message={latest.message} />
+        </div>
+      )
+    }
     const message = adapterMeta(chat).source
     const body =
       message.author?.kind === 'system' || message.provenance?.kind === 'event' ? (

@@ -26,6 +26,12 @@ work and write long content in smaller pieces: one file per call and documents
 in parts of about 2,000 words. An unfinished tool call was not saved or run.
 Resuming is manual, including after a repeated output-limit failure.
 
+The chat groups consecutive ordinary assistant replies between human messages as
+updates: the latest reply stays visible and earlier updates can be expanded.
+Questions remain visible on their own, and events and attributed messages start
+new groups. Earlier replies and their attachments remain in the recorded history.
+The chat follows new activity only while the reader is already at the bottom.
+
 ## Markdown attachments
 
 Markdown attachments in chat appear as document cards. Open the card to read
