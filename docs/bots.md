@@ -3022,3 +3022,40 @@ grants retain their lifetime limits. Config alone never funds this mode. See
 [model-pools.md](model-pools.md#recurring-provider-budgets-utc-iso-weeks)
 for the secondary API schema and authenticated account/consent workflow. Existing
 personal privacy restrictions and paid coding refusals still apply.
+
+### OpenAI consumer selection and child environments
+
+An OpenAI API engine can select a credential explicitly, for example
+`engine: {type: openai, api_key_env: BOUNDCORP_ORG_OPENAI_KEY}` in a bot or
+`api_key_env` on an OpenAI entry in `providers.yaml`. Direct engine config also
+accepts `api_key_env`. A configured missing or empty key fails closed even when
+an inline key or `OPENAI_API_KEY` is available. With no selector configured,
+legacy inline/SDK credential behavior remains. Embeddings and voice have their
+own selectors; see [semantic search](semantic-search.md),
+[attachments](attachments.md) and [realtime voice](realtime-voice.md).
+
+Ordinary Claude/Codex, local-shell and Bash/tool children exclude
+`OPENAI_API_KEY`, `BOUNDCORP_ORG_OPENAI_KEY`, and explicit OpenAI consumer aliases.
+The final launch environment is scrubbed after overrides and on local-shell
+resume, so `pass_env`, `secrets` and environment overrides cannot restore them.
+The existing subscription-auth rules and private `FIREWORKS_` protection remain.
+The existing explicitly confined metered launch path keeps its own policy.
+
+Alias collection reads only known Django voice/chat/embedding settings and
+parsed OpenAI bot/provider/model selectors, including disabled OpenAI providers.
+Consumers also register their selector before looking up a key. Names must be
+valid environment identifiers of at most 256 characters. Collection never walks
+plugin config or unrelated YAML files, scans provider suffixes, imports an
+unrelated embedding provider, or switches to a global minimal environment on a
+file error. Loaded names are retained for the process lifetime across reloads.
+A file must pass its normal parser/load path before its new selectors are known;
+a changed file that has not been loaded is outside this collection boundary.
+Restarting clears retired names only after the new configuration is loaded.
+
+Existing Ads/Storytime Gemini, MiniMax, ElevenLabs and Sume media lists continue
+to launch as on main. **General-agent media credential exposure remains
+unresolved.** This OpenAI-only subset does not certify a hard sandbox or a paid
+spending cap. Same-UID processes, credential files and shell startup profiles
+can grant access beyond environment inheritance. Keep existing media approvals
+and limits; a separately reviewed trusted media executor is future work.
+Renaming the OpenAI key alone cannot isolate roles while broad `envFrom` remains.

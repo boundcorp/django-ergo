@@ -208,6 +208,18 @@ class Provider:
     enabled: bool = True  # providers.yaml; Ergonaut's runtime toggle is bots.pools
     billing: str = SUBSCRIPTION  # subscription or metered
 
+    def __post_init__(self):
+        self.register_openai_aliases()
+
+    def register_openai_aliases(self):
+        if self.type == "openai":
+            from django_ergo.openai_env import register_openai_alias
+
+            register_openai_alias(self.api_key_env)
+            register_openai_alias(self.config.get("api_key_env"))
+            for model in self.models.values():
+                register_openai_alias(model.config.get("api_key_env"))
+
     @property
     def worker_only(self) -> bool:
         return self.type == "omp"
@@ -394,6 +406,7 @@ class Providers:
                     },
                 )
                 provider.models[model.name] = model
+            provider.register_openai_aliases()
             providers[provider.name] = provider
         for key in data:
             if str(key).startswith("private") and key != PRIVATE_POOLS_KEY:

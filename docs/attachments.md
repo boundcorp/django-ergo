@@ -126,7 +126,10 @@ Voice notes reach the model as a transcript (OpenAI can take raw audio
 with `audio_input`, below; Claude can't hear it at all). Set
 `DJANGO_ERGO["AUDIO_TRANSCRIBER"] =
 "django_ergo.conversation.attachments.openai_transcriber"` (with
-`OPENAI_API_KEY`) to transcribe on arrival. Without a transcriber the bot
+`OPENAI_API_KEY` by default) to transcribe on arrival. Set
+`DJANGO_ERGO["VOICE_OPENAI_API_KEY_ENV"]` (or the Ergonaut environment
+variable `VOICE_OPENAI_API_KEY_ENV`) to select a dedicated key variable. A
+configured but empty/missing variable fails closed without ambient fallback. Without a transcriber the bot
 sees only that an audio file arrived.
 
 ### Pinning and pages

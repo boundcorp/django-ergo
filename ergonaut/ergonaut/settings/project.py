@@ -236,8 +236,11 @@ DJANGO_ERGO = {
     # (django_ergo.conversation.links), not a gh call per repo.
     "OPEN_PRS": "django_ergo.conversation.links.open_pull_requests",
     # Voice notes and other audio are transcribed with OpenAI when there's a key.
+    "VOICE_OPENAI_API_KEY_ENV": os.environ.get("VOICE_OPENAI_API_KEY_ENV", ""),
     "AUDIO_TRANSCRIBER": (
-        "django_ergo.conversation.attachments.openai_transcriber" if os.environ.get("OPENAI_API_KEY") else None
+        "django_ergo.conversation.attachments.openai_transcriber"
+        if os.environ.get(os.environ.get("VOICE_OPENAI_API_KEY_ENV") or "OPENAI_API_KEY")
+        else None
     ),
 }
 

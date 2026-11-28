@@ -265,6 +265,13 @@ class BotDefinition:
     skill_excludes: list[str] = field(default_factory=list)
     use_default_skills: bool = True
 
+    def __post_init__(self):
+        if self.engine_type == "openai":
+            from django_ergo.openai_env import register_openai_alias
+
+            register_openai_alias(self.api_key_env)
+            register_openai_alias(self.engine_config.get("api_key_env"))
+
     def chat(self, name: str) -> ChatDefinition:
         return self.chats.get(name) or ChatDefinition(name=name)
 

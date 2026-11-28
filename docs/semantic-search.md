@@ -51,7 +51,11 @@ DJANGO_ERGO = {
 }
 ```
 
-The OpenAI provider reads `OPENAI_API_KEY` unless `api_key` is set.
+The OpenAI provider accepts `api_key_env` in its provider configuration to
+select a credential variable explicitly. When configured, a missing or empty
+variable fails closed, even with an inline `api_key` or ambient key. Without
+a selector, `api_key` wins over `OPENAI_API_KEY`. Clients are per provider
+instance; no module-global OpenAI key is changed.
 `DeterministicEmbeddingProvider` gives stable fake vectors for tests. Write
 your own by subclassing `django_ergo.embedding_providers.EmbeddingProvider`
 and implementing `generate_embedding(text)` and `get_dimensions()`.

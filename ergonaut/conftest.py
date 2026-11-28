@@ -48,3 +48,11 @@ class ProjectFixture:
 def project_fixture_common(db, settings, test_user):
     user, client = test_user
     return ProjectFixture(settings=settings, user=user, client=client)
+
+
+@pytest.fixture(autouse=True)
+def _isolated_openai_aliases(monkeypatch):
+    """Temporary selectors model one process per test."""
+    from django_ergo import openai_env
+
+    monkeypatch.setattr(openai_env, "_NAMES", set())
