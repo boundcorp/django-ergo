@@ -76,3 +76,18 @@ def test_kwargs_tool_accepts_extras():
 def test_kwargs_tool_still_needs_required():
     with pytest.raises(ToolError):
         toolkit().execute_tool("loose", {"x": 1})
+
+
+@bot_tool(
+    parameters={"tab": {"type": "string"}, "name": {"type": "string"}},
+)
+def wide_schema(name: str, tab: str = "main") -> str:
+    # The schema lists every parameter as required; the function defaults tab.
+    return f"{name}:{tab}"
+
+
+def test_schema_required_but_function_defaulted_still_works():
+    tk = FunctionToolkit.from_functions([wide_schema], ToolContext())
+    assert tk.execute_tool("wide_schema", {"name": "n"}) == "n:main"
+    with pytest.raises(ToolError, match="missing required argument"):
+        tk.execute_tool("wide_schema", {"tab": "t"})

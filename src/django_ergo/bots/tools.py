@@ -233,7 +233,12 @@ def check_arguments(tool: BotTool, arguments: dict) -> None:
             retryable=True,
             state_changed=False,
         )
-    missing = [name for name in tool.required if name not in arguments]
+    defaulted = _defaulted_names(tool)
+    missing = [
+        name
+        for name in tool.required
+        if name not in arguments and name not in defaulted
+    ]
     problems = []
     fields: dict[str, Any] = {}
     if missing:
@@ -259,6 +264,20 @@ def check_arguments(tool: BotTool, arguments: dict) -> None:
             state_changed=False,
             **fields,
         )
+
+
+def _defaulted_names(tool: BotTool) -> set[str]:
+    """Parameters the function fills in itself, even if the schema lists them.
+
+    A schema's ``required`` can be wider than the signature (an explicit
+    ``parameters=`` with no ``required=`` lists every parameter), and calls
+    that omit those have always worked, so they stay valid.
+    """
+    try:
+        params = inspect.signature(tool.function).parameters.values()
+    except (TypeError, ValueError):
+        return set()
+    return {p.name for p in params if p.default is not p.empty}
 
 
 def _accepted_names(tool: BotTool) -> list[str]:
