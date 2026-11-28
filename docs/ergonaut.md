@@ -1023,6 +1023,14 @@ broker at a time, a turn task is killed after `ERGONAUT_TURN_TIME_LIMIT_SECONDS`
 (default 3600), and beat's `redispatch-inboxes` gives a turn to any message left
 over a minute in an idle chat's inbox with none queued (its task was lost).
 
+Beat's `recover-dead-turns` fails abandoned turns once their heartbeat is over
+ten minutes old and their Redis turn lock is gone. It also fails any delivered
+thread message whose latest attempt was recovered this way, including messages
+orphaned by earlier versions, and sends the normal delivery-failure reply to its
+sender. Recovery takes the recipient's turn lock and rechecks the attempt before
+settling a message; queued work, retries and pending approvals remain intact.
+This prevents a crashed delivery from indefinitely blocking thread resolution.
+
 Enabling the [native RunPod plugin](runpod.md) additionally requires its private
 server policy, migrations and the same durable rental filesystem/credential
 binding on the controller and maintenance consumer. Beat schedules maintenance
