@@ -130,7 +130,7 @@ class TestOpenAIEmbeddingProvider:
         mock_response = MagicMock()
         mock_response.data = [MagicMock()]
         mock_response.data[0].embedding = [0.1] * 1536
-        mock_openai.embeddings.create.return_value = mock_response
+        mock_openai.OpenAI.return_value.embeddings.create.return_value = mock_response
 
         with patch.dict("sys.modules", {"openai": mock_openai}):
             config = {"api_key": "test-key"}
@@ -142,7 +142,7 @@ class TestOpenAIEmbeddingProvider:
             assert embedding == [0.1] * 1536
 
             # Verify OpenAI was called correctly
-            provider.openai.embeddings.create.assert_called_once_with(
+            provider.client.embeddings.create.assert_called_once_with(
                 model="text-embedding-3-small",
                 input="Test text",
                 encoding_format="float",
@@ -152,7 +152,9 @@ class TestOpenAIEmbeddingProvider:
         """Test OpenAI provider handles API errors."""
         # Mock OpenAI error
         mock_openai = MagicMock()
-        mock_openai.embeddings.create.side_effect = Exception("API Error")
+        mock_openai.OpenAI.return_value.embeddings.create.side_effect = Exception(
+            "API Error"
+        )
 
         with patch.dict("sys.modules", {"openai": mock_openai}):
             config = {"api_key": "test-key"}

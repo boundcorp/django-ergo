@@ -1,0 +1,8 @@
+s..                                                                      [100%]
+=============================== warnings summary ===============================
+../../../../../../../tmp/vb-voice/lib/python3.12/site-packages/platformdirs/api.py:459
+  /tmp/vb-voice/lib/python3.12/site-packages/platformdirs/api.py:459: RuntimeDirWarning: XDG_RUNTIME_DIR is not set, falling back to /tmp/runtime-1000
+    return Path(self.user_runtime_dir)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+2 passed, 1 skipped, 1 warning in 6.22s

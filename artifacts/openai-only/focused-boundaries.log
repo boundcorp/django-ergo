@@ -1,0 +1,20 @@
+.............F                                                           [100%]
+=================================== FAILURES ===================================
+__________________ test_bash_tool_boundary_strips_openai_only __________________
+tests/test_openai_child_env.py:198: in test_bash_tool_boundary_strips_openai_only
+    assert "OPENAI_API_KEY" not in result
+E   assert 'OPENAI_API_KEY' not in 'Exit 0\n["A..."USER", "_"]'
+E
+E     'OPENAI_API_KEY' is contained here:
+E     ?           ^^
+E       _COLOR", "OPENAI_API_KEY", "ORCA_APP_VERSION", "ORCA_NODE_OPTIONS", "ORCA_NODE_REPL_EXTERNAL_MODULE", "ORCA_RUNTIME_ADDRESS", "ORCA_RUNTIME_PORT", "ORCA_SERVER_ENABLED", "ORCA_USER_DATA_PATH", "PAGER", "PATH", "PWD", "PYTEST_CURRENT_TEST", "PYTEST_VERSION", "SHELL", "SHLVL", "SUDO_COMMAND", "SUDO_GID", "SUDO_UID", "SUDO_USER", "SUME_API_KEY", "TERM", "TEST_OPENAI", "TZ", "USER", "_"]
+E     ?           ^^^^^^^^^^^^^^^^
+=============================== warnings summary ===============================
+../../../../../../tmp/pr416-api-venv/lib/python3.12/site-packages/platformdirs/api.py:441
+  /tmp/pr416-api-venv/lib/python3.12/site-packages/platformdirs/api.py:441: RuntimeDirWarning: XDG_RUNTIME_DIR is not set, falling back to /tmp/runtime-1000
+    return Path(self.user_runtime_dir)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_openai_child_env.py::test_bash_tool_boundary_strips_openai_only
+1 failed, 13 passed, 1 warning in 0.84s

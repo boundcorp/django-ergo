@@ -1,0 +1,26 @@
+bringing up nodes...
+bringing up nodes...
+
+.................F...................................................... [ 94%]
+....                                                                     [100%]
+=================================== FAILURES ===================================
+_________________ test_background_consumer_waits_then_executes _________________
+[gw1] linux -- Python 3.12.11 /tmp/openai-only-lib-base-venv/bin/python
+tests/test_admission_paths.py:230: in test_background_consumer_waits_then_executes
+    assert entered.is_set() and not drain.executions_active()
+E   assert (True and not True)
+E    +  where True = is_set()
+E    +    where is_set = <threading.Event at 0x7f9c81d07e30: set>.is_set
+E    +  and   True = <function executions_active at 0x7f9c86befe20>()
+E    +    where <function executions_active at 0x7f9c86befe20> = drain.executions_active
+=============================== warnings summary ===============================
+../pr416-api-venv/lib/python3.12/site-packages/platformdirs/api.py:441
+../pr416-api-venv/lib/python3.12/site-packages/platformdirs/api.py:441
+../pr416-api-venv/lib/python3.12/site-packages/platformdirs/api.py:441
+  /tmp/pr416-api-venv/lib/python3.12/site-packages/platformdirs/api.py:441: RuntimeDirWarning: XDG_RUNTIME_DIR is not set, falling back to /tmp/runtime-1000
+    return Path(self.user_runtime_dir)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_admission_paths.py::test_background_consumer_waits_then_executes
+1 failed, 75 passed, 3 warnings in 30.55s

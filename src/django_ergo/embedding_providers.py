@@ -42,7 +42,6 @@ dimensions = provider.get_dimensions()
 
 import hashlib
 import logging
-import os
 from abc import ABC
 from abc import abstractmethod
 from typing import Any
@@ -117,6 +116,8 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
     Configuration options:
     - model: OpenAI model name (default: text-embedding-3-small)
     - api_key: OpenAI API key (falls back to OPENAI_API_KEY env var)
+    - api_key_env: Exclusive credential variable; missing values fail closed
+    - base_url: Optional public endpoint override
     - timeout: Request timeout in seconds (default: 30)
     """
 
@@ -127,7 +128,6 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
         try:
             import openai
 
-            self.openai = openai
         except ImportError as err:
             msg = (
                 "OpenAI package is required for OpenAIEmbeddingProvider. "
@@ -137,7 +137,14 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
 
         # Configure OpenAI client
         self.model = self.config.get("model", "text-embedding-3-small")
-        self.api_key = self.config.get("api_key") or os.getenv("OPENAI_API_KEY")
+        from django_ergo.openai_credentials import selected_openai_key
+
+        key_env = self.config.get("api_key_env")
+        self.api_key = (
+            selected_openai_key(key_env)
+            if key_env
+            else self.config.get("api_key") or selected_openai_key()
+        )
         self.timeout = self.config.get("timeout", 30)
 
         if not self.api_key:
@@ -147,8 +154,13 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
             )
             raise ValueError(msg)
 
-        # Set the API key
-        self.openai.api_key = self.api_key
+        from django_ergo.conversation.inference_policy import effective_openai_base_url
+
+        self.client = openai.OpenAI(
+            api_key=self.api_key,
+            timeout=self.timeout,
+            base_url=effective_openai_base_url(self.config.get("base_url")),
+        )
 
     def generate_embedding(self, text: str) -> list[float]:
         """
@@ -169,7 +181,7 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
 
         self._assert_public_endpoint()
         try:
-            response = self.openai.embeddings.create(
+            response = self.client.embeddings.create(
                 model=self.model, input=text.strip(), encoding_format="float"
             )
 
@@ -189,20 +201,12 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
             raise EmbeddingError(msg) from e
 
     def _assert_public_endpoint(self) -> None:
-        """Refuse a private inference endpoint before the module-level call.
-
-        ``openai.embeddings`` uses ``openai.base_url``, else the cached module
-        client's URL, else ``OPENAI_BASE_URL``: check each that applies.
-        """
+        """Check the instance endpoint before every request."""
         from django_ergo.conversation.inference_policy import assert_public_endpoint
-        from django_ergo.conversation.inference_policy import effective_openai_base_url
 
-        what = "The OpenAI embedding provider"
-        base_url = getattr(self.openai, "base_url", None)
-        assert_public_endpoint(effective_openai_base_url(base_url), what=what)
-        module_client = getattr(self.openai, "_client", None)
-        if module_client is not None:
-            assert_public_endpoint(getattr(module_client, "base_url", None), what=what)
+        assert_public_endpoint(
+            self.client.base_url, what="The OpenAI embedding provider"
+        )
 
     def get_dimensions(self) -> int:
         """

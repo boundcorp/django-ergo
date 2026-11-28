@@ -1,0 +1,37 @@
+Hostname: devbox-dbd868579-jjdt9
+Current Kubernetes context: unavailable
+Kubernetes octo readyz: unavailable or not ready
+Kubernetes home readyz: unavailable or not ready
+Tools on PATH:
+  kubectl: available
+  kubectx: available
+  helm: missing
+  flux: available
+  gh: available
+  ssh: available
+  adb: available
+  emulator: available
+  xcrun: missing
+  idevice_id: missing
+  eas: available
+  tailscale: missing
+ADB devices: unknown (no responding local ADB server; daemon not started)
+AVD names:
+audiographic-fidelity-20261112
+audiographic-pip-isolated-20261115
+audiographic-store-review
+cabal-smoke-api35
+discover-redesign-api35
+holyword-api35
+meditate-copy-art-api35
+meditate-meta-diagnostic-play
+meditate-onboarding-v2
+papa-api35-ci
+papa-api35
+papa-qa
+transcript-sync-qa
+/dev/kvm: writable
+SSH rigel: reachable
+SSH macaroni: reachable
+SSH enterprise: reachable
+SSH vega: reachable

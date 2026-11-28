@@ -243,6 +243,10 @@ class OpenAIAPIEngine(StoredMessagesMixin, Engine):
         )
         self.model = config.get("model", DEFAULT_OPENAI_MODEL)
         self.api_key = config.get("api_key")
+        if config.get("api_key_env"):
+            from django_ergo.openai_credentials import selected_openai_key
+
+            self.api_key = selected_openai_key(config["api_key_env"])
         self.base_url = effective_openai_base_url(
             config.get("base_url") or config.get("api_base") or config.get("endpoint")
         )

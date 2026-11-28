@@ -28,5 +28,12 @@ def is_protected_env(name) -> bool:
 def scrubbed_env(env=None) -> dict[str, str]:
     """Return an environment copy without protected variables."""
     source = os.environ if env is None else env
+    from django_ergo.openai_env import openai_credential_names
+
     prefixes = protected_env_prefixes()
-    return {k: v for k, v in source.items() if not str(k).upper().startswith(prefixes)}
+    names = openai_credential_names()
+    return {
+        k: v
+        for k, v in source.items()
+        if not str(k).upper().startswith(prefixes) and str(k).upper() not in names
+    }

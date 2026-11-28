@@ -583,7 +583,7 @@ class ClaudeCodeClient:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=workdir(),
-            env=env,
+            env=scrubbed_env(env),
             start_new_session=True,  # so stopping it stops its children too
             limit=64 * 1024 * 1024,
         )

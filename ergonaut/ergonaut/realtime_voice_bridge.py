@@ -20,6 +20,7 @@ django.setup()
 import aiohttp  # noqa: E402
 from asgiref.sync import sync_to_async  # noqa: E402
 from django.conf import settings  # noqa: E402
+from django_ergo.openai_credentials import voice_openai_key  # noqa: E402
 from livekit import agents, rtc  # noqa: E402
 from livekit.agents import Agent, AgentServer, AgentSession, APIConnectOptions, RunContext, llm  # noqa: E402
 from livekit.plugins import openai, silero  # noqa: E402
@@ -269,6 +270,7 @@ class Assistant(Agent):
             ),
             chat_ctx=startup_context(snapshot),
             llm=openai.realtime.GPTLiveModel(
+                api_key=voice_openai_key(),
                 model="gpt-live-1",
                 delegation="responses",
                 responses_options={

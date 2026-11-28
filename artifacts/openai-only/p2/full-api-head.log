@@ -1,0 +1,136 @@
+bringing up nodes...
+bringing up nodes...
+
+........................................................................ [ 10%]
+........................................................................ [ 20%]
+........................................................................ [ 30%]
+........................................................................ [ 40%]
+........................................................................ [ 50%]
+........................................................................ [ 61%]
+........................................................................ [ 71%]
+............................ssss.s...................................... [ 81%]
+.............................s.......................................... [ 91%]
+......................................F.....................             [100%]
+=================================== FAILURES ===================================
+_ test_retired_paid_flag_cannot_launch_the_native_cost_profile[ergonaut.realtime_voice_local] _
+[gw2] linux -- Python 3.12.11 /tmp/openai-only-api-head-venv/bin/python
+ergonaut/api/tests/test_realtime_voice_broker.py:37: in test_retired_paid_flag_cannot_launch_the_native_cost_profile
+    result = subprocess.run(
+/home/dev/.local/share/uv/python/cpython-3.12-linux-x86_64-gnu/lib/python3.12/subprocess.py:550: in run
+    stdout, stderr = process.communicate(input, timeout=timeout)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/home/dev/.local/share/uv/python/cpython-3.12-linux-x86_64-gnu/lib/python3.12/subprocess.py:1209: in communicate
+    stdout, stderr = self._communicate(input, endtime, timeout)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/home/dev/.local/share/uv/python/cpython-3.12-linux-x86_64-gnu/lib/python3.12/subprocess.py:2116: in _communicate
+    self._check_timeout(endtime, orig_timeout, stdout, stderr)
+/home/dev/.local/share/uv/python/cpython-3.12-linux-x86_64-gnu/lib/python3.12/subprocess.py:1253: in _check_timeout
+    raise TimeoutExpired(
+E   subprocess.TimeoutExpired: Command '['/tmp/openai-only-api-head-venv/bin/python', '-m', 'ergonaut.realtime_voice_local', '--approve-paid']' timed out after 15 seconds
+=============================== warnings summary ===============================
+../../../../../../../tmp/vb-voice/lib/python3.12/site-packages/platformdirs/api.py:459
+../../../../../../../tmp/vb-voice/lib/python3.12/site-packages/platformdirs/api.py:459
+../../../../../../../tmp/vb-voice/lib/python3.12/site-packages/platformdirs/api.py:459
+../../../../../../../tmp/vb-voice/lib/python3.12/site-packages/platformdirs/api.py:459
+../../../../../../../tmp/vb-voice/lib/python3.12/site-packages/platformdirs/api.py:459
+../../../../../../../tmp/vb-voice/lib/python3.12/site-packages/platformdirs/api.py:459
+../../../../../../../tmp/vb-voice/lib/python3.12/site-packages/platformdirs/api.py:459
+  /tmp/vb-voice/lib/python3.12/site-packages/platformdirs/api.py:459: RuntimeDirWarning: XDG_RUNTIME_DIR is not set, falling back to /tmp/runtime-1000
+    return Path(self.user_runtime_dir)
+
+ergonaut/apps/google_oauth/tests/test_google_oauth.py: 40 warnings
+ergonaut/api/tests/test_voice_costs.py: 9 warnings
+ergonaut/apps/bots/tests/test_loading.py: 1 warning
+ergonaut/apps/bots/tests/test_page_performance.py: 3 warnings
+ergonaut/apps/bots/tests/test_costs.py: 28 warnings
+ergonaut/api/tests/test_api.py: 10 warnings
+ergonaut/api/tests/test_voice_rate_limit.py: 4 warnings
+ergonaut/apps/bots/tests/test_recurring_wakes.py: 4 warnings
+ergonaut/apps/bots/tests/test_api.py: 73 warnings
+ergonaut/apps/bots/tests/test_setup.py: 1 warning
+ergonaut/apps/bots/tests/test_stranded_inbox.py: 6 warnings
+ergonaut/api/tests/test_api_keys.py: 4 warnings
+ergonaut/apps/relogin/tests/test_relogin.py: 11 warnings
+ergonaut/apps/bots/tests/test_upgrades.py: 1 warning
+ergonaut/apps/bots/tests/test_wait_idle.py: 4 warnings
+ergonaut/api/tests/test_realtime_voice.py: 23 warnings
+ergonaut/apps/bots/tests/test_dead_turns.py: 4 warnings
+ergonaut/apps/bots/tests/test_debug_shortcut.py: 7 warnings
+ergonaut/api/tests/test_realtime_voice_bridge.py: 22 warnings
+ergonaut/api/tests/test_realtime_voice_diagnostics.py: 5 warnings
+ergonaut/api/tests/test_realtime_voice_interpreter.py: 63 warnings
+ergonaut/api/tests/test_voice.py: 12 warnings
+ergonaut/api/tests/test_illustrate.py: 3 warnings
+ergonaut/api/tests/test_realtime_voice_budget.py: 13 warnings
+ergonaut/api/tests/test_realtime_voice_execution.py: 13 warnings
+ergonaut/api/tests/test_realtime_voice_text.py: 29 warnings
+ergonaut/api/tests/test_realtime_voice_native_lifecycle.py: 8 warnings
+ergonaut/apps/bots/tests/test_client_cli.py: 1 warning
+ergonaut/apps/bots/tests/test_page_events.py: 4 warnings
+ergonaut/apps/bots/tests/test_page_actions.py: 9 warnings
+ergonaut/apps/bots/tests/test_pool_funding.py: 12 warnings
+ergonaut/apps/bots/tests/test_pools_api.py: 6 warnings
+ergonaut/apps/bots/tests/test_turn_budget.py: 10 warnings
+ergonaut/apps/bots/tests/test_pools_review.py: 8 warnings
+ergonaut/apps/bots/tests/test_turn_control.py: 12 warnings
+ergonaut/apps/bots/tests/test_weekly_funding.py: 10 warnings
+ergonaut/apps/bots/tests/test_page_assets.py: 4 warnings
+ergonaut/apps/bots/tests/test_frontend.py: 1 warning
+ergonaut/apps/bots/tests/test_stream.py: 5 warnings
+  /tmp/vb-voice/lib/python3.12/site-packages/django/core/handlers/base.py:61: UserWarning: No directory at: /home/dev/orca/workspaces/django-ergo/openai-key-scope-only/ergonaut/static/assets/
+    mw_instance = middleware(adapted_handler)
+
+ergonaut/apps/google_oauth/tests/test_google_oauth.py::test_superuser_allowed_and_anonymous_sent_to_login
+  /tmp/vb-voice/lib/python3.12/site-packages/factory/django.py:182: DeprecationWarning: SuperUserFactory._after_postgeneration will stop saving the instance after postgeneration hooks in the next major release.
+  If the save call is extraneous, set skip_postgeneration_save=True in the SuperUserFactory.Meta.
+  To keep saving the instance, move the save call to your postgeneration hooks or override _after_postgeneration.
+    warnings.warn(
+
+ergonaut/apps/google_oauth/tests/test_google_oauth.py: 40 warnings
+ergonaut/api/tests/test_voice_costs.py: 9 warnings
+ergonaut/api/tests/test_api.py: 1 warning
+ergonaut/api/tests/test_voice_rate_limit.py: 4 warnings
+ergonaut/api/tests/test_api_keys.py: 4 warnings
+ergonaut/apps/relogin/tests/test_relogin.py: 24 warnings
+ergonaut/api/tests/test_realtime_voice.py: 23 warnings
+ergonaut/api/tests/test_realtime_voice_diagnostics.py: 5 warnings
+ergonaut/api/tests/test_realtime_voice_outbox.py: 2 warnings
+ergonaut/api/tests/test_voice.py: 12 warnings
+ergonaut/apps/users/tests/test_models.py: 1 warning
+ergonaut/apps/users/tests/test_profile.py: 1 warning
+ergonaut/apps/bots/tests/test_admission_drain.py: 9 warnings
+  /tmp/vb-voice/lib/python3.12/site-packages/factory/django.py:182: DeprecationWarning: UserFactory._after_postgeneration will stop saving the instance after postgeneration hooks in the next major release.
+  If the save call is extraneous, set skip_postgeneration_save=True in the UserFactory.Meta.
+  To keep saving the instance, move the save call to your postgeneration hooks or override _after_postgeneration.
+    warnings.warn(
+
+ergonaut/apps/google_oauth/tests/test_google_oauth.py::test_unsigned_and_wrong_key_tokens_rejected
+  /tmp/vb-voice/lib/python3.12/site-packages/jwt/api_jwt.py:149: InsecureKeyLengthWarning: The HMAC key is 6 bytes long, which is below the minimum recommended length of 32 bytes for SHA256. See RFC 7518 Section 3.2.
+    return self._jws.encode(
+
+ergonaut/api/tests/test_realtime_voice.py::test_claimed_session_refuses_new_token_and_reaps_only_a_stale_bridge_lease
+ergonaut/api/tests/test_realtime_voice.py::test_token_is_scoped_to_voice_room
+  /tmp/vb-voice/lib/python3.12/site-packages/jwt/api_jwt.py:149: InsecureKeyLengthWarning: The HMAC key is 11 bytes long, which is below the minimum recommended length of 32 bytes for SHA256. See RFC 7518 Section 3.2.
+    return self._jws.encode(
+
+ergonaut/api/tests/test_realtime_voice.py::test_token_is_scoped_to_voice_room
+  /tmp/vb-voice/lib/python3.12/site-packages/jwt/api_jwt.py:370: InsecureKeyLengthWarning: The HMAC key is 11 bytes long, which is below the minimum recommended length of 32 bytes for SHA256. See RFC 7518 Section 3.2.
+    decoded = self.decode_complete(
+
+ergonaut/apps/bots/tests/test_client_cli.py::test_ergo_client_runs_a_thread_end_to_end
+  /tmp/selective-openai-test-venv/lib/python3.12/site-packages/pytest_socket/__init__.py:365: UserWarning: A test tried to use socket.socket.connect() with host "140.82.121.6" (allowed: "127.0.0.1,::1,localhost (127.0.0.1,::1)").
+    raise SocketConnectBlockedError(allowed_list, host)
+
+ergonaut/observability/test_ergo_metrics.py::test_async_receivers
+  /home/dev/orca/workspaces/django-ergo/openai-key-scope-only/ergonaut:0: PytestWarning: Error when trying to teardown test databases: OperationalError('database "test_postgres_gw0" is being accessed by other users\nDETAIL:  There is 1 other session using the database.')
+
+ergonaut/api/tests/test_voice.py::test_chunks_cover_boundaries_and_provider_limits
+  /home/dev/orca/workspaces/django-ergo/openai-key-scope-only/ergonaut:0: PytestWarning: Error when trying to teardown test databases: OperationalError('database "test_postgres_gw2" is being accessed by other users\nDETAIL:  There is 1 other session using the database.')
+
+ergonaut/apps/bots/tests/test_upgrades.py::test_leaves_up_to_date_or_newer_instances_alone[identical]
+  /home/dev/orca/workspaces/django-ergo/openai-key-scope-only/ergonaut:0: PytestWarning: Error when trying to teardown test databases: OperationalError('database "test_postgres_gw4" is being accessed by other users\nDETAIL:  There is 1 other session using the database.')
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED ergonaut/api/tests/test_realtime_voice_broker.py::test_retired_paid_flag_cannot_launch_the_native_cost_profile[ergonaut.realtime_voice_local]
+1 failed, 701 passed, 6 skipped, 634 warnings in 361.40s (0:06:01)
