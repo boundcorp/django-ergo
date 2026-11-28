@@ -876,6 +876,33 @@ export function Chat({ onChange }: { onChange: () => void }) {
           </span>
         </button>
       </section>
+      <section aria-label="Reply updates">
+        <h3>Reply updates</h3>
+        <button
+          type="button"
+          className="thread-option-action"
+          aria-pressed={!!detail.session.reply_updates}
+          onClick={async () => {
+            try {
+              const session = await api.setReplyUpdates(id, !detail.session.reply_updates)
+              setDetail(d => (d ? { ...d, session } : d))
+              onChange()
+            } catch (e) {
+              setError(String((e as Error).message ?? e))
+            }
+            closeOptions()
+          }}
+        >
+          <span>
+            {detail.session.reply_updates ? 'Turn off reply updates' : 'Turn on reply updates'}
+            <small>
+              {detail.session.reply_updates
+                ? 'The bot can revise its replies in place'
+                : 'Let the bot revise its latest reply instead of adding new ones'}
+            </small>
+          </span>
+        </button>
+      </section>
       <section aria-label="Thread data">
         <h3>Thread data</h3>
         <button

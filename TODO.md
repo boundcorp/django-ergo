@@ -273,5 +273,7 @@ Still to do:
 - [x] Live bot reloads on file changes; auto-pull of the bot repo.
 - [x] CTO bot (orca on devbox, bash, threads) proposed by boundcorp and merged (ergo-bots #1).
 - [x] Costs page, bot pages, Memory page, Files panel; tool names prefixed `ergo_*`.
+- [x] Reply updates (opt-in per chat): `ergo_interim_reply` append/update and `send_reply` `update_reply_id`, server-checked revisions (`ReplyRevision`), the thread switch, and in-place reply versions in the chat.
+- [ ] Reply updates on Telegram and other channels (edit the delivered message), and an evaluation of how often models choose updates over new replies.
 
 - Added model-free `ergo_thread_send(reply_mode="record")` reports and quiet task-thread returns; browser session holders no longer inflate active worker counts.

@@ -1635,6 +1635,16 @@ class Bot:
             )
         for source in self._function_context_sources(ctx, session, message):
             builder.add(source)
+        if session.reply_updates and session.pk is not None:
+            from django_ergo.conversation import reply_updates
+
+            builder.add(
+                TextContextSource(
+                    "Your replies you can update",
+                    reply_updates.context_text(session),
+                    weight=1,
+                )
+            )
         if self.is_window(session):
             builder.add(
                 MessageContextSource(
@@ -1729,7 +1739,10 @@ class Bot:
         session: ConversationSession | None = None,
         budget: TurnBudget | None = None,
     ):
-        spec = chat_reply_spec(toolkits, max_turns=self.definition.max_turns)
+        updates = session if session is not None and session.reply_updates else None
+        spec = chat_reply_spec(
+            toolkits, max_turns=self.definition.max_turns, updates=updates
+        )
         # Toolkits pre-seed what every session should start knowing; window
         # sessions need user-defined seeds again on each turn.
         spec.pre_seed_each_turn = session is not None and self.is_window(session)
@@ -1913,7 +1926,9 @@ class Bot:
         await sync_to_async(self.route, thread_sensitive=True)(session)
         from django_ergo.bots.recurring_reply import apply_notification_policy
 
-        spec = apply_notification_policy(self.reply_spec(toolkits), call.metadata or {})
+        spec = apply_notification_policy(
+            self.reply_spec(toolkits, session), call.metadata or {}
+        )
         try:
             outcome = await resume_structured_call(
                 spec,

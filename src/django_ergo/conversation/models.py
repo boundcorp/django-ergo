@@ -95,6 +95,9 @@ class ConversationSession(TimeStampedMixin):
     permanence_initialized = models.BooleanField(
         default=False, db_default=False, editable=False
     )
+    # On by default per chat: the bot may revise its replies in place
+    # (conversation.reply_updates). Off keeps every reply a new message.
+    reply_updates = models.BooleanField(default=True, db_default=True)
     # Kept separate from metadata so stale metadata writers cannot undo a rename.
     user_title = models.CharField(max_length=200, null=True, blank=True)  # noqa: DJ001 - NULL means automatic
     # Overrides workflow.instructions when set.
@@ -161,22 +164,25 @@ class ConversationSession(TimeStampedMixin):
         )
         if not preserve:
             return super().save(*args, **kwargs)
-        title, permanent, initialized = (
+        title, permanent, initialized, updates = (
             self.user_title,
             self.is_permanent,
             self.permanence_initialized,
+            self.reply_updates,
         )
         try:
             self.user_title = models.F("user_title")
             self.is_permanent = models.F("is_permanent")
             self.permanence_initialized = models.F("permanence_initialized")
+            self.reply_updates = models.F("reply_updates")
             return super().save(*args, **kwargs)
         finally:
-            self.user_title, self.is_permanent, self.permanence_initialized = (
-                title,
-                permanent,
-                initialized,
-            )
+            (
+                self.user_title,
+                self.is_permanent,
+                self.permanence_initialized,
+                self.reply_updates,
+            ) = (title, permanent, initialized, updates)
 
     def require_closable(self):
         if self.is_permanent:
@@ -232,6 +238,43 @@ class SessionMessage(TimeStampedMixin):
 
     def __str__(self):
         return f"{self.session} - {self.role} [{self.sequence}]"
+
+
+class ReplyRevision(TimeStampedMixin):
+    """One accepted revision of a bot's reply (see ``conversation.reply_updates``).
+
+    The reply itself stays as its tool call in the transcript; each revision is
+    the tool call that changed it, so history keeps every version. ``revision``
+    counts from 1 (the original is 0); the unique constraints make a stale or
+    concurrent update fail and a replayed tool call return its first receipt.
+    """
+
+    session = models.ForeignKey(
+        ConversationSession,
+        on_delete=models.CASCADE,
+        related_name="reply_revisions",
+    )
+    reply_id = models.CharField(max_length=255)  # the original reply's tool_use id
+    revision = models.PositiveIntegerField()
+    tool_use_id = models.CharField(max_length=255)  # the call that made this revision
+    tool_name = models.CharField(max_length=255)
+    content = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ["created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["session", "reply_id", "revision"],
+                name="reply_revision_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["session", "tool_use_id"],
+                name="reply_revision_tool_use_unique",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.reply_id} r{self.revision}"
 
 
 class ContentBlockType(models.TextChoices):

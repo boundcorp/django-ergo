@@ -1108,6 +1108,41 @@ marked `requires_approval` pauses the turn (`result.approvals`), and
 `chat_reply_spec` live in `django_ergo.conversation.chat_reply` and work for
 any chat session, not only bots.
 
+### Reply updates
+
+**Reply updates** are on by default (`ConversationSession.reply_updates`)
+for new chats and existing chats upgraded by migration 0066. That migration
+introduces the preference; it does not repeatedly overwrite saved choices.
+Owners can turn updates off for each chat in Ergonaut thread options or with
+`POST /api/sessions/{id}/reply-updates {"enabled": false}`; an explicit off
+choice stays off. With updates on, the turn also gets:
+
+- `ergo_interim_reply`, which never ends the turn. `action: "append"` posts a
+  new reply; `action: "update"` revises one of the bot's replies, given its
+  `reply_id` and the `revision` the bot last saw. Each call returns a receipt,
+  `{"reply_id", "revision", "action"}`.
+- `send_reply` fields `update_reply_id` and `update_revision`, so the final
+  reply can revise a reply instead of adding one. `send_reply` still ends the
+  turn exactly as before.
+- Instructions that prefer updating the latest reply for progress on the same
+  work, while allowing separate replies, and a context section listing the
+  replies it can still update with their current revisions.
+
+A reply's id is the tool_use id of the call that made it. The server checks
+every update (`django_ergo.conversation.reply_updates`): the reply is in this
+chat, written by this bot, delivered, not a question and not itself an
+update, and no human message came after it (events and Ergo's notes are not
+boundaries). A stale revision is refused with the current revision and text;
+a concurrent update loses on a unique constraint; a replayed tool call returns
+its first receipt; repeating an applied update under a new call reports
+`already_applied`. Errors are JSON with a `code` (`stale`, `human_boundary`,
+`foreign_author`, `question`, `is_update`, `not_found`, `not_delivered`,
+`disabled`, `missing_target`, `replay_mismatch`). Each accepted revision is a
+`ReplyRevision` row, and every call stays in the transcript, so history keeps
+all versions. Questions are always new replies. Channels other than the web
+chat (Telegram) still deliver only the turn's final reply.
+
+
 The **main chat** and each named chat keep full native history, compacted
 by tokens (see [compaction.md](compaction.md)), and have history tools over
 every session this bot has with the user. `root.recent` and

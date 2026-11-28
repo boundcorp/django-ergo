@@ -26,6 +26,19 @@ work and write long content in smaller pieces: one file per call and documents
 in parts of about 2,000 words. An unfinished tool call was not saved or run.
 Resuming is manual, including after a repeated output-limit failure.
 
+## Reply updates
+
+Each chat has a **Reply updates** switch in its options, on by default for
+new and existing chats. Owners can switch it off per chat; that choice stays
+off. When it is on, the bot can revise one of its replies in place instead of adding a
+new bubble: the reply shows its latest version where it was posted, and
+**Updated · N earlier versions** opens every earlier version with its files.
+Only updates the server accepted change a reply; separate replies and
+questions always stay separate. If the revised reply is in older history that
+is not loaded yet, the update shows on its own until that history loads. The
+chat follows new activity only while you are at the bottom. See
+[Reply updates](bots.md#reply-updates).
+
 ## Markdown attachments
 
 Markdown attachments in chat appear as document cards. Open the card to read

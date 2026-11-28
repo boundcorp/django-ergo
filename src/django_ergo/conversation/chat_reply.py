@@ -22,13 +22,15 @@ from typing import Literal
 from pydantic import BaseModel
 from pydantic import Field
 
+from django_ergo.conversation import reply_updates
 from django_ergo.conversation.structured import StructuredCallSpec
 
 if TYPE_CHECKING:
+    from django_ergo.conversation.models import ConversationSession
     from django_ergo.conversation.toolkit import Toolkit
 
 CHAT_REPLY_KIND = "chat_reply"
-CHAT_REPLY_TOOL = "send_reply"
+CHAT_REPLY_TOOL = reply_updates.REPLY_TOOL
 MAX_SUGGESTIONS = 6
 MAX_ATTACHMENTS = 50
 
@@ -94,6 +96,23 @@ class ChatReply(BaseModel):
         return f"{self.text}\n\nSuggested replies: {options}"
 
 
+class UpdatingChatReply(ChatReply):
+    """A ChatReply in a chat with reply updates on: it may revise an earlier reply."""
+
+    update_reply_id: str = Field(
+        default="",
+        description=(
+            "To end the turn by revising one of your replies instead of adding "
+            "a new one: its reply_id. Empty sends a new reply"
+        ),
+    )
+    update_revision: int | None = Field(
+        default=None,
+        ge=0,
+        description="With update_reply_id: the reply's current revision",
+    )
+
+
 def text_reply(text: str) -> dict:
     """The send_reply arguments for a reply the model gave in plain text."""
     return {"type": "message", "text": text}
@@ -105,14 +124,28 @@ def chat_reply_spec(
     instructions: str = "",
     max_turns: int = 50,
     max_tokens: int | None = None,
+    updates: ConversationSession | None = None,
 ) -> StructuredCallSpec:
-    """The structured-call spec for one chat reply turn."""
-    system = "\n\n".join(p for p in (instructions, CHAT_REPLY_INSTRUCTIONS) if p)
+    """The structured-call spec for one chat reply turn.
+
+    With ``updates`` (a chat with reply updates on), the turn also gets
+    ``ergo_interim_reply`` and send_reply's update fields (see
+    ``conversation.reply_updates``)."""
+    toolkits = list(toolkits or [])
+    parts = [instructions, CHAT_REPLY_INSTRUCTIONS]
+    response_model, check = ChatReply, None
+    if updates is not None:
+        toolkits.append(reply_updates.InterimReplyToolkit(updates))
+        parts.append(reply_updates.REPLY_UPDATES_INSTRUCTIONS)
+        response_model = UpdatingChatReply
+        check = reply_updates.final_reply_check(updates)
+    system = "\n\n".join(p for p in parts if p)
     return StructuredCallSpec(
         kind=CHAT_REPLY_KIND,
         system_prompt=system,
-        response_model=ChatReply,
-        toolkits=list(toolkits or []),
+        response_model=response_model,
+        output_check=check,
+        toolkits=toolkits,
         max_turns=max_turns,
         wrap_up=True,
         max_tokens=max_tokens,

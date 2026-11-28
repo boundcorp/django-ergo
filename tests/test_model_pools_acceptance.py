@@ -1117,7 +1117,10 @@ def test_r13_one_migration_leaf_after_the_launch_journal():
     assert ("django_ergo", "0064_isolated_analysis") in loader.graph.forwards_plan(
         leaves[0]
     )
-    assert leaves == [("django_ergo", "0065_provider_weekly_budgets")]
+    assert (
+        "django_ergo",
+        "0065_provider_weekly_budgets",
+    ) in loader.graph.forwards_plan(leaves[0])
 
 
 @pytest.mark.django_db(transaction=True)

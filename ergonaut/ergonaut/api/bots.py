@@ -151,6 +151,7 @@ class SessionOut(Schema):
     status_line: str = ""
     pinned: bool = False
     is_permanent: bool = False
+    reply_updates: bool = True  # owners can turn off in-place replies per chat
     last_activity: datetime | None = None  # when its latest turn moved
     workers_running: int = 0
     workers_total: int = 0
@@ -674,6 +675,7 @@ def session_out(session: ConversationSession) -> dict:
         **started_by(session),
         "status": session.status,
         "is_permanent": session.is_permanent,
+        "reply_updates": session.reply_updates,
         "username": session.user.get_username() if session.user_id else "",
         "created_at": session.created_at,
         "updated_at": session.updated_at,
@@ -2034,6 +2036,25 @@ async def set_session_permanent(request, session_id: str, data: PermanentSession
     await ConversationSession.objects.filter(pk=session.pk).aupdate(
         is_permanent=data.is_permanent, permanence_initialized=True
     )
+    session = await with_open_counts(ConversationSession.objects.filter(pk=session.pk)).select_related("user").aget()
+    return await sync_to_async(session_out)(session)
+
+
+class ReplyUpdatesIn(Schema):
+    enabled: bool
+
+
+@router.post("/sessions/{session_id}/reply-updates", response=SessionOut)
+async def set_reply_updates(request, session_id: str, data: ReplyUpdatesIn):
+    """Let the bot revise its replies in place in this chat, or turn it off.
+
+    Its own column, so stale metadata writers cannot undo the choice. Only the
+    chat's owner (or a superuser) changes it, as for permanence."""
+    session = await get_session(request, session_id)
+    if not request.auth.is_active or (session.user_id != request.auth.pk and not request.auth.is_superuser):
+        raise HttpError(403, "You cannot manage this chat")
+    await ConversationSession.objects.filter(pk=session.pk).aupdate(reply_updates=data.enabled)
+    await sync_to_async(notify)(str(session.pk))
     session = await with_open_counts(ConversationSession.objects.filter(pk=session.pk)).select_related("user").aget()
     return await sync_to_async(session_out)(session)
 

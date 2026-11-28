@@ -26,6 +26,11 @@ if TYPE_CHECKING:
 
 # Only the dispatcher that durably acquired a claim can enter that invocation.
 current_tool_invocation = ContextVar("current_tool_invocation", default=None)
+# The provider tool_use id of the call being run (set by the structured loop),
+# for tools whose result names their own call (conversation.reply_updates).
+current_tool_use_id: ContextVar[str | None] = ContextVar(
+    "current_tool_use_id", default=None
+)
 
 
 def collect_toolkit_schemas(toolkits: list[Toolkit], adapter) -> list[dict]:
