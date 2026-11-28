@@ -1074,6 +1074,7 @@ export function Transcript({
     for (const block of message.blocks) if (block.type === 'tool_result') results.set(block.tool_use_id, block)
   const groups = replyUpdates(messages, results)
   const groupedIds = new Set(groups.flatMap(group => group.map(update => update.block.id)))
+  const groupedLines = new Set(groups.flatMap(group => group.map(update => update.message.line)))
   const groupById = new Map(groups.map(group => [`reply-updates:${group[0].message.line}:${group[0].block.id}`, group]))
   const afterLine = new Map<number, string[]>()
   for (const [id, group] of groupById) {
@@ -1145,19 +1146,26 @@ export function Transcript({
       return (
         <div className="mt-6" data-reply-updates={chat.id}>
           {group.length > 1 && (
-            <details className="mb-2 max-w-[85%] text-xs text-muted">
+            <details
+              className="mb-2 max-w-[85%] text-xs text-muted"
+              open={group.slice(0, -1).some(update => update.message.line === highlight) || undefined}
+            >
               <summary className="cursor-pointer">
                 {group.length - 1} earlier {group.length === 2 ? 'update' : 'updates'}
               </summary>
               <div className="mt-2 flex flex-col items-start gap-2">
                 {group.slice(0, -1).map(update => (
-                  <ReplyBubble key={update.block.id} reply={update.block.input as Reply} message={update.message} />
+                  <div key={update.block.id} id={messageAnchor(update.message.line)}>
+                    <ReplyBubble reply={update.block.input as Reply} message={update.message} />
+                  </div>
                 ))}
               </div>
             </details>
           )}
           {group.length > 1 && <div className="mb-1 text-xs text-muted">Latest update</div>}
-          <ReplyBubble reply={latest.block.input as Reply} message={latest.message} />
+          <div id={messageAnchor(latest.message.line)}>
+            <ReplyBubble reply={latest.block.input as Reply} message={latest.message} />
+          </div>
         </div>
       )
     }
@@ -1176,7 +1184,7 @@ export function Transcript({
           <VoiceSessionCard key={voice.id} session={voice} />
         ))}
         <div
-          id={messageAnchor(message.line)}
+          id={groupedLines.has(message.line) ? undefined : messageAnchor(message.line)}
           className={`empty:hidden ${toolsOnly(message) && !starts.has(message.line) ? 'mt-1.5' : 'mt-6'} ${highlight === message.line ? 'message-target' : ''}`}
         >
           {starts.has(message.line) && <CallHeader call={starts.get(message.line)!} />}
