@@ -8,6 +8,7 @@ import pytest
 from django.test import override_settings
 
 from django_ergo.bots.tools import ToolContext
+from django_ergo.conversation.tool_dispatch import ToolError
 from django_ergo.plugins import hindsight_memory as memory
 
 
@@ -117,7 +118,7 @@ def test_tool_bank_cannot_be_overridden(monkeypatch):
     toolkit = p.make_toolkit(ToolContext(bot=p.bot, session=session()))
     assert "Alice likes tea" in toolkit.execute_tool("memory_recall", {"query": "tea"})
     assert "/ergonaut/memories/recall" in httpx.post.call_args.args[0]
-    with pytest.raises(TypeError):
+    with pytest.raises(ToolError, match="unknown argument"):
         toolkit.execute_tool("memory_recall", {"query": "tea", "bank": "other"})
 
 
