@@ -232,3 +232,21 @@ test('intervening tool calls keep their cards, results and open state through up
   render(history)
   check()
 })
+
+test('a successful final retry of an already applied revision does not duplicate history', () => {
+  const history = [
+    append(1, 'i1', 'Starting'),
+    result(2, 'i1', '{"reply_id":"i1","revision":0}'),
+    update(3, 'u1', 'i1', 0, 'Done'),
+    receipt(4, 'u1', 'i1', 1),
+    reply(5, 'f1', 'Done', { update_reply_id: 'i1', update_revision: 0 }),
+    result(6, 'f1', 'Output accepted.'),
+  ]
+  render(history)
+  expect(bubbles()).toHaveLength(1)
+  expect(bubbles()[0].querySelector('summary')!.textContent).toContain('1 earlier version')
+  expect(bubbles()[0].querySelectorAll('.reply-revisions li')).toHaveLength(1)
+  // A separately accepted higher revision remains a real version, even with the same text.
+  render([...history, update(7, 'u2', 'i1', 1, 'Done'), receipt(8, 'u2', 'i1', 2)])
+  expect(bubbles()[0].querySelectorAll('.reply-revisions li')).toHaveLength(2)
+})

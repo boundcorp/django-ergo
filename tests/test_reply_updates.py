@@ -462,3 +462,38 @@ def test_concurrent_updates_one_wins():
         t.join()
     assert sorted(map(str, outcomes)) == ["1", "stale"]
     assert ReplyRevision.objects.filter(session=chat).count() == 1
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_final_retry_of_applied_interim_update_ends_without_another_revision(
+    tmp_path,
+):
+    user = await User.objects.acreate(username="final-retry")
+    tool = reply_updates.INTERIM_REPLY_TOOL
+    bot, engine = make_bot(
+        tmp_path,
+        claude_tool(tool, {"action": "append", "text": "Starting"}, tool_id="i1"),
+        claude_tool(
+            tool,
+            {"action": "update", "reply_id": "i1", "revision": 0, "text": "Done"},
+            tool_id="u1",
+        ),
+        # Repeating the accepted text with its original precondition is a retry.
+        claude_tool(
+            "send_reply",
+            {"text": "Done", "update_reply_id": "i1", "update_revision": 0},
+            tool_id="f1",
+        ),
+    )
+    chat = await bot.root_session(user)
+    result = await bot.ask(chat, "Work")
+    assert result.text == "Done"
+    assert len(engine._client.calls) == 3
+    assert await ReplyRevision.objects.filter(session=chat).acount() == 1
+    assert not _results(engine)["u1"][1]
+    assert await MessageBlock.objects.filter(
+        message__session=chat,
+        block_type="tool_result",
+        tool_result_for="f1",
+        is_error=False,
+    ).aexists()

@@ -462,9 +462,11 @@ function isReplyUse(block: Block): block is ToolUse {
 }
 
 type Interim = Reply & { action?: string; reply_id?: string; revision?: number }
-type Revision = { reply: Reply; message: Message; id: string }
+type Revision = { reply: Reply; message: Message; id: string; revision?: number }
 
-function receipt(result: ToolResult | undefined): { reply_id?: string; already_applied?: boolean } | null {
+function receipt(
+  result: ToolResult | undefined,
+): { reply_id?: string; revision?: number; already_applied?: boolean } | null {
   if (!result || result.is_error) return null
   const text = Array.isArray(result.content)
     ? result.content.map(part => (part as { text?: string })?.text ?? '').join('')
@@ -481,18 +483,29 @@ function receipt(result: ToolResult | undefined): { reply_id?: string; already_a
 export function replyRevisions(messages: Message[], results: Map<string, ToolResult>): Map<string, Revision[]> {
   const revisions = new Map<string, Revision[]>()
   const add = (target: string | undefined, revision: Revision) => {
-    if (target) revisions.set(target, [...(revisions.get(target) ?? []), revision])
+    if (!target) return
+    const prior = revisions.get(target) ?? []
+    // A final retry can succeed with already_applied on the server. Its expected
+    // revision still identifies the same version; do not invent another one.
+    if (revision.revision != null && prior.some(r => r.revision === revision.revision)) return
+    revisions.set(target, [...prior, revision])
   }
   for (const message of messages)
     for (const block of message.blocks) {
       if (block.type !== 'tool_use') continue
-      const input = (block.input ?? {}) as Interim & { update_reply_id?: string }
+      const input = (block.input ?? {}) as Interim & { update_reply_id?: string; update_revision?: number }
       if (block.name === INTERIM_TOOL && input.action === 'update') {
         const ok = receipt(results.get(block.id))
-        if (ok && !ok.already_applied) add(ok.reply_id, { reply: input, message, id: block.id })
+        if (ok && !ok.already_applied) add(ok.reply_id, { reply: input, message, id: block.id, revision: ok.revision })
       } else if (block.name === REPLY_TOOL && input.update_reply_id) {
         const result = results.get(block.id)
-        if (result && !result.is_error) add(input.update_reply_id, { reply: input, message, id: block.id })
+        if (result && !result.is_error)
+          add(input.update_reply_id, {
+            reply: input,
+            message,
+            id: block.id,
+            revision: typeof input.update_revision === 'number' ? input.update_revision + 1 : undefined,
+          })
       }
     }
   return revisions
