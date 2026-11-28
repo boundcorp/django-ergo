@@ -1,0 +1,32 @@
+Base: origin/main 4e292f3d9d756815bc99dc847412886d25bc6989 (fetched and checked).
+Read-only source: ../selective-openai-key 66f005dd41d0a8235cc6de461ea2d0a0a6aae6a7.
+Option: ../model-pools-review/PR418_REREVIEW.md option 3.
+Read ~/ENVIRONMENT.md; initial envcheck on PATH returned 127; documented /home/dev/bin/envcheck succeeded (envcheck.txt). No host/cluster availability claim or deployment operations.
+
+Runner: python3 <head>/artifacts/openai-only/run_keyless.py <venv>/bin/python -m pytest ...
+It removes credential-like environment names without printing or inspecting values; ERGO_TEST_ISOLATED=1 TEST_OPENAI=false DJANGO_DEBUG=true.
+Common full flags: -q -n 6 --tb=short --disable-socket --allow-unix-socket --allow-hosts=127.0.0.1,::1,localhost -p no:cacheprovider
+Library: cwd <checkout>, tests [common flags].
+API: cwd <checkout>/ergonaut, -c pyproject.toml [common flags].
+Exact base checkout: /tmp/openai-only-base, created fresh detached origin/main.
+Head checkout: /home/dev/orca/workspaces/django-ergo/openai-key-scope-only.
+Source-bound Python 3.12 environments: /tmp/openai-only-{lib,api}-{head,base}-venv.
+Matching source paths first in .pth: checkout/src, checkout/ergonaut, checkout.
+Read-only dependencies: library /tmp/pr416-api-venv/lib/python3.12/site-packages; API /tmp/vb-voice/lib/python3.12/site-packages; both add /tmp/selective-openai-test-venv/lib/python3.12/site-packages for pytest_socket.
+The same runner, dependencies, flags and worker count apply within each head/base pair. Four full runs launched concurrently.
+
+focused-initial.log: n4, new selector/child/media/independent controls and public-guard/embedding files; 1 failed,59 passed. The collection code imported an unrelated provider; fixed by reading only raw known fields.
+focused.log: same command after that fix; 60 passed.
+focused-boundaries.log: additional final CLI/Bash controls; 1 failed,13 passed. Bash login profiles reintroduced an OpenAI variable into a local child. No provider request was made; the test printed names only. The replacement test intercepts the actual Bash launch env without sourcing real profiles. Profile/file access remains explicitly outside the hygiene boundary.
+focused-boundaries-final.log: 14 passed, covering final Claude/Codex/catalog and Bash boundary plus alias/override/resume.
+Full results and exact rerun commands are recorded in OPENAI_ONLY_REPORT.md and subsequent entries below.
+Compatibility head/base: exact same test file copied to /tmp/openai-only-controls/test_live_media.py, run from each checkout with its matching library venv, -m pytest -c <checkout>/pyproject.toml /tmp/openai-only-controls/test_live_media.py --confcutdir=/tmp/openai-only-controls --import-mode=importlib -q -n 2 --tb=short [same socket flags] -p no:cacheprovider. This keeps the exact base checkout clean and excludes head-only conftest registration fixtures.
+Django checks: each API venv, keyless runner, artifacts/openai-only/check_django.py {check | makemigrations --check --dry-run} --settings=ergonaut.settings.test_settings, sockets limited by pytest_socket.socket_allow_hosts to loopback/Unix. Initial check-runner invocations had a relative path mistake and then an over-restrictive socket initialization order; corrected before final runs, no checks were performed in those failed invocations.
+API exact-case reruns, head and main: same keyless runner and matching API source-bound interpreter, cwd checkout/ergonaut; -m pytest -c pyproject.toml ergonaut/apps/bots/tests/test_admission_drain.py ergonaut/api/tests/test_realtime_voice_broker.py [head additionally ergonaut/api/tests/test_voice_credentials.py] -q --tb=short [same socket flags] -p no:cacheprovider (serial, unchanged assertions/timeouts).
+Common focused library, identical head/main arguments: same keyless runner and matching library interpreter/cwd; -m pytest tests/test_conversation_claude_code.py tests/test_conversation_codex_cli.py tests/test_local_shell.py tests/test_private_inference_public_guards.py tests/test_admission_paths.py -q -n 2 --tb=short [same socket flags] -p no:cacheprovider.
+API serial result: head 21 passed,1 skipped (43.84 s); main 1 failed,16 passed,1 skipped (41.60 s); exact main admission cleanup [False] still fails, all retired-flag and head-only [True] cases pass on both serial reruns. No assertions or timeouts changed.
+Library exact-failure serial reruns, identical head/main arguments: same runner/matching library interpreter/cwd, -m pytest tests/test_admission_paths.py -q --tb=short [same socket flags] -p no:cacheprovider.
+Common focused result head 76 passed (28.75 s), main 1 failed,75 passed (30.55 s), exact library admission test_background_consumer_waits_then_executes cleanup assertion at line230.
+Final full library: head exit1, 1 failed,3788 passed,13 skipped (495.80 s); exact main exit0,3755 passed,13 skipped (542.60 s). Head-only full failure test_background_consumer_waits_then_executes is reproduced on main common-focus; exact serial admission files pass13 on both (head16.04 s,main15.03 s).
+Final full API: head exit1,4 failed,698 passed,6 skipped (309.17 s); main exit1,3 failed,695 passed,6 skipped (318.68 s). Individual outcomes and qualifications in OPENAI_ONLY_REPORT.md.
+Final Django check/drift exit0 both head/main. Ruff check/format pass650 files; git diff --check pass. Implementation commit cb4002b1dcbbdd4a24814aece4ac0d71a3b29837 passed all commit hooks. No code/tests changed after these validations.

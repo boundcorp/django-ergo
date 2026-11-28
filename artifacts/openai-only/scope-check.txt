@@ -1,0 +1,9 @@
+src/django_ergo/protected_env.py is_protected_env unchanged AST from exact main
+src/django_ergo/protected_env.py protected_env_prefixes unchanged AST from exact main
+src/django_ergo/plugins/local_shell.py confined_env unchanged AST from exact main
+src/django_ergo/conversation/engines/claude_api.py byte-identical to exact main
+src/django_ergo/conversation/engines/google_api.py byte-identical to exact main
+src/django_ergo/bots/registry.py byte-identical to exact main
+src/django_ergo/bots/plugins.py byte-identical to exact main
+No generalized provider_credentials module or registered YAML-source scanner
+No migration or infra file diff
