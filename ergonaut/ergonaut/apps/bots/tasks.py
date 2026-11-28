@@ -1240,6 +1240,48 @@ def fail_dead_calls(calls) -> int:
     return recovered
 
 
+def recover_dead_deliveries(session_id=None) -> int:
+    """Settle deliveries orphaned by dead-turn recovery, including older orphans.
+
+    Only the message's latest attempt may fail it. Take the recipient's turn lock
+    and recheck after acquiring it, so a retry, approval resume or new turn cannot
+    race recovery. Queued messages and messages with no recorded turn stay alone.
+    """
+    from django.db.models import CharField, OuterRef, Subquery
+    from django.db.models.fields.json import KT
+    from django.db.models.functions import Cast
+    from django_ergo.bots import messaging
+    from django_ergo.conversation.models import StructuredCall, ThreadMessage
+
+    if redis_client() is None:
+        return 0
+    latest = (
+        StructuredCall.objects.annotate(message_id=KT("metadata__thread_message"))
+        .filter(
+            session_id=OuterRef("recipient_session_id"),
+            kind="chat_reply",
+            message_id=Cast(OuterRef("pk"), output_field=CharField()),
+        )
+        .order_by("-created_at", "-id")
+    )
+    orphans = ThreadMessage.objects.filter(status__in=["delivered", "waiting"])
+    if session_id is not None:
+        orphans = orphans.filter(recipient_session_id=session_id)
+    orphans = orphans.annotate(
+        last_status=Subquery(latest.values("status")[:1]),
+        last_error=Subquery(latest.values("error")[:1]),
+    ).filter(last_status="failed", last_error=DEAD_TURN_ERROR)
+    recovered = 0
+    for message in orphans.select_related("recipient_session", "sender_session")[:100]:
+        with session_lock(str(message.recipient_session_id), wait=False) as locked:
+            if not locked or not orphans.filter(pk=message.pk).exists():
+                continue
+            messaging.fail(message, DEAD_TURN_ERROR)
+            recovered += 1
+            notify(message.recipient_session_id)
+    return recovered
+
+
 @shared_task(name="ergonaut.recover_dead_turns", ignore_result=True)
 def recover_dead_turns() -> int:
     """Fail in-progress calls whose turn died, so their chats stop showing busy and
@@ -1249,9 +1291,11 @@ def recover_dead_turns() -> int:
     from django_ergo.conversation.models import StructuredCall
 
     old = timezone.now() - timezone.timedelta(minutes=DEAD_TURN_MINUTES)
-    return fail_dead_calls(
+    recovered = fail_dead_calls(
         StructuredCall.objects.filter(status="in_progress", updated_at__lt=old, session__isnull=False)
     )
+    recover_dead_deliveries()
+    return recovered
 
 
 def recover_stopped_session(session_id) -> int:
@@ -1261,9 +1305,11 @@ def recover_stopped_session(session_id) -> int:
     from django_ergo.conversation.models import StructuredCall
 
     old = timezone.now() - timezone.timedelta(seconds=STOPPED_DEAD_SECONDS)
-    return fail_dead_calls(
+    recovered = fail_dead_calls(
         StructuredCall.objects.filter(status="in_progress", updated_at__lt=old, session_id=session_id)
     )
+    recover_dead_deliveries(session_id)
+    return recovered
 
 
 @shared_task(name="ergonaut.cleanup_analysis", ignore_result=True)

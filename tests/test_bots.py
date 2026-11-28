@@ -3963,9 +3963,68 @@ async def test_finished_threads_are_resolved_and_unfinished_ones_refused(
     assert status["ready_to_resolve"] is False
 
 
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("kind", ["request", "report", "reply", "worker"])
+async def test_self_resolution_finishes_delivery_and_keeps_final_report(
+    tmp_path, thread_messages, kind
+):
+    from django_ergo.bots import messaging
+    from django_ergo.conversation.models import ThreadMessage
+
+    user = await User.objects.acreate(username="self-resolver")
+    bot, engine = make_bot(
+        tmp_path,
+        claude_tool("ergo_thread_resolve", {"summary": "done"}),
+        say("Final result delivered."),
+    )
+    root = await bot.root_session(user)
+    thread = await bot.create_session(
+        user, parent=root, metadata={"started_by": str(root.id)}
+    )
+    original = None
+    if kind == "reply":
+        original = await ThreadMessage.objects.acreate(
+            sender_session=thread,
+            recipient_session=root,
+            text="Check the handoff",
+            status="answered",
+        )
+    incoming = await sync_to_async(messaging.send)(
+        None if kind == "worker" else root,
+        thread,
+        "All work is complete.",
+        in_reply_to=original,
+        metadata=(
+            {"worker_finished": True, "worker_title": "Build"}
+            if kind == "worker"
+            else {"report": True}
+            if kind == "report"
+            else {}
+        ),
+    )
+    await thread_messages()
+    await thread.arefresh_from_db()
+    await incoming.arefresh_from_db()
+    assert thread.status == "completed"
+    assert incoming.status == "answered"
+    assert incoming.reply_text == "Final result delivered."
+    reports = [m async for m in root.thread_messages.filter(status="queued")]
+    assert len(reports) == int(kind in {"request", "worker"})
+    if reports:
+        assert "Final result delivered." in reports[0].text
+    SENT.clear()
+    engine._client.responses = [say("New request answered.")]
+    await sync_to_async(messaging.send)(root, thread, "One more task")
+    await thread_messages()
+    await thread.arefresh_from_db()
+    assert thread.status == "active"
+    assert "resolved_summary" not in thread.metadata
+
+
 # ---------------------------------------------------------------------------
 # Library skills and seeded tools
 # ---------------------------------------------------------------------------
+
 
 LIBRARY_YAML = """
     name: builder
