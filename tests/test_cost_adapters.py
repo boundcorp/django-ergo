@@ -416,11 +416,12 @@ def test_currencies_and_bots_stay_separate(users):
         summarize_costs(a, since=WINDOW[0])
 
 
-def test_coverage_manifest_never_claims_live_or_complete():
+@pytest.mark.django_db
+def test_coverage_manifest_reports_recorded_paid_ingestion_but_not_complete():
     manifest = coverage_manifest()
-    assert manifest["live_ingestion"] is False and manifest["complete"] is False
+    assert manifest["live_ingestion"] is True and manifest["complete"] is False
     status = {s["source"]: s["status"] for s in manifest["sources"]}
-    assert status["llm_inference_request"] == "automatic_private_inference_disabled"
+    assert status["llm_inference_request"] == "automatic_recorded_paid_inference"
     assert status["ads_mediagen_central"] == "not_integrated"
     assert status["ryan_minimax_proxy"] == "external_unknown"
     assert status["runpod_rest_api_quota"] == "unsupported"

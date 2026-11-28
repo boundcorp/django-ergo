@@ -631,7 +631,7 @@ def test_control_migration_main_leaf_0064_to_0065_and_back(settings):
     leaf = ("django_ergo", "0065_provider_weekly_budgets")
     executor = MigrationExecutor(connection)
     assert [n for n in executor.loader.graph.leaf_nodes() if n[0] == "django_ergo"] == [
-        leaf
+        ("django_ergo", "0066_paid_agent_proxy")
     ]
     assert main in {p.key for p in executor.loader.graph.node_map[leaf].parents}
     try:

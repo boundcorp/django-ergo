@@ -658,6 +658,7 @@ def reserve(  # noqa: PLR0913, PLR0912, PLR0915, C901
     current: CurrentAuthority | None = None,
     output_tokens: int | None = None,
     launch: bool = False,
+    proxy_bound: bool = False,
     price: ExactPrice | None = None,
 ) -> object:
     """Reserve ``amount`` against the envelope of revision ``grant_id`` and
@@ -704,7 +705,16 @@ def reserve(  # noqa: PLR0913, PLR0912, PLR0915, C901
                 problem = f"the spend grant doesn't cover {ref}"
             elif output_tokens is not None and output_tokens > terms.max_output_tokens:
                 problem = f"the output ceiling is now {terms.max_output_tokens} tokens"
-            elif launch and "iso_week_utc" in terms.limits:
+            elif (
+                launch
+                and "iso_week_utc" in terms.limits
+                and not (
+                    proxy_bound
+                    and getattr(current, "coding_decision", None) is not None
+                    and captured_identity
+                    and provider == "openai"
+                )
+            ):
                 problem = (
                     "recurring API funding does not authorize paid coding launches"
                 )
@@ -790,9 +800,15 @@ def reserve(  # noqa: PLR0913, PLR0912, PLR0915, C901
                     vendor=captured_family if captured_identity else "",
                     reserved_usd=amount,
                     cost_status="pending",
+                    cost_ledger_state="pending",
                     **fields,
                     **weekly_fields,
                 )
+                from django_ergo.conversation.inference_ledger import (
+                    _schedule_accounting,
+                )
+
+                _schedule_accounting(row)
     if msg:
         raise SpendDenied(msg)
     return row.pk
@@ -840,9 +856,9 @@ def _finish(pk, **fields) -> None:
         if envelope:
             for key in _locks_of(envelope):
                 lock(key)
-        InferenceRequest.objects.filter(pk=pk).update(
-            finished_at=timezone.now(), **fields
-        )
+        from django_ergo.conversation.inference_ledger import _finish as finish
+
+        finish(pk, finished_at=timezone.now(), **fields)
 
 
 def paid_dispatch_problem(*, legacy: bool = False) -> str:
@@ -1021,6 +1037,7 @@ def reserve_launch(  # noqa: PLR0913
     *,
     grant_id,
     pool: str,
+    proxy_bound: bool = False,
     provider: str,
     model: str,
     amount: Decimal | None,
@@ -1043,6 +1060,7 @@ def reserve_launch(  # noqa: PLR0913
         user_id=user_id,
         current=current,
         launch=True,
+        proxy_bound=proxy_bound,
         fields={
             "bot_name": bot[:100],
             "selector": f"{provider}/{model}"[:200],

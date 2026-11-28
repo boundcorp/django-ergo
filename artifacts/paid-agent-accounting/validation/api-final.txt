@@ -1,0 +1,84 @@
+/tmp/pr416-api-venv/lib/python3.12/site-packages/pytest_asyncio/plugin.py:306: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the fixture scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to "function" scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session". Set it to "fixture-scope" to keep the current behavior.
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+/tmp/pr416-api-venv/lib/python3.12/site-packages/pytest_asyncio/plugin.py:306: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the fixture scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to "function" scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session". Set it to "fixture-scope" to keep the current behavior.
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+/tmp/pr416-api-venv/lib/python3.12/site-packages/pytest_asyncio/plugin.py:306: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the fixture scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to "function" scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session". Set it to "fixture-scope" to keep the current behavior.
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+/tmp/pr416-api-venv/lib/python3.12/site-packages/pytest_asyncio/plugin.py:306: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the fixture scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to "function" scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session". Set it to "fixture-scope" to keep the current behavior.
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+/tmp/pr416-api-venv/lib/python3.12/site-packages/pytest_asyncio/plugin.py:306: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the fixture scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to "function" scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session". Set it to "fixture-scope" to keep the current behavior.
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+bringing up nodes...
+bringing up nodes...
+
+........................................................................ [ 33%]
+.......................................................s...s...s.s...s.. [ 66%]
+....s..ss..................sssss.......................................  [100%]
+=============================== warnings summary ===============================
+../../../../../../tmp/pr416-api-venv/lib/python3.12/site-packages/platformdirs/api.py:441
+../../../../../../tmp/pr416-api-venv/lib/python3.12/site-packages/platformdirs/api.py:441
+../../../../../../tmp/pr416-api-venv/lib/python3.12/site-packages/platformdirs/api.py:441
+../../../../../../tmp/pr416-api-venv/lib/python3.12/site-packages/platformdirs/api.py:441
+../../../../../../tmp/pr416-api-venv/lib/python3.12/site-packages/platformdirs/api.py:441
+  /tmp/pr416-api-venv/lib/python3.12/site-packages/platformdirs/api.py:441: RuntimeDirWarning: XDG_RUNTIME_DIR is not set, falling back to /tmp/runtime-1000
+    return Path(self.user_runtime_dir)
+
+ergonaut/api/tests/test_api_keys.py: 4 warnings
+ergonaut/api/tests/test_realtime_voice.py: 23 warnings
+ergonaut/api/tests/test_api.py: 1 warning
+ergonaut/api/tests/test_realtime_voice_diagnostics.py: 5 warnings
+ergonaut/api/tests/test_realtime_voice_outbox.py: 2 warnings
+ergonaut/api/tests/test_voice.py: 12 warnings
+ergonaut/api/tests/test_voice_rate_limit.py: 4 warnings
+ergonaut/api/tests/test_voice_costs.py: 9 warnings
+  /tmp/pr416-api-venv/lib/python3.12/site-packages/factory/django.py:182: DeprecationWarning: UserFactory._after_postgeneration will stop saving the instance after postgeneration hooks in the next major release.
+  If the save call is extraneous, set skip_postgeneration_save=True in the UserFactory.Meta.
+  To keep saving the instance, move the save call to your postgeneration hooks or override _after_postgeneration.
+    warnings.warn(
+
+ergonaut/api/tests/test_api_keys.py: 5 warnings
+ergonaut/api/tests/test_realtime_voice.py: 23 warnings
+ergonaut/api/tests/test_api.py: 10 warnings
+ergonaut/api/tests/test_realtime_voice_diagnostics.py: 5 warnings
+ergonaut/api/tests/test_voice.py: 12 warnings
+ergonaut/api/tests/test_voice_rate_limit.py: 4 warnings
+ergonaut/apps/bots/tests/test_costs.py: 28 warnings
+ergonaut/api/tests/test_illustrate.py: 3 warnings
+ergonaut/api/tests/test_realtime_voice_budget.py: 13 warnings
+ergonaut/api/tests/test_realtime_voice_execution.py: 13 warnings
+ergonaut/api/tests/test_voice_costs.py: 9 warnings
+ergonaut/api/tests/test_realtime_voice_text.py: 29 warnings
+  /tmp/pr416-api-venv/lib/python3.12/site-packages/django/core/handlers/base.py:61: UserWarning: No directory at: /home/dev/orca/workspaces/django-ergo/paid-agent-accounting-test/ergonaut/static/assets/
+    mw_instance = middleware(adapted_handler)
+
+ergonaut/api/tests/test_realtime_voice.py::test_claimed_session_refuses_new_token_and_reaps_only_a_stale_bridge_lease
+ergonaut/api/tests/test_realtime_voice.py::test_token_is_scoped_to_voice_room
+  /tmp/pr416-api-venv/lib/python3.12/site-packages/jwt/api_jwt.py:149: InsecureKeyLengthWarning: The HMAC key is 11 bytes long, which is below the minimum recommended length of 32 bytes for SHA256. See RFC 7518 Section 3.2.
+    return self._jws.encode(
+
+ergonaut/api/tests/test_realtime_voice.py::test_token_is_scoped_to_voice_room
+  /tmp/pr416-api-venv/lib/python3.12/site-packages/jwt/api_jwt.py:370: InsecureKeyLengthWarning: The HMAC key is 11 bytes long, which is below the minimum recommended length of 32 bytes for SHA256. See RFC 7518 Section 3.2.
+    decoded = self.decode_complete(
+
+ergonaut/api/tests/test_illustrate.py: 5 warnings
+ergonaut/api/tests/test_realtime_voice_execution.py: 5 warnings
+ergonaut/api/tests/test_realtime_voice_text.py: 5 warnings
+ergonaut/apps/bots/tests/test_costs.py: 5 warnings
+  /tmp/pr416-api-venv/lib/python3.12/site-packages/celery/app/task.py:470: CDeprecationWarning:
+      The 'queue' task attribute is deprecated and scheduled for removal in
+      version 6.0. Use the task_routes setting instead.
+
+    deprecated.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+202 passed, 16 skipped, 242 warnings in 67.11s (0:01:07)

@@ -370,7 +370,11 @@ def totals(rows, *, period=CUMULATIVE, now=None):
     """
     spent = held = Decimal(0)
     start = week_start(now)
-    for row in rows.exclude(outcome=InferenceOutcome.NOT_SENT):
+    # Select the accounting inputs only. New proxy columns must not make
+    # historical weekly-schema migration/reversal reads require proxy tables.
+    for row in rows.exclude(outcome=InferenceOutcome.NOT_SENT).only(
+        "cost_status", "cost_usd", "budget_week", "created_at", "reserved_usd"
+    ):
         priced = row.cost_status == "priced" and row.cost_usd is not None
         in_week = (row.budget_week or week_of(row.created_at)) == week_of(start)
         if priced:

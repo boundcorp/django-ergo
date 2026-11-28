@@ -21,7 +21,7 @@ DEFAULTS = {
     "KNOWLEDGE_REPOSITORIES": {},
     # Opt in to content-free lifecycle observations. Disabled by default.
     "LIFECYCLE_EVENTS_ENABLED": False,
-    # Opt in only to private InferenceRequest cost observations.
+    # Deprecated compatibility setting; recorded paid attempts are always ingested.
     "INFERENCE_COST_LEDGER_ENABLED": False,
     # OpenAI Configuration
     "OPENAI_API_KEY": None,  # Can be overridden by environment variable
