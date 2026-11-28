@@ -121,6 +121,7 @@ from django_ergo.conversation.runtime import EngineSpec
 from django_ergo.conversation.runtime import build_engine
 from django_ergo.conversation.runtime import get_default_engine_spec
 from django_ergo.conversation.tool_dispatch import collect_toolkit_schemas
+from django_ergo.conversation.tool_dispatch import current_tool_use_id
 from django_ergo.conversation.tool_dispatch import dispatch_tool
 from django_ergo.conversation.tool_dispatch import dispatch_tool_once
 from django_ergo.conversation.tool_dispatch import find_toolkit
@@ -266,6 +267,9 @@ class StructuredCallSpec:
     # response that ends in text instead of the output tool is taken as the
     # answer (stored as that tool call) rather than nudged to call the tool.
     text_output: Callable[[str], dict] | None = None
+    # Runs on a valid output before it is accepted (on the tool's thread);
+    # a ValueError is returned to the model, which can call the tool again.
+    output_check: Callable[[BaseModel], None] | None = None
     # An opt-in hard budget (see conversation.budget). None = the call runs as it
     # always did. With one, the loop enforces turns, input and output tokens, a
     # deadline and an allowlist of tools, never retries and never pauses for approval.
@@ -383,9 +387,15 @@ class StructuredOutputToolkit(Toolkit):
     the runner returns the validation error to the model.
     """
 
-    def __init__(self, response_model: type[BaseModel], tool_name: str):
+    def __init__(
+        self,
+        response_model: type[BaseModel],
+        tool_name: str,
+        check: Callable[[BaseModel], None] | None = None,
+    ):
         self.response_model = response_model
         self.tool_name = tool_name
+        self.check = check
         self.accepted: BaseModel | None = None
 
     def has_tool(self, tool_name: str) -> bool:
@@ -419,13 +429,17 @@ class StructuredOutputToolkit(Toolkit):
     def execute_tool(self, tool_name: str, arguments: dict) -> str:
         arguments = _decode_json_fields(self.response_model, arguments)
         try:
-            self.accepted = self.response_model.model_validate(arguments)
+            parsed = self.response_model.model_validate(arguments)
         except ValidationError as e:
             msg = (
                 f"Output failed validation: {e}. "
                 f"Fix the errors and call {self.tool_name} again."
             )
             raise ValueError(msg) from e
+        if self.check is not None:
+            # The spec's own rule (a ValueError goes back to the model).
+            self.check(parsed)
+        self.accepted = parsed
         return OUTPUT_ACCEPTED
 
     def render_overview(self) -> str:
@@ -817,7 +831,9 @@ class _Run:
     def __post_init__(self):
         spec = self.spec
         self.submit = (
-            StructuredOutputToolkit(spec.response_model, spec.output_tool_name)
+            StructuredOutputToolkit(
+                spec.response_model, spec.output_tool_name, spec.output_check
+            )
             if spec.response_model is not None
             else None
         )
@@ -917,6 +933,7 @@ class _Run:
                 if revoked:
                     return _REVOKED, True
             token = auto_approved.set(automatically_approved)
+            call_token = current_tool_use_id.set(tool_id)
             try:
                 if once:
                     return dispatch_tool_once(
@@ -924,6 +941,7 @@ class _Run:
                     )
                 return dispatch_tool(name, args, self.toolkits)
             finally:
+                current_tool_use_id.reset(call_token)
                 auto_approved.reset(token)
 
         try:

@@ -2602,3 +2602,30 @@ def test_record_report_marks_chat_unread_without_turn(client, cook, use_bots):
         client.get(f"/api/sessions/{recipient.id}")
         assert not listed()["unread"]
     assert recipient.messages.count() == 2
+
+
+@pytest.mark.django_db(transaction=True)
+def test_reply_updates_toggle_is_per_chat_and_owner_only(client, cook, bot_folder, use_bots):
+    (bot_folder / "bot.yaml").write_text(textwrap.dedent(BOT).replace("orchestration: false", "orchestration: true"))
+    use_bots(say("hello"))
+    thread = post(client, "/api/bots/kitchen/threads", {"title": "Task"}).json()
+    other_thread = post(client, "/api/bots/kitchen/threads", {"title": "Other"}).json()
+    url = f"/api/sessions/{thread['id']}"
+    assert thread["reply_updates"] is False
+    assert post(client, f"{url}/reply-updates", {"enabled": True}).json()["reply_updates"] is True
+    # Persisted, and only for this chat.
+    assert client.get(url).json()["session"]["reply_updates"] is True
+    assert client.get(f"/api/sessions/{other_thread['id']}").json()["session"]["reply_updates"] is False
+    from django_ergo.conversation.models import ConversationSession
+
+    # A stale full save of the chat (any metadata writer) cannot undo it.
+    stale = ConversationSession.objects.get(pk=thread["id"])
+    stale.reply_updates = False
+    stale.metadata = {**stale.metadata, "note": "x"}
+    stale.save()
+    assert ConversationSession.objects.get(pk=thread["id"]).reply_updates is True
+    other = get_user_model().objects.create_user("other-updates", password="pw")
+    client.force_login(other)
+    assert post(client, f"{url}/reply-updates", {"enabled": False}).status_code in (403, 404)
+    client.force_login(cook)
+    assert post(client, f"{url}/reply-updates", {"enabled": False}).json()["reply_updates"] is False

@@ -142,7 +142,7 @@ function foldRuns(
     if (starts.has(message.line)) close()
     for (const block of message.blocks) {
       if (block.type === 'tool_use') {
-        if (block.name === REPLY_TOOL) close()
+        if (block.name === REPLY_TOOL || block.name === INTERIM_TOOL) close()
         else run.push(block)
       } else if (block.type === 'text') {
         if (message.role !== 'user' && echoesReply(block.text, replies)) continue
@@ -449,6 +449,62 @@ type ToolResult = Extract<Block, { type: 'tool_result' }>
 type ToolUse = Extract<Block, { type: 'tool_use' }>
 
 const REPLY_TOOL = 'send_reply'
+// Chats with reply updates on (django_ergo.conversation.reply_updates): a reply posted or revised mid-turn.
+const INTERIM_TOOL = 'ergo_interim_reply'
+
+/** A call that shows as a reply bubble: send_reply, or an interim reply that appends. */
+function isReplyUse(block: Block): block is ToolUse {
+  return (
+    block.type === 'tool_use' &&
+    ((block.name === REPLY_TOOL && !(block.input as { update_reply_id?: string })?.update_reply_id) ||
+      (block.name === INTERIM_TOOL && (block.input as Interim)?.action === 'append'))
+  )
+}
+
+type Interim = Reply & { action?: string; reply_id?: string; revision?: number }
+type Revision = { reply: Reply; message: Message; id: string }
+
+function receipt(result: ToolResult | undefined): { reply_id?: string; already_applied?: boolean } | null {
+  if (!result || result.is_error) return null
+  const text = Array.isArray(result.content)
+    ? result.content.map(part => (part as { text?: string })?.text ?? '').join('')
+    : String(result.content ?? '')
+  try {
+    return JSON.parse(text)
+  } catch {
+    return null
+  }
+}
+
+/** Accepted revisions of each reply, by the reply's id, in transcript order. Only the server's
+ *  receipts count: an update the server refused, or one still running, changes nothing. */
+export function replyRevisions(messages: Message[], results: Map<string, ToolResult>): Map<string, Revision[]> {
+  const revisions = new Map<string, Revision[]>()
+  const add = (target: string | undefined, revision: Revision) => {
+    if (target) revisions.set(target, [...(revisions.get(target) ?? []), revision])
+  }
+  for (const message of messages)
+    for (const block of message.blocks) {
+      if (block.type !== 'tool_use') continue
+      const input = (block.input ?? {}) as Interim & { update_reply_id?: string }
+      if (block.name === INTERIM_TOOL && input.action === 'update') {
+        const ok = receipt(results.get(block.id))
+        if (ok && !ok.already_applied) add(ok.reply_id, { reply: input, message, id: block.id })
+      } else if (block.name === REPLY_TOOL && input.update_reply_id) {
+        const result = results.get(block.id)
+        if (result && !result.is_error) add(input.update_reply_id, { reply: input, message, id: block.id })
+      }
+    }
+  return revisions
+}
+
+/** A call that revises another reply (accepted or not). */
+function isRevisionUse(block: ToolUse): boolean {
+  const input = (block.input ?? {}) as Interim & { update_reply_id?: string }
+  return (
+    (block.name === INTERIM_TOOL && input.action !== 'append') || (block.name === REPLY_TOOL && !!input.update_reply_id)
+  )
+}
 
 // A file in the chat: images as a thumbnail, audio as a player, anything else as a chip.
 
@@ -494,7 +550,9 @@ function placeFiles(messages: Message[], files: AttachmentFile[], complete: bool
   // Files a reply attached show in its bubble, not again where they were made.
   const attached = messages.flatMap(m =>
     m.blocks.flatMap(b =>
-      b.type === 'tool_use' && b.name === REPLY_TOOL ? replySuggestions((b.input as Reply)?.attachments) : [],
+      b.type === 'tool_use' && (b.name === REPLY_TOOL || b.name === INTERIM_TOOL)
+        ? replySuggestions((b.input as Reply)?.attachments)
+        : [],
     ),
   )
   for (const item of resolveFiles(attached, files)) if (item.id) shown.add(item.id)
@@ -551,15 +609,50 @@ export function replySuggestions(value: unknown): string[] {
   return Array.isArray(value) ? value.map(String) : []
 }
 
-function ReplyBubble({ reply, message }: { reply: Reply; message: Message }) {
+function ReplyBubble({
+  reply: original,
+  message,
+  revisions = [],
+  replyId,
+  note,
+}: {
+  reply: Reply
+  message: Message
+  revisions?: Revision[]
+  replyId?: string
+  note?: string
+}) {
+  // A revised reply shows its latest version where the original was; earlier ones stay a click away.
+  const latest = revisions.length ? revisions[revisions.length - 1] : null
+  const reply = latest?.reply ?? original
   const suggestions = replySuggestions(reply.suggestions)
   const files = useContext(FilesContext)
   const attached = replySuggestions(reply.attachments)
+  const earlier = [{ reply: original, message, id: replyId ?? '' }, ...revisions.slice(0, -1)]
   return (
-    <div className="max-w-[85%] rounded-card border border-stroke bg-surface px-4 py-3">
+    <div className="max-w-[85%] rounded-card border border-stroke bg-surface px-4 py-3" data-reply-id={replyId}>
       <RoleLabel who="Assistant" timestamp={message.timestamp} line={message.line} />
+      {note && <div className="mb-1 text-xs text-muted">{note}</div>}
       {reply.type === 'question' && <div className="mb-1 text-xs font-medium text-amber-600">Question</div>}
       <BotMarkdown text={reply.text ?? ''} />
+      {latest && (
+        <details className="reply-revisions mt-2 text-xs text-muted">
+          <summary className="cursor-pointer">
+            Updated{latest.message.timestamp ? ` ${clock(latest.message.timestamp)}` : ''} · {earlier.length} earlier{' '}
+            {earlier.length === 1 ? 'version' : 'versions'}
+          </summary>
+          <ol className="mt-1 flex flex-col gap-1">
+            {earlier.map((version, i) => (
+              <li key={version.id || i} className="border-l-2 border-stroke pl-2">
+                <BotMarkdown text={version.reply.text ?? ''} />
+                {!!replySuggestions(version.reply.attachments).length && (
+                  <MediaGallery items={resolveFiles(replySuggestions(version.reply.attachments), files)} />
+                )}
+              </li>
+            ))}
+          </ol>
+        </details>
+      )}
       {!!attached.length && (
         <div className="mt-2">
           <MediaGallery items={resolveFiles(attached, files)} />
@@ -788,6 +881,8 @@ type PartEnv = {
   results: Map<string, ToolResult>
   pending: Set<string>
   replies: string[]
+  revisions: Map<string, Revision[]>
+  loadedReplies: Set<string>
 }
 
 /**
@@ -795,7 +890,7 @@ type PartEnv = {
  * `null` hides the part (an echoed reply, a call folded away), so nothing here falls back to the package default.
  */
 function renderBlock(message: Message, block: Block, blocks: Block[], env: PartEnv, folds: Folds): ReactNode {
-  const { results, pending, replies } = env
+  const { results, pending, replies, revisions, loadedReplies } = env
   const { hidden, rows } = folds
   const user = message.role === 'user'
   switch (block.type) {
@@ -870,10 +965,25 @@ function renderBlock(message: Message, block: Block, blocks: Block[], env: PartE
     case 'context':
       return <ContextToggle text={block.text} />
     case 'tool_use': {
-      if (block.name === REPLY_TOOL) {
+      if (block.name === REPLY_TOOL || block.name === INTERIM_TOOL) {
         // A rejected reply was retried; the accepted one follows.
         if (results.get(block.id)?.is_error) return null
-        return <ReplyBubble reply={block.input as Reply} message={message} />
+        if (isRevisionUse(block)) {
+          const input = block.input as Interim & { update_reply_id?: string }
+          const target = input.update_reply_id || input.reply_id || ''
+          // Shown in the reply it revised; an update still running changes nothing yet.
+          if (loadedReplies.has(target) || !results.has(block.id)) return null
+          // The revised reply is in older, unloaded history: show this version on its own until it loads.
+          return <ReplyBubble reply={input} message={message} note="Update to an earlier reply" />
+        }
+        return (
+          <ReplyBubble
+            reply={block.input as Reply}
+            message={message}
+            revisions={revisions.get(block.id)}
+            replyId={block.id}
+          />
+        )
       }
       if (hidden.has(block.id) && !rows.has(block.id)) return null
       if (folds.inWorkerRun.has(block.id)) return null
@@ -1003,51 +1113,6 @@ function uniqueToolIds(messages: Message[]): Message[] {
   }))
 }
 
-type ReplyUpdate = { message: Message; block: Extract<Block, { type: 'tool_use' }> }
-
-/** Group ordinary replies within one human interval. Tool-result rows are not human messages. */
-function replyUpdates(messages: Message[], results: Map<string, ToolResult>): ReplyUpdate[][] {
-  const groups: ReplyUpdate[][] = []
-  let current: ReplyUpdate[] = []
-  let author = ''
-  const close = () => {
-    if (current.length) groups.push(current)
-    current = []
-    author = ''
-  }
-  for (const message of messages) {
-    if (
-      message.provenance?.kind ||
-      (message.role !== 'assistant' && message.blocks.some(b => b.type !== 'tool_result'))
-    ) {
-      close()
-      continue
-    }
-    if (message.role !== 'assistant') continue
-    // A single source line can contain several replies, including questions. Keep
-    // those in block order and retain its one message anchor in the original row.
-    if (message.blocks.filter(b => b.type === 'tool_use' && b.name === REPLY_TOOL).length > 1) {
-      close()
-      continue
-    }
-    const identity = JSON.stringify(message.author ?? {})
-    if (current.length && identity !== author) close()
-    for (const block of message.blocks) {
-      if (block.type !== 'tool_use' || block.name !== REPLY_TOOL || results.get(block.id)?.is_error) continue
-      const reply = block.input as Reply
-      // Questions remain in the transcript as separate, immediately visible requests.
-      if (reply.type === 'question') {
-        close()
-        continue
-      }
-      author = identity
-      current.push({ message, block })
-    }
-  }
-  close()
-  return groups
-}
-
 export function Transcript({
   messages: rawMessages,
   calls,
@@ -1073,24 +1138,12 @@ export function Transcript({
 }) {
   const { sessions } = useContext(DirectoryContext)
   const messages = useMemo(() => uniqueToolIds(rawMessages), [rawMessages])
+  const chatMessages = useMemo(() => toChatMessages(messages), [messages])
   const contexts = useMemo(() => contextPlacement(messages, calls), [messages, calls])
   const [openFolds, setOpenFolds] = useState<Set<string>>(new Set())
   const results = new Map<string, ToolResult>()
   for (const message of messages)
     for (const block of message.blocks) if (block.type === 'tool_result') results.set(block.tool_use_id, block)
-  const groups = replyUpdates(messages, results)
-  const groupedIds = new Set(groups.flatMap(group => group.map(update => update.block.id)))
-  const groupedLines = new Set(groups.flatMap(group => group.map(update => update.message.line)))
-  const groupById = new Map(groups.map(group => [`reply-updates:${group[0].message.line}:${group[0].block.id}`, group]))
-  const afterLine = new Map<number, string[]>()
-  for (const [id, group] of groupById) {
-    const line = group[group.length - 1].message.line
-    afterLine.set(line, [...(afterLine.get(line) ?? []), id])
-  }
-  const chatMessages = toChatMessages(messages).flatMap(chat => [
-    chat,
-    ...(afterLine.get(adapterMeta(chat).source.line) ?? []).map(id => ({ ...chat, id, parts: [] })),
-  ])
   const pending = new Set(
     calls.flatMap(c => (c.status === 'awaiting_approval' ? c.pending_approvals.map(a => a.id) : [])),
   )
@@ -1134,54 +1187,18 @@ export function Transcript({
         return next
       }),
   }
-  const env: PartEnv = { results, pending, replies }
+  const revisions = replyRevisions(messages, results)
+  const loadedReplies = new Set(messages.flatMap(m => m.blocks.filter(isReplyUse).map(b => b.id)))
+  const env: PartEnv = { results, pending, replies, revisions, loadedReplies }
 
   // Parts: every Ergonaut block is drawn by its own card (renderBlock); the package supplies the list, keys and slots.
   const renderPart: RenderPart = (_part, { message, index }) => {
     const meta = adapterMeta(message)
-    const block = meta.blocks[index]
-    if (block.type === 'tool_use' && groupedIds.has(block.id)) return null
-    return renderBlock(meta.source, block, meta.blocks, env, folds)
+    return renderBlock(meta.source, meta.blocks[index], meta.blocks, env, folds)
   }
   // Messages: the shell around a message's parts (event and attributed messages, ids for links, call headers,
   // sent-to notes, files a bot made, context panels, compaction dividers, voice sessions).
   const renderMessage: RenderMessage = (chat, { parts }) => {
-    const group = groupById.get(chat.id)
-    if (group) {
-      const latest = group[group.length - 1]
-      return (
-        <div className="mt-6" data-reply-updates={chat.id}>
-          {group.length > 1 && (
-            <details
-              className="mb-2 max-w-[85%] text-xs text-muted"
-              open={group.slice(0, -1).some(update => update.message.line === highlight) || undefined}
-            >
-              <summary className="cursor-pointer">
-                {group.length - 1} earlier {group.length === 2 ? 'update' : 'updates'}
-              </summary>
-              <div className="mt-2 flex flex-col items-start gap-2">
-                {group.slice(0, -1).map(update => (
-                  <div
-                    key={update.block.id}
-                    id={messageAnchor(update.message.line)}
-                    className={highlight === update.message.line ? 'message-target' : ''}
-                  >
-                    <ReplyBubble reply={update.block.input as Reply} message={update.message} />
-                  </div>
-                ))}
-              </div>
-            </details>
-          )}
-          {group.length > 1 && <div className="mb-1 text-xs text-muted">Latest update</div>}
-          <div
-            id={messageAnchor(latest.message.line)}
-            className={highlight === latest.message.line ? 'message-target' : ''}
-          >
-            <ReplyBubble reply={latest.block.input as Reply} message={latest.message} />
-          </div>
-        </div>
-      )
-    }
     const message = adapterMeta(chat).source
     const body =
       message.author?.kind === 'system' || message.provenance?.kind === 'event' ? (
@@ -1197,7 +1214,7 @@ export function Transcript({
           <VoiceSessionCard key={voice.id} session={voice} />
         ))}
         <div
-          id={groupedLines.has(message.line) ? undefined : messageAnchor(message.line)}
+          id={messageAnchor(message.line)}
           className={`empty:hidden ${toolsOnly(message) && !starts.has(message.line) ? 'mt-1.5' : 'mt-6'} ${highlight === message.line ? 'message-target' : ''}`}
         >
           {starts.has(message.line) && <CallHeader call={starts.get(message.line)!} />}
@@ -1253,7 +1270,7 @@ function toolsOnly(message: Message): boolean {
       b.type === 'tool_result' ||
       b.type === 'thinking' ||
       b.type === 'context' ||
-      (b.type === 'tool_use' && b.name !== REPLY_TOOL),
+      (b.type === 'tool_use' && !isReplyUse(b)),
   )
 }
 

@@ -26,11 +26,17 @@ work and write long content in smaller pieces: one file per call and documents
 in parts of about 2,000 words. An unfinished tool call was not saved or run.
 Resuming is manual, including after a repeated output-limit failure.
 
-The chat groups consecutive ordinary assistant replies between human messages as
-updates: the latest reply stays visible and earlier updates can be expanded.
-Questions remain visible on their own, and events and attributed messages start
-new groups. Earlier replies and their attachments remain in the recorded history.
-The chat follows new activity only while the reader is already at the bottom.
+## Reply updates
+
+Each chat has a **Reply updates** switch in its options, off by default. When
+it is on, the bot can revise one of its replies in place instead of adding a
+new bubble: the reply shows its latest version where it was posted, and
+**Updated · N earlier versions** opens every earlier version with its files.
+Only updates the server accepted change a reply; separate replies and
+questions always stay separate. If the revised reply is in older history that
+is not loaded yet, the update shows on its own until that history loads. The
+chat follows new activity only while you are at the bottom. See
+[Reply updates](bots.md#reply-updates).
 
 ## Markdown attachments
 

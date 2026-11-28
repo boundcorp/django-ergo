@@ -42,6 +42,7 @@ export type Session = {
   status_line?: string // the bot's one line from its latest reply (a resolved thread's summary)
   pinned?: boolean
   is_permanent?: boolean
+  reply_updates?: boolean // the bot may revise its replies in place (opt-in per chat)
   last_activity?: string | null // when its latest turn moved
   workers_running?: number
   workers_total?: number
@@ -1377,6 +1378,8 @@ export const api = {
   close: (id: string) => request<Session>('POST', `/sessions/${id}/close`),
   setPermanent: (id: string, is_permanent: boolean) =>
     request<Session>('POST', `/sessions/${id}/permanent`, { is_permanent }),
+  setReplyUpdates: (id: string, enabled: boolean) =>
+    request<Session>('POST', `/sessions/${id}/reply-updates`, { enabled }),
   pinSession: (id: string, pinned: boolean) => request<Session>('POST', `/sessions/${id}/pin`, { pinned }),
   changes: (bot: string) => request<Changes>('GET', `/bots/${bot}/changes`),
   changeDiff: (bot: string, n: number) => request<{ diff: string }>('GET', `/bots/${bot}/changes/${n}/diff`),
