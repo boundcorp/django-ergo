@@ -2036,6 +2036,7 @@ sample provenance, limitations and a reviewable PR URL, not huge transcripts.
   permission_mode: dontAsk # Claude Code: anything not allowed is refused
   codex_sandbox: workspace-write
   codex_network_access: true # false disables networking in workspace-write
+  codex_runtime_home: false # per-run Codex state root (needs a supporting Codex build)
   max_turns: 100
   pass_env: [PATH, HOME, LANG, LC_ALL, TZ, USER]
   secrets: [HIGGSFIELD_API_KEY] # bot secrets every job gets
@@ -2094,6 +2095,23 @@ access enabled globally, without changing the CLI's home configuration.
 Set `codex_network_access: false` to disable network access in that sandbox.
 `codex_sandbox` still selects the sandbox; this setting does not affect Claude
 or grant writes outside the workspace.
+
+`codex_runtime_home: true` gives every Codex run a fresh private folder,
+`.ergo/codex-state/run-<n>/`, and passes it as `CODEX_RUNTIME_HOME`. A Codex
+build that supports the variable writes its mutable state there (installation
+id, SQLite state and logs, helper aliases, sessions and their index, history,
+shell snapshots, memories and caches) and keeps reading `auth.json` and
+`config.toml` from its normal `CODEX_HOME`, which can then stay read-only
+under the sandbox. The folder is created exclusively with mode 0700; a reused
+run number or a symlinked `.ergo/codex-state` refuses the launch. Only the
+launcher sets the variable: an inherited `CODEX_RUNTIME_HOME` is never passed
+on, even when listed in `pass_env`. The state folder stays under `.ergo`, out
+of the job's file report, but its logs and rollouts can contain task text.
+The stock Codex CLI ignores the variable, so leave this off unless
+`executables.codex` points at a build with the runtime-home patch
+(`artifacts/codex-state-root/` in the django-ergo repository describes it).
+Auth refresh still needs a writable `CODEX_HOME`; with a read-only home an
+expired token fails the run instead of being rewritten.
 
 The agent's environment is rebuilt from `pass_env` plus `secrets`; variables
 that would move an agent CLI onto API billing (`ANTHROPIC_API_KEY`,

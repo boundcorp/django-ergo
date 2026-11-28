@@ -12,6 +12,7 @@
         permission_mode: dontAsk      # Claude Code: anything not allowed is refused
         codex_sandbox: workspace-write
         codex_network_access: true    # set false to disable network in workspace-write
+        codex_runtime_home: false     # per-run CODEX_RUNTIME_HOME (needs a Codex build that supports it)
         max_turns: 100
         pass_env: [PATH, HOME, LANG, LC_ALL, TZ, USER]   # the only host variables passed on
         secrets: [HIGGSFIELD_API_KEY] # bot secrets every job gets (API-billed tools)
@@ -100,6 +101,9 @@ STALE_SECONDS = 90
 USAGE_SECONDS = 300  # how often a running job's token usage is stored
 # Variables that would move an agent CLI off its subscription onto API billing.
 NEVER_PASS = {
+    # Only the launcher picks a Codex runtime root (one per run); an inherited
+    # value could point every job at one shared state directory.
+    "CODEX_RUNTIME_HOME",
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_AUTH_TOKEN",
     "ANTHROPIC_BASE_URL",
@@ -199,6 +203,34 @@ def _snapshot(folder: Path) -> dict[str, list[int]]:
         stat = path.stat()
         found[rel.as_posix()] = [stat.st_size, stat.st_mtime_ns]
     return found
+
+
+def _codex_runtime_root(folder: Path, number: int) -> Path:
+    """A fresh private ``.ergo/codex-state/run-<number>/`` for one Codex run.
+
+    Codex writes its mutable state there (installation id, SQLite, logs,
+    sessions, caches) while auth and config stay read-only in CODEX_HOME.
+    Every component must be a real directory, never a symlink, and the run
+    folder is created exclusively so two runs never share one."""
+    parent = folder
+    for part in (META, "codex-state"):
+        parent = parent / part
+        parent.mkdir(mode=0o700, exist_ok=True)
+        if parent.is_symlink() or not parent.is_dir():
+            msg = f"{parent} must be a real folder for Codex runtime state"
+            raise LocalShellError(msg)
+    root = parent / f"run-{number}"
+    try:
+        root.mkdir(mode=0o700)
+    except FileExistsError:
+        msg = f"Codex runtime state {root} already exists; runs never share one"
+        raise LocalShellError(msg) from None
+    root.chmod(0o700)
+    resolved = root.resolve(strict=True)
+    if resolved != folder.resolve(strict=True) / META / "codex-state" / root.name:
+        msg = f"{root} resolves outside its job folder"
+        raise LocalShellError(msg)
+    return resolved
 
 
 def _sha256(path: Path) -> str:
@@ -484,6 +516,10 @@ class LocalShellPlugin(BotPlugin):
         if not isinstance(self.codex_network_access, bool):
             msg = "local_shell codex_network_access must be a boolean"
             raise TypeError(msg)
+        self.codex_runtime_home: bool = config.get("codex_runtime_home", False)
+        if not isinstance(self.codex_runtime_home, bool):
+            msg = "local_shell codex_runtime_home must be a boolean"
+            raise TypeError(msg)
         self.max_turns = int(config.get("max_turns", 100))
         self.pass_env = tuple(config.get("pass_env") or DEFAULT_PASS_ENV)
         self.secrets = [str(s) for s in config.get("secrets") or []]
@@ -681,10 +717,13 @@ class LocalShellPlugin(BotPlugin):
         try:
             (meta / "stop").unlink(missing_ok=True)
             (meta / "heartbeat").touch()
+            env = self.env(ctx, confinement, folder)
+            if agent == "codex" and self.codex_runtime_home:
+                env["CODEX_RUNTIME_HOME"] = str(_codex_runtime_root(folder, number))
             subprocess.Popen(  # noqa: S603 — fixed interpreter and runner; argv from config
                 [sys.executable, str(RUNNER), str(folder), str(number)],
                 cwd=folder,
-                env=self.env(ctx, confinement, folder),
+                env=env,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,

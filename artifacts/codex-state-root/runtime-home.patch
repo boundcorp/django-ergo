@@ -1,0 +1,980 @@
+diff --git a/codex-rs/arg0/src/lib.rs b/codex-rs/arg0/src/lib.rs
+index 1abf467..31209ff 100644
+--- a/codex-rs/arg0/src/lib.rs
++++ b/codex-rs/arg0/src/lib.rs
+@@ -200,6 +200,8 @@ where
+     // this executable. Admittedly, we could invoke `keep()` on it, but it
+     // would be nice to avoid leaving temporary directories behind, if possible.
+     let path_entry_guard = arg0_dispatch();
++    // Fail closed before any work when CODEX_RUNTIME_HOME is set but invalid.
++    codex_utils_home_dir::runtime_home::configured_runtime_home()?;
+     let current_exe = std::env::current_exe().ok();
+ 
+     // Regular invocation. Run the async entry point on a thread with the same
+@@ -319,7 +321,10 @@ where
+ fn prepare_path_entry_for_codex_aliases(
+     existing_path: Option<OsString>,
+ ) -> std::io::Result<(Arg0PathEntryGuard, OsString)> {
+-    let codex_home = find_codex_home()?;
++    // Helper aliases are runtime state: they follow CODEX_RUNTIME_HOME when set
++    // and an invalid runtime root is an error, never a fallback to CODEX_HOME.
++    let codex_home =
++        codex_utils_home_dir::runtime_home::try_runtime_home_for(find_codex_home()?.as_path())?;
+     #[cfg(not(debug_assertions))]
+     {
+         // Guard against placing helpers in system temp directories outside debug builds.
+diff --git a/codex-rs/cloud-config/Cargo.toml b/codex-rs/cloud-config/Cargo.toml
+index ad8a752..31897e0 100644
+--- a/codex-rs/cloud-config/Cargo.toml
++++ b/codex-rs/cloud-config/Cargo.toml
+@@ -8,6 +8,7 @@ license.workspace = true
+ workspace = true
+ 
+ [dependencies]
++codex-utils-home-dir = { workspace = true }
+ base64 = { workspace = true }
+ chrono = { workspace = true, features = ["serde"] }
+ codex-async-utils = { workspace = true }
+diff --git a/codex-rs/cloud-config/src/cache.rs b/codex-rs/cloud-config/src/cache.rs
+index a085735..05bdf73 100644
+--- a/codex-rs/cloud-config/src/cache.rs
++++ b/codex-rs/cloud-config/src/cache.rs
+@@ -42,13 +42,15 @@ pub(super) struct CloudConfigBundleCache {
+ impl CloudConfigBundleCache {
+     pub(super) fn new(codex_home: AbsolutePathBuf) -> Self {
+         Self {
+-            path: codex_home.join(CLOUD_CONFIG_BUNDLE_CACHE_FILENAME),
++            path: codex_utils_home_dir::runtime_home::runtime_home_for(&codex_home)
++                .join(CLOUD_CONFIG_BUNDLE_CACHE_FILENAME),
+         }
+     }
+ 
+     pub(super) fn for_source(codex_home: AbsolutePathBuf, namespace: &str) -> Self {
+         Self {
+-            path: codex_home.join(format!("managed-config-{namespace}.json")),
++            path: codex_utils_home_dir::runtime_home::runtime_home_for(&codex_home)
++                .join(format!("managed-config-{namespace}.json")),
+         }
+     }
+ 
+diff --git a/codex-rs/core-plugins/Cargo.toml b/codex-rs/core-plugins/Cargo.toml
+index 2c190c0..374657c 100644
+--- a/codex-rs/core-plugins/Cargo.toml
++++ b/codex-rs/core-plugins/Cargo.toml
+@@ -13,6 +13,7 @@ path = "src/lib.rs"
+ workspace = true
+ 
+ [dependencies]
++codex-utils-home-dir = { workspace = true }
+ codex-utils-process = { workspace = true }
+ anyhow = { workspace = true }
+ chrono = { workspace = true }
+diff --git a/codex-rs/core-plugins/src/npm_source.rs b/codex-rs/core-plugins/src/npm_source.rs
+index cb418ed..0dd7f0b 100644
+--- a/codex-rs/core-plugins/src/npm_source.rs
++++ b/codex-rs/core-plugins/src/npm_source.rs
+@@ -34,7 +34,9 @@ fn materialize_npm_plugin_source_with_command(
+     registry: Option<&str>,
+     npm_command: &OsStr,
+ ) -> Result<(AbsolutePathBuf, TempDir), String> {
+-    let staging_root = codex_home.join(NPM_PLUGIN_SOURCE_STAGING_DIR);
++    let staging_root = codex_utils_home_dir::runtime_home::try_runtime_home_for(codex_home)
++        .map_err(|err| format!("failed to resolve runtime home: {err}"))?
++        .join(NPM_PLUGIN_SOURCE_STAGING_DIR);
+     fs::create_dir_all(&staging_root).map_err(|err| {
+         format!(
+             "failed to create marketplace plugin source staging directory {}: {err}",
+diff --git a/codex-rs/core-plugins/src/remote/remote_installed_plugin_sync.rs b/codex-rs/core-plugins/src/remote/remote_installed_plugin_sync.rs
+index c09f0ef..08a1d81 100644
+--- a/codex-rs/core-plugins/src/remote/remote_installed_plugin_sync.rs
++++ b/codex-rs/core-plugins/src/remote/remote_installed_plugin_sync.rs
+@@ -418,7 +418,7 @@ async fn remove_stale_remote_plugin_caches(
+         REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME,
+         REMOTE_WORKSPACE_SHARED_WITH_ME_UNLISTED_MARKETPLACE_NAME,
+     ] {
+-        let marketplace_root = codex_home.join(PLUGINS_CACHE_DIR).join(marketplace_name);
++        let marketplace_root = remote_plugin_cache_root(codex_home).join(marketplace_name);
+         if !marketplace_root.exists() {
+             continue;
+         }
+@@ -488,7 +488,7 @@ async fn remove_stale_remote_plugin_caches(
+ }
+ 
+ fn remote_plugin_cache_root(codex_home: &Path) -> PathBuf {
+-    codex_home.join(PLUGINS_CACHE_DIR)
++    codex_utils_home_dir::runtime_home::runtime_home_path_for(codex_home).join(PLUGINS_CACHE_DIR)
+ }
+ 
+ fn is_remote_plugin_cache_mutation_in_flight(
+diff --git a/codex-rs/core-plugins/src/remote/share/local_paths.rs b/codex-rs/core-plugins/src/remote/share/local_paths.rs
+index 50e8fba..7fbf972 100644
+--- a/codex-rs/core-plugins/src/remote/share/local_paths.rs
++++ b/codex-rs/core-plugins/src/remote/share/local_paths.rs
+@@ -120,5 +120,6 @@ fn write_atomically(write_path: &Path, contents: &str) -> io::Result<()> {
+ }
+ 
+ fn plugin_share_local_paths_path(codex_home: &Path) -> std::path::PathBuf {
+-    codex_home.join(PLUGIN_SHARE_LOCAL_PATHS_FILE)
++    codex_utils_home_dir::runtime_home::runtime_home_path_for(codex_home)
++        .join(PLUGIN_SHARE_LOCAL_PATHS_FILE)
+ }
+diff --git a/codex-rs/core-plugins/src/remote_bundle.rs b/codex-rs/core-plugins/src/remote_bundle.rs
+index 9292e2c..d612d19 100644
+--- a/codex-rs/core-plugins/src/remote_bundle.rs
++++ b/codex-rs/core-plugins/src/remote_bundle.rs
+@@ -428,7 +428,8 @@ pub(crate) fn install_remote_plugin_bundle(
+     bundle: ValidatedRemotePluginBundle,
+     bundle_bytes: Vec<u8>,
+ ) -> Result<PluginInstallResult, RemotePluginBundleInstallError> {
+-    let staging_root = codex_home.join(REMOTE_PLUGIN_INSTALL_STAGING_DIR);
++    let staging_root = codex_utils_home_dir::runtime_home::runtime_home_path_for(&codex_home)
++        .join(REMOTE_PLUGIN_INSTALL_STAGING_DIR);
+     fs::create_dir_all(&staging_root).map_err(|source| {
+         RemotePluginBundleInstallError::io(
+             "failed to create remote plugin bundle staging directory",
+diff --git a/codex-rs/core-plugins/src/startup_sync.rs b/codex-rs/core-plugins/src/startup_sync.rs
+index ee91e3e..e0fc88f 100644
+--- a/codex-rs/core-plugins/src/startup_sync.rs
++++ b/codex-rs/core-plugins/src/startup_sync.rs
+@@ -59,7 +59,8 @@ struct CuratedPluginsBackupArchiveResponse {
+ }
+ 
+ pub fn curated_plugins_repo_path(codex_home: &Path) -> PathBuf {
+-    codex_home.join(CURATED_PLUGINS_RELATIVE_DIR)
++    codex_utils_home_dir::runtime_home::runtime_home_path_for(codex_home)
++        .join(CURATED_PLUGINS_RELATIVE_DIR)
+ }
+ 
+ pub fn curated_plugins_api_marketplace_path(codex_home: &Path) -> PathBuf {
+@@ -71,7 +72,8 @@ pub fn read_curated_plugins_sha(codex_home: &Path) -> Option<String> {
+ }
+ 
+ fn curated_plugins_sha_path(codex_home: &Path) -> PathBuf {
+-    codex_home.join(CURATED_PLUGINS_SHA_FILE)
++    codex_utils_home_dir::runtime_home::runtime_home_path_for(codex_home)
++        .join(CURATED_PLUGINS_SHA_FILE)
+ }
+ 
+ pub fn sync_openai_plugins_repo(
+@@ -167,6 +169,8 @@ fn sync_openai_plugins_repo_with_transport_overrides(
+ }
+ 
+ fn lock_curated_plugins_startup_sync(codex_home: &Path) -> Result<File, String> {
++    let codex_home = codex_utils_home_dir::runtime_home::try_runtime_home_for(codex_home)
++        .map_err(|err| format!("failed to resolve runtime home: {err}"))?;
+     let lock_path = codex_home.join(CURATED_PLUGINS_SYNC_LOCK_FILE);
+     std::fs::create_dir_all(codex_home.join(".tmp"))
+         .map_err(|err| format!("failed to create curated plugins sync directory: {err}"))?;
+@@ -187,7 +191,7 @@ fn sync_openai_plugins_repo_via_git(
+     git_binary: &Path,
+ ) -> Result<String, String> {
+     let repo_path = curated_plugins_repo_path(codex_home);
+-    let sha_path = codex_home.join(CURATED_PLUGINS_SHA_FILE);
++    let sha_path = curated_plugins_sha_path(codex_home);
+     let remote_sha = git_ls_remote_head_sha(codex_home, git_binary)?;
+     let local_sha = read_local_git_or_sha_file(&repo_path, &sha_path, git_binary);
+ 
+@@ -310,7 +314,7 @@ fn sync_openai_plugins_repo_via_http(
+     http_client_factory: &HttpClientFactory,
+ ) -> Result<String, String> {
+     let repo_path = curated_plugins_repo_path(codex_home);
+-    let sha_path = codex_home.join(CURATED_PLUGINS_SHA_FILE);
++    let sha_path = curated_plugins_sha_path(codex_home);
+     let runtime = tokio::runtime::Builder::new_current_thread()
+         .enable_all()
+         .build()
+@@ -367,7 +371,7 @@ pub fn has_local_curated_plugins_snapshot(codex_home: &Path) -> bool {
+     curated_plugins_repo_path(codex_home)
+         .join(".agents/plugins/marketplace.json")
+         .is_file()
+-        && codex_home.join(CURATED_PLUGINS_SHA_FILE).is_file()
++        && curated_plugins_sha_path(codex_home).is_file()
+ }
+ 
+ fn prepare_curated_repo_parent_and_temp_dir(repo_path: &Path) -> Result<TempDir, String> {
+diff --git a/codex-rs/core-plugins/src/store.rs b/codex-rs/core-plugins/src/store.rs
+index 087eae6..52c6f87 100644
+--- a/codex-rs/core-plugins/src/store.rs
++++ b/codex-rs/core-plugins/src/store.rs
+@@ -85,10 +85,14 @@ impl PluginStore {
+     }
+ 
+     pub fn try_new(codex_home: PathBuf) -> Result<Self, PluginStoreError> {
+-        let root = AbsolutePathBuf::from_absolute_path_checked(codex_home.join(PLUGINS_CACHE_DIR))
+-            .map_err(|err| PluginStoreError::io("failed to resolve plugin cache root", err))?;
++        // Installed plugin cache and plugin data are runtime state.
++        let runtime_home = codex_utils_home_dir::runtime_home::try_runtime_home_for(&codex_home)
++            .map_err(|err| PluginStoreError::io("failed to resolve runtime home", err))?;
++        let root =
++            AbsolutePathBuf::from_absolute_path_checked(runtime_home.join(PLUGINS_CACHE_DIR))
++                .map_err(|err| PluginStoreError::io("failed to resolve plugin cache root", err))?;
+         let data_root =
+-            AbsolutePathBuf::from_absolute_path_checked(codex_home.join(PLUGINS_DATA_DIR))
++            AbsolutePathBuf::from_absolute_path_checked(runtime_home.join(PLUGINS_DATA_DIR))
+                 .map_err(|err| PluginStoreError::io("failed to resolve plugin data root", err))?;
+         let codex_home = AbsolutePathBuf::from_absolute_path_checked(codex_home)
+             .map_err(|err| PluginStoreError::io("failed to resolve Codex home", err))?;
+diff --git a/codex-rs/core/src/config/mod.rs b/codex-rs/core/src/config/mod.rs
+index 1006e07..3918dfc 100644
+--- a/codex-rs/core/src/config/mod.rs
++++ b/codex-rs/core/src/config/mod.rs
+@@ -3793,6 +3793,10 @@ impl Config {
+             ));
+         }
+ 
++        // Generated runtime state (memories, SQLite, logs, helper aliases) is
++        // rooted here; it is `codex_home` unless CODEX_RUNTIME_HOME is set.
++        let runtime_home =
++            codex_utils_home_dir::runtime_home::try_runtime_home_for_abs(&codex_home)?;
+         let mut memories = cfg.memories.clone().unwrap_or_default();
+         // Fresh profiles have no V1 context to preserve or warm up before using V2.
+         // Keep explicit selections and transition opt-outs, and fail closed on IO errors.
+@@ -3800,14 +3804,14 @@ impl Config {
+             && memories.version.is_none()
+             && memories.dual_write != Some(false)
+             && matches!(
+-                tokio::fs::try_exists(codex_home.join(MemoryVersion::V1.directory_name())).await,
++                tokio::fs::try_exists(runtime_home.join(MemoryVersion::V1.directory_name())).await,
+                 Ok(false)
+             )
+         {
+             memories.version = Some(MemoryVersion::V2);
+         }
+         let memories_config: MemoriesConfig = memories.into();
+-        let memories_root = codex_home.join(memories_config.version.directory_name());
++        let memories_root = runtime_home.join(memories_config.version.directory_name());
+ 
+         let profiles_are_active = effective_permission_selection.profiles_are_active(
+             default_permissions_override.as_deref(),
+@@ -4448,7 +4452,7 @@ impl Config {
+             .log_dir
+             .as_ref()
+             .map(AbsolutePathBuf::to_path_buf)
+-            .unwrap_or_else(|| codex_home.join("log").to_path_buf());
++            .unwrap_or_else(|| runtime_home.join("log").to_path_buf());
+         let sqlite_home_env = resolve_sqlite_home_env(&resolved_cwd);
+         requirements::push_sqlite_home_env_override_warning(
+             configured_sqlite_home.as_ref(),
+@@ -4461,7 +4465,24 @@ impl Config {
+             .as_ref()
+             .cloned()
+             .or(sqlite_home_env)
+-            .unwrap_or_else(|| codex_home.clone());
++            .unwrap_or_else(|| runtime_home.clone());
++        if runtime_home != codex_home {
++            // With a separate runtime root, mutable state must not be pointed back
++            // at a shared location (CODEX_HOME or another job) by config, env or
++            // managed requirements. Refuse instead of silently overriding.
++            for (key, path) in [("sqlite_home", sqlite_home.as_path()), ("log_dir", log_dir.as_path())] {
++                if !path.starts_with(runtime_home.as_path()) {
++                    return Err(std::io::Error::new(
++                        std::io::ErrorKind::InvalidInput,
++                        format!(
++                            "{key} {} is outside CODEX_RUNTIME_HOME {}; remove the override or place it inside the runtime root",
++                            path.display(),
++                            runtime_home.display()
++                        ),
++                    ));
++                }
++            }
++        }
+         let enforce_delete_on_nfs =
+             unsafe_enforce_sqlite_journal_mode.is_some_and(|required| required.value);
+         let mut sqlite = codex_state::SqliteConfig::from_sqlite_home_with_nfs_enforcement(
+@@ -4546,7 +4567,7 @@ impl Config {
+         )?;
+         let mut helper_readable_roots: Vec<_> = std::env::var_os("PATH")
+             .as_deref()
+-            .and_then(|path| permissions::active_arg0_helper_dir(&codex_home, path))
++            .and_then(|path| permissions::active_arg0_helper_dir(&runtime_home, path))
+             .into_iter()
+             .collect();
+         if features.enabled(Feature::MemoryTool) && memories_config.use_memories {
+diff --git a/codex-rs/core/src/rollout.rs b/codex-rs/core/src/rollout.rs
+index ca1dcde..1bec4b0 100644
+--- a/codex-rs/core/src/rollout.rs
++++ b/codex-rs/core/src/rollout.rs
+@@ -24,8 +24,9 @@ pub use codex_rollout::read_session_meta_line;
+ pub use codex_rollout::rollout_date_parts;
+ 
+ impl codex_rollout::RolloutConfigView for Config {
++    /// Rollouts, the session index and writer locks are runtime state.
+     fn codex_home(&self) -> &std::path::Path {
+-        self.codex_home.as_path()
++        codex_utils_home_dir::runtime_home::runtime_home_path_for(self.codex_home.as_path())
+     }
+ 
+     fn sqlite_config(&self) -> &codex_state::SqliteConfig {
+diff --git a/codex-rs/core/src/session_rollout_init_error.rs b/codex-rs/core/src/session_rollout_init_error.rs
+index 68581e2..ae56712 100644
+--- a/codex-rs/core/src/session_rollout_init_error.rs
++++ b/codex-rs/core/src/session_rollout_init_error.rs
+@@ -37,6 +37,7 @@ pub(crate) fn map_session_init_error(err: &anyhow::Error, codex_home: &Path) ->
+ }
+ 
+ fn map_rollout_io_error(io_err: &std::io::Error, codex_home: &Path) -> Option<CodexErr> {
++    let codex_home = codex_utils_home_dir::runtime_home::runtime_home_path_for(codex_home);
+     let sessions_dir = codex_home.join(SESSIONS_SUBDIR);
+     let hint = match io_err.kind() {
+         ErrorKind::PermissionDenied => format!(
+diff --git a/codex-rs/core/src/shell_snapshot.rs b/codex-rs/core/src/shell_snapshot.rs
+index 286727c..2fa9228 100644
+--- a/codex-rs/core/src/shell_snapshot.rs
++++ b/codex-rs/core/src/shell_snapshot.rs
+@@ -258,6 +258,10 @@ impl ShellSnapshot {
+         credential_broker: Option<SnapshotCredentialBroker>,
+         sandbox: Option<&ShellSnapshotSandbox>,
+     ) -> std::result::Result<ShellSnapshotFile, &'static str> {
++        // Snapshots and their cleanup (which looks up rollouts) are runtime state.
++        let runtime_home = codex_utils_home_dir::runtime_home::try_runtime_home_for_abs(codex_home)
++            .map_err(|_| "runtime_home")?;
++        let codex_home = &runtime_home;
+         // File to store the snapshot
+         let extension = match shell.shell_type {
+             ShellType::PowerShell => "ps1",
+diff --git a/codex-rs/exec-server/src/discoverV2/capability_locations.rs b/codex-rs/exec-server/src/discoverV2/capability_locations.rs
+index e32d460..36826ab 100644
+--- a/codex-rs/exec-server/src/discoverV2/capability_locations.rs
++++ b/codex-rs/exec-server/src/discoverV2/capability_locations.rs
+@@ -79,7 +79,10 @@ pub(crate) async fn prewarm_locations(
+     }
+     CandidateCapabilityLocations::resolve(
+         fs,
+-        Some(PathUri::from_abs_path(&codex_home.join(PLUGINS_CACHE_DIR))),
++        Some(PathUri::from_abs_path(
++            &codex_utils_home_dir::runtime_home::runtime_home_for(&codex_home)
++                .join(PLUGINS_CACHE_DIR),
++        )),
+         skill_roots
+             .into_iter()
+             .map(|(id, root)| crate::SkillDiscoveryRoot {
+diff --git a/codex-rs/ext/memories/Cargo.toml b/codex-rs/ext/memories/Cargo.toml
+index 9111571..0fec462 100644
+--- a/codex-rs/ext/memories/Cargo.toml
++++ b/codex-rs/ext/memories/Cargo.toml
+@@ -13,6 +13,7 @@ doctest = false
+ workspace = true
+ 
+ [dependencies]
++codex-utils-home-dir = { workspace = true }
+ codex-core = { workspace = true }
+ codex-extension-api = { workspace = true }
+ codex-features = { workspace = true }
+diff --git a/codex-rs/ext/memories/src/prompts.rs b/codex-rs/ext/memories/src/prompts.rs
+index 333a3c6..b8f33a2 100644
+--- a/codex-rs/ext/memories/src/prompts.rs
++++ b/codex-rs/ext/memories/src/prompts.rs
+@@ -36,7 +36,8 @@ pub(crate) async fn build_memory_tool_developer_instructions(
+     codex_home: &AbsolutePathBuf,
+     version: MemoryVersion,
+ ) -> Option<String> {
+-    let base_path = codex_home.join(version.directory_name());
++    let base_path = codex_utils_home_dir::runtime_home::runtime_home_for(codex_home)
++        .join(version.directory_name());
+     let memory_summary_path = base_path.join("memory_summary.md");
+     let memory_summary = fs::read_to_string(&memory_summary_path)
+         .await
+diff --git a/codex-rs/memories/read/Cargo.toml b/codex-rs/memories/read/Cargo.toml
+index 2c0c5f2..75406ff 100644
+--- a/codex-rs/memories/read/Cargo.toml
++++ b/codex-rs/memories/read/Cargo.toml
+@@ -13,6 +13,7 @@ doctest = false
+ workspace = true
+ 
+ [dependencies]
++codex-utils-home-dir = { workspace = true }
+ codex-protocol = { workspace = true }
+ codex-shell-command = { workspace = true }
+ codex-utils-absolute-path = { workspace = true }
+diff --git a/codex-rs/memories/read/src/lib.rs b/codex-rs/memories/read/src/lib.rs
+index 4965dfd..8df2d1b 100644
+--- a/codex-rs/memories/read/src/lib.rs
++++ b/codex-rs/memories/read/src/lib.rs
+@@ -11,5 +11,5 @@ pub mod usage;
+ use codex_utils_absolute_path::AbsolutePathBuf;
+ 
+ pub fn memory_root(codex_home: &AbsolutePathBuf) -> AbsolutePathBuf {
+-    codex_home.join("memories")
++    codex_utils_home_dir::runtime_home::runtime_home_for(codex_home).join("memories")
+ }
+diff --git a/codex-rs/memories/write/Cargo.toml b/codex-rs/memories/write/Cargo.toml
+index 1e5d9cd..d9431dc 100644
+--- a/codex-rs/memories/write/Cargo.toml
++++ b/codex-rs/memories/write/Cargo.toml
+@@ -13,6 +13,7 @@ doctest = false
+ workspace = true
+ 
+ [dependencies]
++codex-utils-home-dir = { workspace = true }
+ anyhow = { workspace = true }
+ chrono = { workspace = true }
+ codex-backend-client = { workspace = true }
+diff --git a/codex-rs/memories/write/src/control.rs b/codex-rs/memories/write/src/control.rs
+index b4ed62d..d99161e 100644
+--- a/codex-rs/memories/write/src/control.rs
++++ b/codex-rs/memories/write/src/control.rs
+@@ -1,6 +1,7 @@
+ use std::path::Path;
+ 
+ pub async fn clear_memory_roots_contents(codex_home: &Path) -> std::io::Result<()> {
++    let codex_home = codex_utils_home_dir::runtime_home::try_runtime_home_for(codex_home)?;
+     for memory_root in [
+         codex_home.join("memories"),
+         codex_home.join("memories_v2"),
+diff --git a/codex-rs/memories/write/src/lib.rs b/codex-rs/memories/write/src/lib.rs
+index f6a3806..b057cbe 100644
+--- a/codex-rs/memories/write/src/lib.rs
++++ b/codex-rs/memories/write/src/lib.rs
+@@ -118,7 +118,7 @@ mod workspace_diff {
+ }
+ 
+ pub fn memory_root(codex_home: &AbsolutePathBuf) -> AbsolutePathBuf {
+-    codex_home.join("memories")
++    codex_utils_home_dir::runtime_home::runtime_home_for(codex_home).join("memories")
+ }
+ 
+ pub fn rollout_summaries_dir(root: &Path) -> PathBuf {
+diff --git a/codex-rs/memories/write/src/phase2.rs b/codex-rs/memories/write/src/phase2.rs
+index 8aae9e5..eb09848 100644
+--- a/codex-rs/memories/write/src/phase2.rs
++++ b/codex-rs/memories/write/src/phase2.rs
+@@ -58,8 +58,7 @@ pub async fn run(
+         // This should not happen.
+         return;
+     };
+-    let root = config
+-        .codex_home
++    let root = codex_utils_home_dir::runtime_home::runtime_home_for(&config.codex_home)
+         .join(config.memories.version.directory_name());
+     let max_raw_memories = config.memories.max_raw_memories_for_consolidation;
+     let max_unused_days = config.memories.max_unused_days;
+@@ -312,8 +311,7 @@ mod agent {
+         parent_permission_profile: PermissionProfile,
+         provider: &dyn ModelProvider,
+     ) -> Option<Config> {
+-        let root = config
+-            .codex_home
++        let root = codex_utils_home_dir::runtime_home::runtime_home_for(&config.codex_home)
+             .join(config.memories.version.directory_name());
+         let mut agent_config = config.clone();
+ 
+diff --git a/codex-rs/memories/write/src/start.rs b/codex-rs/memories/write/src/start.rs
+index 5dae0d1..46019aa 100644
+--- a/codex-rs/memories/write/src/start.rs
++++ b/codex-rs/memories/write/src/start.rs
+@@ -69,8 +69,7 @@ pub fn start_memories_startup_task(
+                 warn!("state db unavailable for memories startup pipeline; skipping");
+                 return;
+             }
+-            let root = config
+-                .codex_home
++            let root = codex_utils_home_dir::runtime_home::runtime_home_for(&config.codex_home)
+                 .join(config.memories.version.directory_name());
+             if let Err(err) = ensure_layout(&root).await {
+                 warn!("failed preparing memories root: {err}");
+diff --git a/codex-rs/message-history/Cargo.toml b/codex-rs/message-history/Cargo.toml
+index 176b957..c9c826f 100644
+--- a/codex-rs/message-history/Cargo.toml
++++ b/codex-rs/message-history/Cargo.toml
+@@ -13,6 +13,7 @@ doctest = false
+ workspace = true
+ 
+ [dependencies]
++codex-utils-home-dir = { workspace = true }
+ codex-config = { workspace = true }
+ memchr = { workspace = true }
+ serde = { workspace = true, features = ["derive"] }
+diff --git a/codex-rs/message-history/src/lib.rs b/codex-rs/message-history/src/lib.rs
+index 1eaece4..ae0dace 100644
+--- a/codex-rs/message-history/src/lib.rs
++++ b/codex-rs/message-history/src/lib.rs
+@@ -83,7 +83,9 @@ impl HistoryConfig {
+ }
+ 
+ fn history_filepath(config: &HistoryConfig) -> PathBuf {
+-    config.codex_home.join(HISTORY_FILENAME)
++    // history.jsonl is runtime state and follows CODEX_RUNTIME_HOME when set.
++    codex_utils_home_dir::runtime_home::runtime_home_path_for(&config.codex_home)
++        .join(HISTORY_FILENAME)
+ }
+ 
+ /// Append a `text` entry associated with `conversation_id` to the history file.
+diff --git a/codex-rs/models-manager/Cargo.toml b/codex-rs/models-manager/Cargo.toml
+index 159f750..b6ebec7 100644
+--- a/codex-rs/models-manager/Cargo.toml
++++ b/codex-rs/models-manager/Cargo.toml
+@@ -13,6 +13,7 @@ path = "src/lib.rs"
+ workspace = true
+ 
+ [dependencies]
++codex-utils-home-dir = { workspace = true }
+ chrono = { workspace = true, features = ["serde"] }
+ codex-http-client = { workspace = true }
+ codex-login = { workspace = true }
+diff --git a/codex-rs/models-manager/src/manager.rs b/codex-rs/models-manager/src/manager.rs
+index cdc890e..cb07a77 100644
+--- a/codex-rs/models-manager/src/manager.rs
++++ b/codex-rs/models-manager/src/manager.rs
+@@ -378,8 +378,11 @@ pub struct ModelCatalogSettings {
+ 
+ impl ModelCatalogSettings {
+     pub fn disk(codex_home: PathBuf) -> Self {
++        // models_cache.json is a runtime cache; model configuration stays put.
++        let cache_root =
++            codex_utils_home_dir::runtime_home::runtime_home_path_for(&codex_home).to_path_buf();
+         Self::with_cache(Arc::new(FileModelsCache::new(
+-            codex_home.join(MODEL_CACHE_FILE),
++            cache_root.join(MODEL_CACHE_FILE),
+             DEFAULT_MODEL_CACHE_TTL,
+         )))
+     }
+diff --git a/codex-rs/runtime-agent-instance/Cargo.toml b/codex-rs/runtime-agent-instance/Cargo.toml
+index 9b8b96f..fe8edc2 100644
+--- a/codex-rs/runtime-agent-instance/Cargo.toml
++++ b/codex-rs/runtime-agent-instance/Cargo.toml
+@@ -18,6 +18,7 @@ codex-features = { workspace = true }
+ codex-http-client = { workspace = true }
+ codex-login = { workspace = true }
+ codex-utils-absolute-path = { workspace = true }
++codex-utils-home-dir = { workspace = true }
+ codex-utils-redacted-string = { workspace = true }
+ ed25519-dalek = { workspace = true }
+ http = { workspace = true }
+diff --git a/codex-rs/runtime-agent-instance/src/installation_id.rs b/codex-rs/runtime-agent-instance/src/installation_id.rs
+index aad3102..fa485d2 100644
+--- a/codex-rs/runtime-agent-instance/src/installation_id.rs
++++ b/codex-rs/runtime-agent-instance/src/installation_id.rs
+@@ -17,8 +17,11 @@ use uuid::Uuid;
+ const INSTALLATION_ID_FILENAME: &str = "installation_id";
+ 
+ pub async fn resolve_installation_id(codex_home: &AbsolutePathBuf) -> Result<String> {
+-    let path = codex_home.join(INSTALLATION_ID_FILENAME);
+-    fs::create_dir_all(codex_home).await?;
++    // With CODEX_RUNTIME_HOME set the identity is per runtime root, so a
++    // read-only CODEX_HOME is never opened for writing.
++    let runtime_home = codex_utils_home_dir::runtime_home::try_runtime_home_for_abs(codex_home)?;
++    let path = runtime_home.join(INSTALLATION_ID_FILENAME);
++    fs::create_dir_all(&runtime_home).await?;
+     tokio::task::spawn_blocking(move || {
+         let mut options = OpenOptions::new();
+         options.read(true).write(true).create(true);
+diff --git a/codex-rs/skills/Cargo.toml b/codex-rs/skills/Cargo.toml
+index 7342975..15a3ed1 100644
+--- a/codex-rs/skills/Cargo.toml
++++ b/codex-rs/skills/Cargo.toml
+@@ -17,6 +17,7 @@ workspace = true
+ codex-protocol = { workspace = true }
+ codex-shell-command = { workspace = true }
+ codex-utils-absolute-path = { workspace = true }
++codex-utils-home-dir = { workspace = true }
+ codex-utils-path-uri = { workspace = true }
+ include_dir = { workspace = true }
+ serde = { workspace = true, features = ["derive"] }
+diff --git a/codex-rs/skills/src/lib.rs b/codex-rs/skills/src/lib.rs
+index 7ac553c..4fd14fc 100644
+--- a/codex-rs/skills/src/lib.rs
++++ b/codex-rs/skills/src/lib.rs
+@@ -63,8 +63,11 @@ const SYSTEM_SKILLS_MARKER_FILENAME: &str = ".codex-system-skills.marker";
+ const SYSTEM_SKILLS_MARKER_SALT: &str = "v1";
+ 
+ /// Returns the on-disk cache location for embedded system skills from an absolute CODEX_HOME.
++///
++/// Embedded system skills are generated runtime state, so they follow
++/// `CODEX_RUNTIME_HOME` when it is set; user skills stay under CODEX_HOME.
+ pub fn system_cache_root_dir(codex_home: &AbsolutePathBuf) -> AbsolutePathBuf {
+-    codex_home
++    codex_utils_home_dir::runtime_home::runtime_home_for(codex_home)
+         .join(SKILLS_DIR_NAME)
+         .join(SYSTEM_SKILLS_DIR_NAME)
+ }
+@@ -78,7 +81,9 @@ pub fn system_cache_root_dir(codex_home: &AbsolutePathBuf) -> AbsolutePathBuf {
+ /// with a fingerprint of the embedded directory. When the marker matches, the
+ /// install is skipped.
+ pub fn install_system_skills(codex_home: &AbsolutePathBuf) -> Result<(), SystemSkillsError> {
+-    let skills_root_dir = codex_home.join(SKILLS_DIR_NAME);
++    let runtime_home = codex_utils_home_dir::runtime_home::try_runtime_home_for_abs(codex_home)
++        .map_err(|source| SystemSkillsError::io("resolve runtime home", source))?;
++    let skills_root_dir = runtime_home.join(SKILLS_DIR_NAME);
+     fs::create_dir_all(skills_root_dir.as_path())
+         .map_err(|source| SystemSkillsError::io("create skills root dir", source))?;
+ 
+diff --git a/codex-rs/utils/home-dir/src/lib.rs b/codex-rs/utils/home-dir/src/lib.rs
+index caa4356..6787fa5 100644
+--- a/codex-rs/utils/home-dir/src/lib.rs
++++ b/codex-rs/utils/home-dir/src/lib.rs
+@@ -1,3 +1,5 @@
++pub mod runtime_home;
++
+ use codex_utils_absolute_path::AbsolutePathBuf;
+ use dirs::home_dir;
+ use std::path::PathBuf;
+diff --git a/codex-rs/utils/home-dir/src/runtime_home.rs b/codex-rs/utils/home-dir/src/runtime_home.rs
+new file mode 100644
+index 0000000..b423ee6
+--- /dev/null
++++ b/codex-rs/utils/home-dir/src/runtime_home.rs
+@@ -0,0 +1,327 @@
++//! Optional separation of mutable runtime state from `CODEX_HOME`.
++//!
++//! By default every Codex-generated file (installation id, SQLite state and
++//! logs, helper aliases, session rollouts and index, history, shell snapshots,
++//! memories, caches, embedded system skills) lives under `CODEX_HOME`, next to
++//! `auth.json` and `config.toml`.
++//!
++//! When `CODEX_RUNTIME_HOME` is set, those runtime artifacts are written below
++//! that directory instead while authentication and user configuration continue
++//! to be read from `CODEX_HOME`. This lets a launcher keep `CODEX_HOME`
++//! read-only (for example under a sandbox) and give each job its own private,
++//! disposable runtime root.
++//!
++//! The root is validated once per process and must:
++//! - be an absolute, already-existing directory (it is never created here);
++//! - contain no symlinked component and no `..` component;
++//! - not be group- or world-writable (Unix);
++//! - neither contain nor be contained by the canonical `CODEX_HOME`.
++//!
++//! An invalid value is an error. Callers that would write runtime state must
++//! propagate it and must never fall back to `CODEX_HOME`.
++use std::ffi::OsStr;
++use std::io;
++use std::path::Component;
++use std::path::Path;
++use std::path::PathBuf;
++use std::sync::OnceLock;
++
++use codex_utils_absolute_path::AbsolutePathBuf;
++
++/// Environment variable selecting the runtime state root.
++pub const CODEX_RUNTIME_HOME_ENV: &str = "CODEX_RUNTIME_HOME";
++
++static CONFIGURED: OnceLock<Result<Option<AbsolutePathBuf>, (io::ErrorKind, String)>> =
++    OnceLock::new();
++
++/// Returns the validated runtime root when `CODEX_RUNTIME_HOME` is set.
++///
++/// The environment is read and validated once per process; later changes to
++/// the process environment do not move runtime state mid-run.
++pub fn configured_runtime_home() -> io::Result<Option<AbsolutePathBuf>> {
++    CONFIGURED
++        .get_or_init(|| {
++            let Some(configured) = std::env::var_os(CODEX_RUNTIME_HOME_ENV) else {
++                return Ok(None);
++            };
++            let home = crate::find_codex_home().map_err(|err| (err.kind(), err.to_string()))?;
++            validate_runtime_home(home.as_path(), &configured)
++                .and_then(AbsolutePathBuf::from_absolute_path)
++                .map(Some)
++                .map_err(|err| (err.kind(), err.to_string()))
++        })
++        .clone()
++        .map_err(|(kind, message)| io::Error::new(kind, message))
++}
++
++/// Root for mutable runtime state derived from `codex_home`.
++///
++/// Returns `codex_home` unchanged unless `CODEX_RUNTIME_HOME` is set, in which
++/// case the validated runtime root is returned. Writers must use this
++/// fallible form so an invalid root can never fall back to `CODEX_HOME`.
++pub fn try_runtime_home_for(codex_home: &Path) -> io::Result<PathBuf> {
++    Ok(match configured_runtime_home()? {
++        Some(root) => root.into_path_buf(),
++        None => codex_home.to_path_buf(),
++    })
++}
++
++/// [`try_runtime_home_for`] for [`AbsolutePathBuf`] callers.
++pub fn try_runtime_home_for_abs(codex_home: &AbsolutePathBuf) -> io::Result<AbsolutePathBuf> {
++    Ok(configured_runtime_home()?.unwrap_or_else(|| codex_home.clone()))
++}
++
++/// Infallible lookup for code that only *reads* runtime state or computes a
++/// path that a fallible writer creates later.
++///
++/// With an invalid `CODEX_RUNTIME_HOME` this returns a path inside a
++/// non-existent, non-creatable location so readers find nothing and any
++/// accidental writer fails instead of touching `CODEX_HOME`. The CLI entry
++/// point rejects an invalid root before any work starts.
++pub fn runtime_home_for(codex_home: &AbsolutePathBuf) -> AbsolutePathBuf {
++    match configured_runtime_home() {
++        Ok(Some(root)) => root,
++        Ok(None) => codex_home.clone(),
++        Err(_) => invalid_runtime_home_placeholder(),
++    }
++}
++
++/// Borrowed form of [`runtime_home_for`] for trait accessors returning `&Path`.
++pub fn runtime_home_path_for(codex_home: &Path) -> &Path {
++    static ROOT: OnceLock<Result<Option<AbsolutePathBuf>, ()>> = OnceLock::new();
++    match ROOT.get_or_init(|| configured_runtime_home().map_err(|_| ())) {
++        Ok(Some(root)) => root.as_path(),
++        Ok(None) => codex_home,
++        Err(()) => Path::new(INVALID_RUNTIME_HOME_PLACEHOLDER),
++    }
++}
++
++#[cfg(unix)]
++const INVALID_RUNTIME_HOME_PLACEHOLDER: &str = "/proc/self/fdinfo/codex-runtime-home-invalid";
++#[cfg(not(unix))]
++const INVALID_RUNTIME_HOME_PLACEHOLDER: &str = "\\\\?\\codex-runtime-home-invalid";
++
++fn invalid_runtime_home_placeholder() -> AbsolutePathBuf {
++    AbsolutePathBuf::from_absolute_path(PathBuf::from(INVALID_RUNTIME_HOME_PLACEHOLDER))
++        .unwrap_or_else(|_| unreachable!("placeholder path is absolute"))
++}
++
++/// Validates `configured` as a runtime root separate from `codex_home`.
++///
++/// Pure function (no caching, no creation) so it can be tested directly.
++pub fn validate_runtime_home(codex_home: &Path, configured: &OsStr) -> io::Result<PathBuf> {
++    let invalid = |reason: &str| {
++        io::Error::new(
++            io::ErrorKind::InvalidInput,
++            format!(
++                "{CODEX_RUNTIME_HOME_ENV} {configured:?} is invalid: {reason}. It must be an \
++                 existing absolute directory without symlinks, not group/world-writable, and \
++                 separate from CODEX_HOME"
++            ),
++        )
++    };
++    if configured.is_empty() {
++        return Err(invalid("empty value"));
++    }
++    let root = Path::new(configured);
++    if !root.is_absolute() {
++        return Err(invalid("not an absolute path"));
++    }
++    let mut prefix = PathBuf::new();
++    for component in root.components() {
++        if matches!(component, Component::ParentDir | Component::CurDir) {
++            return Err(invalid("contains `..`"));
++        }
++        prefix.push(component.as_os_str());
++        let metadata = std::fs::symlink_metadata(&prefix).map_err(|err| {
++            if err.kind() == io::ErrorKind::NotFound {
++                invalid("does not exist")
++            } else {
++                io::Error::new(err.kind(), format!("{CODEX_RUNTIME_HOME_ENV}: {err}"))
++            }
++        })?;
++        if metadata.file_type().is_symlink() {
++            return Err(invalid("contains a symlinked component"));
++        }
++        if !metadata.is_dir() {
++            return Err(invalid("is not a directory"));
++        }
++    }
++    #[cfg(unix)]
++    {
++        use std::os::unix::fs::PermissionsExt;
++        let mode = std::fs::symlink_metadata(root)?.permissions().mode();
++        if mode & 0o022 != 0 {
++            return Err(invalid("is group- or world-writable"));
++        }
++    }
++    let root = root.canonicalize()?;
++    // CODEX_HOME may not exist yet when it defaults to ~/.codex.
++    let home = codex_home
++        .canonicalize()
++        .unwrap_or_else(|_| codex_home.to_path_buf());
++    if root.starts_with(&home) || home.starts_with(&root) {
++        return Err(invalid("overlaps CODEX_HOME"));
++    }
++    Ok(root)
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use pretty_assertions::assert_eq;
++    use std::ffi::OsString;
++
++    struct Fixture {
++        dir: tempfile::TempDir,
++    }
++
++    impl Fixture {
++        fn new() -> Self {
++            let dir = tempfile::tempdir().expect("tempdir");
++            std::fs::create_dir(dir.path().join("home")).expect("home");
++            std::fs::create_dir(dir.path().join("state")).expect("state");
++            #[cfg(unix)]
++            {
++                use std::os::unix::fs::PermissionsExt;
++                std::fs::set_permissions(
++                    dir.path().join("state"),
++                    std::fs::Permissions::from_mode(0o700),
++                )
++                .expect("chmod");
++            }
++            Self { dir }
++        }
++        fn base(&self) -> PathBuf {
++            self.dir.path().canonicalize().expect("canonical base")
++        }
++        fn home(&self) -> PathBuf {
++            self.base().join("home")
++        }
++        fn state(&self) -> PathBuf {
++            self.base().join("state")
++        }
++        fn validate(&self, path: impl Into<OsString>) -> io::Result<PathBuf> {
++            validate_runtime_home(&self.home(), &path.into())
++        }
++    }
++
++    #[test]
++    fn accepts_private_separate_directory_without_touching_home() {
++        let f = Fixture::new();
++        for name in ["auth.json", "config.toml"] {
++            std::fs::write(f.home().join(name), b"synthetic-sentinel").expect("write");
++        }
++        assert_eq!(f.validate(f.state()).expect("valid"), f.state());
++        assert_eq!(std::fs::read_dir(f.state()).expect("read").count(), 0);
++        for name in ["auth.json", "config.toml"] {
++            assert_eq!(
++                std::fs::read(f.home().join(name)).expect("read"),
++                b"synthetic-sentinel"
++            );
++        }
++    }
++
++    #[test]
++    fn rejects_empty_relative_and_traversal() {
++        let f = Fixture::new();
++        for path in [
++            OsString::new(),
++            OsString::from("state"),
++            OsString::from("../state"),
++            f.state().join("..").join("state").into_os_string(),
++        ] {
++            assert!(f.validate(path.clone()).is_err(), "{path:?}");
++        }
++        // `Path::components` drops non-leading `.`; it names the same directory.
++        assert_eq!(
++            f.validate(f.state().join(".")).expect("same dir"),
++            f.state()
++        );
++    }
++
++    #[test]
++    fn rejects_missing_without_creating_it() {
++        let f = Fixture::new();
++        let missing = f.base().join("missing");
++        let err = f.validate(&missing).expect_err("missing");
++        assert!(err.to_string().contains("does not exist"));
++        assert!(!missing.exists());
++    }
++
++    #[test]
++    fn rejects_regular_file() {
++        let f = Fixture::new();
++        let file = f.base().join("file");
++        std::fs::write(&file, "x").expect("write");
++        assert!(f.validate(&file).is_err());
++    }
++
++    #[test]
++    fn rejects_overlap_with_codex_home() {
++        let f = Fixture::new();
++        let nested = f.home().join("runtime");
++        std::fs::create_dir(&nested).expect("mkdir");
++        #[cfg(unix)]
++        {
++            use std::os::unix::fs::PermissionsExt;
++            for p in [&nested, &f.home(), &f.base()] {
++                std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o700)).expect("chmod");
++            }
++        }
++        for path in [f.home(), nested, f.base()] {
++            let err = f.validate(&path).expect_err("overlap");
++            assert!(err.to_string().contains("overlaps CODEX_HOME"), "{err}");
++        }
++    }
++
++    #[cfg(unix)]
++    #[test]
++    fn rejects_symlinked_root_and_ancestor() {
++        let f = Fixture::new();
++        let link = f.base().join("link");
++        std::os::unix::fs::symlink(f.state(), &link).expect("symlink");
++        assert!(f.validate(&link).is_err());
++        let ancestor = f.base().join("ancestor");
++        std::os::unix::fs::symlink(f.base(), &ancestor).expect("symlink");
++        assert!(f.validate(ancestor.join("state")).is_err());
++    }
++
++    #[cfg(unix)]
++    #[test]
++    fn rejects_group_or_world_writable_root() {
++        use std::os::unix::fs::PermissionsExt;
++        let f = Fixture::new();
++        for mode in [0o770, 0o707, 0o777] {
++            std::fs::set_permissions(f.state(), std::fs::Permissions::from_mode(mode))
++                .expect("chmod");
++            assert!(f.validate(f.state()).is_err(), "{mode:o}");
++        }
++    }
++
++    #[test]
++    fn distinct_job_roots_resolve_to_distinct_physical_paths() {
++        let first = Fixture::new();
++        let second = Fixture::new();
++        assert_ne!(
++            first.validate(first.state()).expect("first"),
++            second.validate(second.state()).expect("second")
++        );
++    }
++
++    #[test]
++    fn unset_env_keeps_codex_home() {
++        // The process-wide cache is only populated when the variable is unset
++        // in the test runner; this mirrors the default (opt-in absent) path.
++        if std::env::var_os(CODEX_RUNTIME_HOME_ENV).is_some() {
++            return;
++        }
++        let f = Fixture::new();
++        let home = AbsolutePathBuf::from_absolute_path(f.home()).expect("abs");
++        assert_eq!(runtime_home_for(&home), home);
++        assert_eq!(
++            try_runtime_home_for(home.as_path()).expect("default"),
++            home.to_path_buf()
++        );
++    }
++}
+diff --git a/codex-rs/worktree/Cargo.toml b/codex-rs/worktree/Cargo.toml
+index 05a4bdd..18c5f52 100644
+--- a/codex-rs/worktree/Cargo.toml
++++ b/codex-rs/worktree/Cargo.toml
+@@ -11,6 +11,7 @@ workspace = true
+ doctest = false
+ 
+ [dependencies]
++codex-utils-home-dir = { workspace = true }
+ anyhow = { workspace = true }
+ codex-git-utils = { workspace = true }
+ codex-protocol = { workspace = true }
+diff --git a/codex-rs/worktree/src/settings.rs b/codex-rs/worktree/src/settings.rs
+index b0d4492..53ee4c4 100644
+--- a/codex-rs/worktree/src/settings.rs
++++ b/codex-rs/worktree/src/settings.rs
+@@ -41,14 +41,18 @@ impl WorktreeSettings {
+         desktop: Option<&HashMap<String, Value>>,
+     ) -> Result<Self> {
+         let root = match desktop.and_then(|settings| settings.get(WORKTREE_ROOT)) {
+-            None | Some(Value::Null) => codex_home.join("worktrees"),
++            None | Some(Value::Null) => {
++                codex_utils_home_dir::runtime_home::runtime_home_path_for(codex_home)
++                    .join("worktrees")
++            }
+             Some(value) => {
+                 let configured = value
+                     .as_str()
+                     .context("desktop.git-worktree-root must be a string")?
+                     .trim();
+                 if configured.is_empty() {
+-                    codex_home.join("worktrees")
++                    codex_utils_home_dir::runtime_home::runtime_home_path_for(codex_home)
++                        .join("worktrees")
+                 } else {
+                     let path = PathBuf::from(configured);
+                     if !path.is_absolute() {
