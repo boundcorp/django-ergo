@@ -1,0 +1,22 @@
+...............s......                                                   [100%]
+=============================== warnings summary ===============================
+../../../../../../../tmp/vb-voice/lib/python3.12/site-packages/platformdirs/api.py:459
+  /tmp/vb-voice/lib/python3.12/site-packages/platformdirs/api.py:459: RuntimeDirWarning: XDG_RUNTIME_DIR is not set, falling back to /tmp/runtime-1000
+    return Path(self.user_runtime_dir)
+
+ergonaut/apps/bots/tests/test_admission_drain.py::test_inbox_preserved_and_sweep_requeues
+ergonaut/apps/bots/tests/test_admission_drain.py::test_approval_tasks_retry_before_consumption[approval]
+ergonaut/apps/bots/tests/test_admission_drain.py::test_approval_tasks_retry_before_consumption[revalidation]
+ergonaut/apps/bots/tests/test_admission_drain.py::test_channel_deferral_and_cleanup[False]
+ergonaut/apps/bots/tests/test_admission_drain.py::test_channel_deferral_and_cleanup[True]
+ergonaut/apps/bots/tests/test_admission_drain.py::test_idle_retains_queued_workers_but_waits_running
+ergonaut/apps/bots/tests/test_admission_drain.py::test_external_agent_watcher_is_never_treated_as_deferred_queue
+ergonaut/apps/bots/tests/test_admission_drain.py::test_existing_inbox_turn_finishes_but_next_batch_defers
+ergonaut/apps/bots/tests/test_admission_drain.py::test_telegram_durable_source_claim_waits_for_host_admission
+  /tmp/vb-voice/lib/python3.12/site-packages/factory/django.py:182: DeprecationWarning: UserFactory._after_postgeneration will stop saving the instance after postgeneration hooks in the next major release.
+  If the save call is extraneous, set skip_postgeneration_save=True in the UserFactory.Meta.
+  To keep saving the instance, move the save call to your postgeneration hooks or override _after_postgeneration.
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+21 passed, 1 skipped, 10 warnings in 43.84s

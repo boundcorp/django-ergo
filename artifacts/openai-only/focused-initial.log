@@ -1,0 +1,50 @@
+bringing up nodes...
+bringing up nodes...
+
+............F...............................................             [100%]
+=================================== FAILURES ===================================
+_________ test_unrelated_embedding_and_chat_aliases_are_not_classified _________
+[gw3] linux -- Python 3.12.11 /tmp/openai-only-lib-head-venv/bin/python
+src/django_ergo/settings.py:205: in import_from_string
+    return import_string(val)
+           ^^^^^^^^^^^^^^^^^^
+/tmp/pr416-api-venv/lib/python3.12/site-packages/django/utils/module_loading.py:30: in import_string
+    return cached_import(module_path, class_name)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/tmp/pr416-api-venv/lib/python3.12/site-packages/django/utils/module_loading.py:15: in cached_import
+    module = import_module(module_path)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+/home/dev/.local/share/uv/python/cpython-3.12-linux-x86_64-gnu/lib/python3.12/importlib/__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   ModuleNotFoundError: No module named 'unrelated'
+
+The above exception was the direct cause of the following exception:
+tests/test_openai_child_env.py:149: in test_unrelated_embedding_and_chat_aliases_are_not_classified
+    assert not {"OTHER_CHAT", "OTHER_MEDIA"} & openai_credential_names()
+                                               ^^^^^^^^^^^^^^^^^^^^^^^^^
+src/django_ergo/openai_env.py:40: in openai_credential_names
+    provider = api_settings.EMBEDDING_PROVIDER
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/django_ergo/settings.py:255: in __getattr__
+    val = perform_import(val, attr)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^
+src/django_ergo/settings.py:194: in perform_import
+    return import_from_string(val, setting_name)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/django_ergo/settings.py:208: in import_from_string
+    raise ImportError(msg) from e
+E   ImportError: Could not import 'unrelated.MediaProvider' for API setting 'EMBEDDING_PROVIDER'. ModuleNotFoundError: No module named 'unrelated'.
+=============================== warnings summary ===============================
+../../../../../../tmp/pr416-api-venv/lib/python3.12/site-packages/platformdirs/api.py:441
+../../../../../../tmp/pr416-api-venv/lib/python3.12/site-packages/platformdirs/api.py:441
+../../../../../../tmp/pr416-api-venv/lib/python3.12/site-packages/platformdirs/api.py:441
+../../../../../../tmp/pr416-api-venv/lib/python3.12/site-packages/platformdirs/api.py:441
+../../../../../../tmp/pr416-api-venv/lib/python3.12/site-packages/platformdirs/api.py:441
+  /tmp/pr416-api-venv/lib/python3.12/site-packages/platformdirs/api.py:441: RuntimeDirWarning: XDG_RUNTIME_DIR is not set, falling back to /tmp/runtime-1000
+    return Path(self.user_runtime_dir)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_openai_child_env.py::test_unrelated_embedding_and_chat_aliases_are_not_classified
+1 failed, 59 passed, 5 warnings in 16.84s

@@ -1,0 +1,14 @@
+bringing up nodes...
+bringing up nodes...
+
+........................................................................ [ 94%]
+....                                                                     [100%]
+=============================== warnings summary ===============================
+../../../../../../tmp/pr416-api-venv/lib/python3.12/site-packages/platformdirs/api.py:441
+../../../../../../tmp/pr416-api-venv/lib/python3.12/site-packages/platformdirs/api.py:441
+../../../../../../tmp/pr416-api-venv/lib/python3.12/site-packages/platformdirs/api.py:441
+  /tmp/pr416-api-venv/lib/python3.12/site-packages/platformdirs/api.py:441: RuntimeDirWarning: XDG_RUNTIME_DIR is not set, falling back to /tmp/runtime-1000
+    return Path(self.user_runtime_dir)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+76 passed, 3 warnings in 28.75s
