@@ -216,3 +216,45 @@ This is a proposed later operational plan, not work performed or newly approved:
    Keep the narrow child hygiene boundary. A separately reviewed media executor
    tied to trusted per-job purposes and existing limits remains future work;
    this subset neither disables those workflows nor grants them fresh spend.
+
+## PR #420 review P2 follow-up: inherited OpenAI bot aliases
+
+Review: `../model-pools-review/PR420_REVIEW.md` (P2-1; it lists no P3). A bot that
+omits `engine.type` inherits the host default engine, but `BotDefinition` only
+registered `engine.api_key_env` / `engine.config.api_key_env` when the type was
+literally `openai`, so the alias reached agent children until a consumer ran.
+
+Fix (`bots/definition.py`, `openai_env.py`): registration now uses the effective
+type, `engine.type` or, when empty, the raw `CONVERSATION_ENGINE_TYPE` setting
+(library default `openai`) via `default_engine_is_openai()`. It reads raw settings
+only, so there is no import, no file scan and no global YAML failure surface.
+Explicit non-OpenAI engines and non-OpenAI defaults register nothing, so
+Gemini/MiniMax/media names are untouched. Name-only, process-local retention.
+
+Acceptance tests `tests/test_openai_inherited_alias.py` (15 passed) invert the
+reviewer's reproducers: both selector locations x `scrubbed_env`/Claude/Codex
+builders, the final Claude/Codex/model-catalog launch boundaries, local-shell
+pass_env + secrets, library default with unset settings, non-OpenAI controls, and
+a malformed-bot control.
+
+Validation (identical keyless runner and flags, logs in `artifacts/openai-only/p2/`,
+head 3b4410a vs main 4e292f3):
+
+| Check | Head | Main |
+| --- | --- | --- |
+| Full library | **3804 passed, 13 skipped** | **3755 passed, 13 skipped** |
+| Full API | **1 failed, 701 passed, 6 skipped** | **2 failed, 696 passed, 6 skipped** |
+| Focused OpenAI/child-env/media/independent/local-shell (`-n 4`) | **72 passed** | new head tests |
+| Voice broker retired-flag file, serial | **2 passed, 1 skipped** | **2 passed, 1 skipped** |
+| Migration drift | no changes | no changes |
+| Ruff check / format, diff --check | pass / 651 files / pass | n/a |
+
+Full API failures: head `test_retired_paid_flag_cannot_launch_the_native_cost_profile[ergonaut.realtime_voice_local]`;
+main the `[realtime_voice_preflight]` and `[realtime_voice_local]` parameters. Same
+unchanged 15 s subprocess timeout under `-n 6` load; both pass serially on both
+revisions (head failure is therefore not reproducible serially, a baseline
+timing sensitivity, not proven root cause). The admission cleanup failures seen
+earlier did not occur in these runs.
+
+Remaining: Lee must approve merge, then the exact credential source/target
+migration and rollout; account mapping must preserve the shared $25/week cap and holds.
