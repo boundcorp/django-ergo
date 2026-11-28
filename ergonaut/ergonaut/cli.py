@@ -16,6 +16,8 @@ import os
 import subprocess
 import sys
 
+from django_ergo.protected_env import scrubbed_env
+
 USAGE = __doc__
 
 
@@ -27,8 +29,11 @@ def manage(*args: str) -> int:
     return 0
 
 
-def run(*args: str) -> int:
-    return subprocess.call(list(args))
+def run(*args: str, application: bool = False) -> int:
+    # These trusted host services consume configured provider keys themselves;
+    # they are not coding/tool children. Selective pod injection is the boundary.
+    env = os.environ.copy() if application else scrubbed_env()
+    return subprocess.call(list(args), env=env)
 
 
 def remote(argv: list[str]) -> int:
@@ -65,12 +70,21 @@ def main(argv: list[str] | None = None) -> int:
     if command == "web":
         manage("migrate", "--noinput")
         return run(
-            sys.executable, "-m", "uvicorn", "ergonaut.asgi:application", "--host", "0.0.0.0", "--port", port, *rest
+            sys.executable,
+            "-m",
+            "uvicorn",
+            "ergonaut.asgi:application",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            port,
+            *rest,
+            application=True,
         )
     if command == "worker":
-        return run(sys.executable, "-m", "celery", "-A", "ergonaut", "worker", "-l", "info", *rest)
+        return run(sys.executable, "-m", "celery", "-A", "ergonaut", "worker", "-l", "info", *rest, application=True)
     if command == "beat":
-        return run(sys.executable, "-m", "celery", "-A", "ergonaut", "beat", "-l", "info", *rest)
+        return run(sys.executable, "-m", "celery", "-A", "ergonaut", "beat", "-l", "info", *rest, application=True)
     if command == "bots":
         return manage("bots_serve", *rest)
     if command == "check":

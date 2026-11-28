@@ -36,3 +36,11 @@ def _provider_switches_without_db(request, monkeypatch):
             "django_ergo.conversation.spend_guard.paid_dispatch_problem",
             lambda **kwargs: "",
         )
+
+
+@pytest.fixture(autouse=True)
+def _isolated_openai_aliases(monkeypatch):
+    """Temporary selectors model one process per test."""
+    from django_ergo import openai_env
+
+    monkeypatch.setattr(openai_env, "_NAMES", set())

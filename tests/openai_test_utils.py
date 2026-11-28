@@ -140,7 +140,10 @@ def openai_mocked(fixture_name: str):
                 ):
                     return test_func(*args, fixture=fixture, **kwargs)
             elif fixture.api_endpoint == "embeddings":
-                with patch("openai.embeddings.create", return_value=mock_response):
+                with patch(
+                    "openai.resources.embeddings.Embeddings.create",
+                    return_value=mock_response,
+                ):
                     return test_func(*args, fixture=fixture, **kwargs)
             else:
                 pytest.fail(f"Unknown API endpoint in fixture: {fixture.api_endpoint}")
@@ -228,7 +231,10 @@ def openai_integration_test(test_name: str, api_endpoint: str):
                 ):
                     return test_func(*args, **kwargs, _fixture=fixture)
             if api_endpoint == "embeddings":
-                with patch("openai.embeddings.create", return_value=mock_response):
+                with patch(
+                    "openai.resources.embeddings.Embeddings.create",
+                    return_value=mock_response,
+                ):
                     return test_func(*args, **kwargs, _fixture=fixture)
             return None
 

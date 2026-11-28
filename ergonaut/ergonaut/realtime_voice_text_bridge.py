@@ -13,6 +13,7 @@ from asgiref.sync import sync_to_async
 from django.conf import settings
 from django_ergo.conversation.attachments import openai_transcription
 from django_ergo.conversation.inference_policy import effective_openai_base_url
+from django_ergo.openai_credentials import voice_openai_key
 from livekit.agents import Agent, AgentSession, APIConnectOptions, APIError, stt, utils
 from livekit.agents.voice import room_io
 from livekit.agents.voice.agent_session import SessionConnectOptions
@@ -216,7 +217,12 @@ async def text_voice_session(ctx, voice_id, claim_id, snapshot):
     """The room/lease lifecycle is independent of durable normal work and provider-native voice."""
     _, grant = await sync_to_async(media_scope)(voice_id, claim_id)
     recognizer = OriginatingThreadSTT(voice_id, claim_id)
-    speech = openai.TTS(model=grant["tts_model"], voice=grant["tts_voice"], base_url=effective_openai_base_url())
+    speech = openai.TTS(
+        model=grant["tts_model"],
+        voice=grant["tts_voice"],
+        base_url=effective_openai_base_url(),
+        api_key=voice_openai_key(),
+    )
     try:
         session = AgentSession(
             # Retain eligible long utterances; any actual overflow now exceeds

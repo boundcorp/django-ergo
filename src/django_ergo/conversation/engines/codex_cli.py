@@ -232,7 +232,7 @@ async def model_catalog(command: str, args: list[str], env: dict) -> str:
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.DEVNULL,
         cwd=workdir(),
-        env=env,
+        env=scrubbed_env(env),
     )
     try:
         out, _ = await asyncio.wait_for(process.communicate(), 60)
@@ -415,7 +415,7 @@ class _Session:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=workdir(),
-            env=self.env,
+            env=scrubbed_env(self.env),
             start_new_session=True,  # so stopping it stops its children too
             limit=64 * 1024 * 1024,
         )

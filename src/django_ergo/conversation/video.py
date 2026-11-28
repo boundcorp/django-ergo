@@ -36,6 +36,8 @@ from dataclasses import field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from django_ergo.protected_env import scrubbed_env
+
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
@@ -100,6 +102,7 @@ def _run(args: list[str], timeout: int) -> subprocess.CompletedProcess:
             capture_output=True,
             timeout=timeout,
             check=False,
+            env=scrubbed_env(),
         )
     except subprocess.TimeoutExpired as exc:
         msg = f"{args[0]} took longer than {timeout}s"
