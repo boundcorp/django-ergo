@@ -87,3 +87,16 @@ test('human messages, authors and questions break groups; earlier attachments re
   expect(container.textContent).toContain('After question')
   expect(container.textContent).toContain('Another author')
 })
+
+test('multiple replies on one line retain block order, question visibility and one anchor', () => {
+  const first = reply(1, 'Before')
+  const mixed = reply(3, 'Update')
+  mixed.blocks.push(...reply(4, 'Question?', { type: 'question' }).blocks)
+  render([first, mixed, reply(5, 'After')])
+  const text = container.textContent ?? ''
+  expect(text.indexOf('Before')).toBeLessThan(text.indexOf('Update'))
+  expect(text.indexOf('Update')).toBeLessThan(text.indexOf('Question?'))
+  expect(text.indexOf('Question?')).toBeLessThan(text.indexOf('After'))
+  expect(container.querySelectorAll('[id="m-3"]').length).toBe(1)
+  expect(container.querySelector('details')?.textContent ?? '').not.toContain('Question?')
+})

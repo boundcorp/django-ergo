@@ -1024,6 +1024,12 @@ function replyUpdates(messages: Message[], results: Map<string, ToolResult>): Re
       continue
     }
     if (message.role !== 'assistant') continue
+    // A single source line can contain several replies, including questions. Keep
+    // those in block order and retain its one message anchor in the original row.
+    if (message.blocks.filter(b => b.type === 'tool_use' && b.name === REPLY_TOOL).length > 1) {
+      close()
+      continue
+    }
     const identity = JSON.stringify(message.author ?? {})
     if (current.length && identity !== author) close()
     for (const block of message.blocks) {
@@ -1155,7 +1161,11 @@ export function Transcript({
               </summary>
               <div className="mt-2 flex flex-col items-start gap-2">
                 {group.slice(0, -1).map(update => (
-                  <div key={update.block.id} id={messageAnchor(update.message.line)}>
+                  <div
+                    key={update.block.id}
+                    id={messageAnchor(update.message.line)}
+                    className={highlight === update.message.line ? 'message-target' : ''}
+                  >
                     <ReplyBubble reply={update.block.input as Reply} message={update.message} />
                   </div>
                 ))}
@@ -1163,7 +1173,10 @@ export function Transcript({
             </details>
           )}
           {group.length > 1 && <div className="mb-1 text-xs text-muted">Latest update</div>}
-          <div id={messageAnchor(latest.message.line)}>
+          <div
+            id={messageAnchor(latest.message.line)}
+            className={highlight === latest.message.line ? 'message-target' : ''}
+          >
             <ReplyBubble reply={latest.block.input as Reply} message={latest.message} />
           </div>
         </div>
